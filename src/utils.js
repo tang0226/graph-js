@@ -1,0 +1,1 @@
+export const asFn = v => (typeof v === "function" ? v: () => v);
