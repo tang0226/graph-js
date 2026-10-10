@@ -258,4 +258,19 @@ export class Simulation {
     // Enforce radius
     this._enforce_radius();
   }
+
+  getPosition(id) {
+    const node = this.nodes.get(id);
+    if (node) return [node.x, node.y];
+    return null;
+  }
+
+  pin(id, x, y) {
+    const node = this.nodes.get(id);
+    if (!node) return false;
+    this.setNodeConfig(id, { fixed: true });
+    [node.x, node.y] = [x, y];
+  }
+
+  unpin(id) { this.setNodeConfig(id, { fixed: undefined }); }
 }

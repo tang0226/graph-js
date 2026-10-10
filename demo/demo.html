@@ -147,6 +147,7 @@
       <button id="addNode">+ node</button>
       <button id="addEdge">+ edge</button>
       <button id="rmNode">&minus; node</button>
+      <button id="rmEdge">&minus; edge</button>
     </div>
   </fieldset>
 
@@ -258,7 +259,7 @@
     </div>
     <div class="row">
       <label for="zoom">Zoom</label><output id="zoomOut">1.00</output>
-      <input type="range" id="zoom" min="0.1" max="4" step="0.05" value="1">
+      <input type="range" id="zoom" min="0.01" max="4" step="0.01" value="1">
     </div>
     <div class="btns">
       <button id="recenter">Recenter</button>
@@ -282,7 +283,6 @@ const GROUPS = GROUP_COLORS.length;
 
 let gjs = null;
 let running = true;
-let dpr = 1;
 
 /* ---------- control values ---------- */
 
@@ -319,7 +319,7 @@ function buildGraph() {
   applyNodeConfig();
   applyEdgeConfig();
   applyViewConfig();
-  resize();
+  gjs.resize();
 }
 
 function nodeIds() { return [...gjs.graph.nodes.keys()]; }
@@ -382,31 +382,21 @@ function applyEdgeConfig() {
 
 function applyViewConfig() {
   gjs.renderer.opts.background = ui.background;
-  gjs.renderer.view.zoom = ui.zoom * dpr;
+  gjs.renderer.view.zoom = ui.zoom;
 }
 
 /* ---------- sizing ----------
-   The demo manages the canvas itself rather than calling gjs.resize():
-   Renderer.simToCanvas centers on canvas.width (backing-store pixels), so a
-   ctx dpr transform would double-count. Sizing the backing store to device
-   pixels with an identity transform keeps the geometry correct, and folding
-   dpr into view.zoom keeps apparent sizes right on HiDPI screens.         */
+   gjs.resize() sizes the backing store to device pixels, applies the dpr
+   transform and hands the renderer its logical (CSS pixel) size, so every
+   coordinate the demo deals with is in CSS pixels.                        */
 
-function resize() {
-  dpr = window.devicePixelRatio || 1;
-  const r = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.round(r.width * dpr));
-  canvas.height = Math.max(1, Math.round(r.height * dpr));
-  gjs.renderer.view.zoom = ui.zoom * dpr;
-}
-
-new ResizeObserver(() => { if (gjs) { resize(); gjs.renderer.render(); } }).observe(canvas);
+new ResizeObserver(() => { if (gjs) { gjs.resize(); gjs.renderer.render(); } }).observe(canvas);
 
 /* ---------- interaction ---------- */
 
 function pointerToSim(e) {
   const r = canvas.getBoundingClientRect();
-  return gjs.renderer.canvasToSim((e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr);
+  return gjs.canvasToSim(e.clientX - r.left, e.clientY - r.top);
 }
 
 function nodeAt(sx, sy) {
@@ -446,8 +436,8 @@ canvas.addEventListener("pointermove", e => {
     drag.node.vx = drag.node.vy = 0;
   } else {
     const v = gjs.renderer.view;
-    v.x = drag.vx - (e.clientX - drag.sx) * dpr / v.zoom;
-    v.y = drag.vy - (e.clientY - drag.sy) * dpr / v.zoom;
+    v.x = drag.vx - (e.clientX - drag.sx) / v.zoom;
+    v.y = drag.vy - (e.clientY - drag.sy) / v.zoom;
   }
   if (!running) gjs.renderer.render();
 });
@@ -463,10 +453,10 @@ canvas.addEventListener("pointercancel", endDrag);
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
   const [bx, by] = pointerToSim(e);                      // anchor under cursor
-  const next = Math.min(4, Math.max(0.1, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  const next = Math.min(4, Math.max(0.01, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
   $("zoom").value = next;
   readUI();
-  gjs.renderer.view.zoom = next * dpr;
+  gjs.renderer.view.zoom = next;
   const [ax, ay] = pointerToSim(e);
   gjs.renderer.view.x += bx - ax;
   gjs.renderer.view.y += by - ay;
@@ -508,6 +498,15 @@ $("rmNode").addEventListener("click", () => {
   const ids = nodeIds();
   if (!ids.length) return;
   gjs.removeNode(ids[(Math.random() * ids.length) | 0]);
+  applyNodeConfig();
+  applyEdgeConfig();
+});
+
+$("rmEdge").addEventListener("click", () => {
+  const edges = [...gjs.graph.edges];               // Set of {src, dest, data}
+  if (!edges.length) return;
+  const e = edges[(Math.random() * edges.length) | 0];
+  gjs.removeEdge(e.src.id, e.dest.id);
   applyNodeConfig();
   applyEdgeConfig();
 });

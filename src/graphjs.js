@@ -18,6 +18,7 @@ export class GraphJS {
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
     this.renderer.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.renderer.size = { w, h };
     return this;
   }
 
@@ -43,4 +44,29 @@ export class GraphJS {
   }
 
   step() { this.simulation.tick(); this.renderer.render(); return this; }
+
+  isRunning() { return this._raf !== null; }
+
+  simToCanvas(x, y) { return this.renderer.simToCanvas(x, y); }
+  canvasToSim(cx, cy) { return this.renderer.canvasToSim(cx, cy); }
+
+  nodeAt(cx, cy) {
+    const [x, y] = this.canvasToSim(cx, cy);
+    const nodes = this.simulation._nodeList;
+    const slack = 4 / this.renderer.view.zoom; // 4 world-coordinate radius slack
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const node = nodes[i], r = node.radius + slack;
+      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
+    }
+    return null;
+  }
+
+  getPosition(id) {
+    const p = this.simulation.getPosition(id);
+    return p ? this.simToCanvas(...p) : null;
+  }
+
+  pin(id, cx, cy) { this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
+
+  unpin(id) { this.simulation.unpin(id); }
 }

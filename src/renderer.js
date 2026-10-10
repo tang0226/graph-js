@@ -26,6 +26,7 @@ export class Renderer {
       background: opts.background ?? "#ffffff",
     };
 
+    this.size = { w: canvas.width, h: canvas.height };
     this.view = { x: 0, y: 0, zoom: 1 };
 
     this.nodes = new Map();
@@ -121,16 +122,6 @@ export class Renderer {
     return rEdge;
   }
 
-  simToCanvas(x, y) {
-    const v = this.view;
-    return [this.canvas.width / 2 + (x - v.x) * v.zoom, this.canvas.height / 2 + (y - v.y) * v.zoom];
-  }
-
-  canvasToSim(x, y) {
-    const v = this.view;
-    return [(x - this.canvas.width / 2) / v.zoom + v.x, (y - this.canvas.height / 2) / v.zoom + v.y];
-  }
-
   // Update 
   sync() {
     if (this._syncedDataVersion !== this.graph._dataVersion) {
@@ -204,9 +195,19 @@ export class Renderer {
     return true;
   }
 
+  simToCanvas(x, y) {
+    const v = this.view;
+    return [this.size.w / 2 + (x - v.x) * v.zoom, this.size.h / 2 + (y - v.y) * v.zoom];
+  }
+
+  canvasToSim(x, y) {
+    const v = this.view;
+    return [(x - this.size.w / 2) / v.zoom + v.x, (y - this.size.h / 2) / v.zoom + v.y];
+  }
+
   _cull() {
     const [xMin, yMin] = this.canvasToSim(0, 0);
-    const [xMax, yMax] = this.canvasToSim(this.canvas.width, this.canvas.height);
+    const [xMax, yMax] = this.canvasToSim(this.size.w, this.size.h);
 
     const nodesI = [];
     const shouldRender = new Set();
@@ -236,7 +237,7 @@ export class Renderer {
     const sim = this.simulation;
 
     this.ctx.fillStyle = this.opts.background;
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.fillRect(0, 0, this.size.w, this.size.h);
 
     // Render edges
     for (const i of toRender.edgesI) {
@@ -256,7 +257,7 @@ export class Renderer {
       }
     }
 
-    // Render n6des
+    // Render nodes
     for (const i of toRender.nodesI) {
       const nodeStyle = this._nodeStyles[i];
       const sNode = sim._nodeList[i];
@@ -271,4 +272,24 @@ export class Renderer {
       }
     }
   }
+
+  nodeAt(cx, cy) {
+    const [x, y] = this.canvasToSim(cx, cy);
+    const nodes = this.simulation._nodeList;
+    const slack = 4 / this.view.zoom; // 4 world-coordinate radius slack
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const node = nodes[i], r = node.radius + slack;
+      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
+    }
+    return null;
+  }
+
+  getPosition(id) {
+    const p = this.simulation.getPosition(id);
+    return p ? this.simToCanvas(...p) : null;
+  }
+
+  pin(id, cx, cy) { this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
+
+  unpin(id) { this.simulation.unpin(id); }
 }
