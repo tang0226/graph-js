@@ -16,13 +16,14 @@ export class Simulation {
       minDistSq:       opts.minDistSq ?? 1,
     };
 
-    this.setDefaultNodeConfig();
+    this.setDefaultNodeConfig(opts.nodeConfig ?? {});
     this._overrides = new Map();
 
     this.nodes = new Map();
-    this._list = [];
-    this._index = new Map();
+    this._nodeList = [];
+    this._nodeIndex = new Map();
     this._springs = [];
+    this._edgePairs = [];
 
 
     // Self version
@@ -61,8 +62,8 @@ export class Simulation {
     const acc = this._accessors, g = this.graph, o = this._overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ??  acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ??  acc.radius(gNode, g);
-    sNode.mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : 1;
-    sNode.radius = Number.isFinite(radius) ? Math.max(radius, 0)  : 20;
+    sNode.mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : NODE_SIM_DEFAULTS.mass;
+    sNode.radius = Number.isFinite(radius) ? Math.max(radius, 0)  : NODE_SIM_DEFAULTS.radius;
     sNode.fixed  = (o?.fixed?.(gNode, g) ??  acc.fixed(gNode, g)) === true;
   }
 
@@ -86,7 +87,7 @@ export class Simulation {
       const sNode = this.nodes.get(id);
       if (sNode) { sx += sNode.x; sy += sNode.y; n++; }
     }
-    const jitter = () => (Math.random() - 0.5) * 2;
+    const jitter = () => (Math.random() - 0.5) * 30;
     return n ? {
       x: sx / n + jitter(), y: sy / n + jitter(),
       vx: 0, vy: 0,
@@ -112,9 +113,7 @@ export class Simulation {
     }
     this._configDirty = false;
 
-    if (this._syncedVersion === this.graph._version) {
-      return true;
-    }
+    if (this._syncedVersion === this.graph._version) return true;
 
     // Delete old nodes
     for (const id of this.nodes.keys()) {
@@ -124,17 +123,32 @@ export class Simulation {
       }
     }
 
-    this._list = [];
-    this._index = new Map();
+    this._nodeList = [];
+    this._nodeIndex = new Map();
     for (const [id, sNode] of this.nodes) {
-      this._index.set(id, this._list.length);
-      this._list.push(sNode);
+      this._nodeIndex.set(id, this._nodeList.length);
+      this._nodeList.push(sNode);
     }
 
-    const pairs = [];
-    for (const edge of this.graph.edges)
-      pairs.push(this._index.get(edge.src.id), this._index.get(edge.dest.id));
-    this._springs = Int32Array.from(pairs);
+    const pairs = [], springs = [], refs = [], n = this.nodes.size;
+    const seen = this.graph.directed ? new Set() : null;
+
+    for (const edge of this.graph.edges) {
+      const i = this._nodeIndex.get(edge.src.id), j = this._nodeIndex.get(edge.dest.id);
+      pairs.push(i, j);
+      refs.push(edge);
+      if (i === j) continue;
+      if (seen) {
+        const key = i < j ? i * n + j : j * n + i;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      springs.push(i, j);
+    }
+
+    this._edgeRefs = refs;
+    this._edgePairs = Int32Array.from(pairs);
+    this._springs   = this.graph.directed ? Int32Array.from(springs) : this._edgePairs;
 
     this._syncedVersion = this.graph._version;
     this._version++;
@@ -143,7 +157,7 @@ export class Simulation {
   }
 
   _apply_repulsion() {
-    const list = this._list;
+    const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
         const n1 = list[i], n2 = list[j];
@@ -165,7 +179,7 @@ export class Simulation {
   }
 
   _apply_springs() {
-    const list = this._list;
+    const list = this._nodeList;
     const springs = this._springs;
     for (let i = 0; i < springs.length; i += 2) {
       const n1 = list[springs[i]], n2 = list[springs[i + 1]];
@@ -178,7 +192,7 @@ export class Simulation {
   }
 
   _apply_gravity() {
-    const list = this._list;
+    const list = this._nodeList;
     const g = this.opts.gravity;
     for (let i = 0; i < list.length; i++) {
       const n = list[i];
@@ -188,7 +202,7 @@ export class Simulation {
   }
 
   _enforce_radius() {
-    const list = this._list;
+    const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
         const n1 = list[i], n2 = list[j];
@@ -218,7 +232,7 @@ export class Simulation {
     this.sync();
 
     // reset force totals
-    const list = this._list;
+    const list = this._nodeList;
     for (let i = 0; i < list.length; i++) { list[i].fx = 0; list[i].fy = 0; }
 
     this._apply_repulsion();

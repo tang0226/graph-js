@@ -1,9 +1,9 @@
 export class Graph {
-  constructor(args = {}) {
+  constructor(opts = {}) {
     this.nodes = new Map();
     this.edges = new Set();
     this.adjacency = new Map();
-    Object.defineProperty(this, "directed", { value: args.directed ?? false, writable: false, enumerable: true });
+    Object.defineProperty(this, "directed", { value: opts.directed ?? false, writable: false, enumerable: true });
     this._version = 1;
     this._dataVersion = 1;
   }
