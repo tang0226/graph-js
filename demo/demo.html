@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>graph-js demo</title>
+<style>
+  :root {
+    --bg: #15171c;
+    --panel: #1c1f26;
+    --panel-2: #23272f;
+    --line: #2f343d;
+    --text: #e4e7ec;
+    --muted: #8b93a1;
+    --accent: #61afef;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  #stage { position: relative; flex: 1 1 auto; min-width: 0; }
+  #canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #canvas.dragging { cursor: grabbing; }
+
+  #hud {
+    position: absolute; top: 10px; left: 12px;
+    display: flex; gap: 14px;
+    padding: 6px 10px;
+    background: #15171cc9;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  #hud b { color: var(--text); font-weight: 600; }
+
+  #help {
+    position: absolute; bottom: 10px; left: 12px;
+    color: var(--muted); font-size: 12px;
+    pointer-events: none;
+  }
+
+  aside {
+    flex: 0 0 290px;
+    overflow-y: auto;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    padding: 14px;
+  }
+  h1 { margin: 0 0 2px; font-size: 15px; letter-spacing: .2px; }
+  .sub { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+
+  fieldset {
+    margin: 0 0 12px;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-2);
+  }
+  legend {
+    padding: 0 5px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--muted);
+  }
+
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  .row label { color: var(--muted); }
+  .row output { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--accent); }
+  .row.inline { grid-template-columns: 1fr auto; }
+  .row.inline select, .row.inline input[type=color] { justify-self: end; }
+
+  select {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 3px 6px; font: inherit; font-size: 12px;
+  }
+  input[type=color] {
+    width: 40px; height: 24px; padding: 0;
+    background: var(--bg);
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  input[type=checkbox] { accent-color: var(--accent); }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    flex: 1 1 auto;
+    padding: 6px 9px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: #fff; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #10131a; font-weight: 600; }
+
+  .note {
+    margin: 10px 0 0; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 6px;
+    color: var(--muted); font-size: 11.5px;
+  }
+  code { color: var(--accent); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="hud">
+    <span>nodes <b id="statNodes">0</b></span>
+    <span>edges <b id="statEdges">0</b></span>
+    <span>springs <b id="statSprings">0</b></span>
+    <span><b id="statFps">0</b> fps</span>
+  </div>
+  <div id="help">drag a node to pin &amp; move it &middot; drag empty space to pan &middot; scroll to zoom</div>
+</div>
+
+<aside>
+  <h1>graph-js</h1>
+  <p class="sub">Physics-based graph rendering</p>
+
+  <fieldset>
+    <legend>Graph</legend>
+    <div class="row inline">
+      <label for="directed">Directed</label>
+      <input type="checkbox" id="directed">
+    </div>
+    <div class="row">
+      <label for="nodeCount">Nodes</label><output id="nodeCountOut">24</output>
+      <input type="range" id="nodeCount" min="2" max="3000" step="1" value="24">
+    </div>
+    <div class="row">
+      <label for="extraEdges">Extra edges</label><output id="extraEdgesOut">8</output>
+      <input type="range" id="extraEdges" min="0" max="200" step="1" value="8">
+    </div>
+    <div class="btns">
+      <button id="regen" class="primary">Regenerate</button>
+      <button id="addNode">+ node</button>
+      <button id="addEdge">+ edge</button>
+      <button id="rmNode">&minus; node</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Simulation</legend>
+    <div class="row">
+      <label for="friction">Friction</label><output id="frictionOut">0.90</output>
+      <input type="range" id="friction" min="0.8" max="0.995" step="0.0025" value="0.9">
+    </div>
+    <div class="row">
+      <label for="repulsion">Repulsion</label><output id="repulsionOut">2000</output>
+      <input type="range" id="repulsion" min="0" max="10000" step="10" value="2000">
+    </div>
+    <div class="row">
+      <label for="springStiffness">Spring stiffness</label><output id="springStiffnessOut">0.020</output>
+      <input type="range" id="springStiffness" min="0" max="0.25" step="0.001" value="0.02">
+    </div>
+    <div class="row">
+      <label for="springLength">Spring length</label><output id="springLengthOut">60</output>
+      <input type="range" id="springLength" min="0" max="400" step="5" value="60">
+    </div>
+    <div class="row">
+      <label for="gravity">Gravity</label><output id="gravityOut">0.0020</output>
+      <input type="range" id="gravity" min="0" max="0.01" step="0.0001" value="0.002">
+    </div>
+    <div class="row">
+      <label for="minDistSq">Min dist² clamp</label><output id="minDistSqOut">1</output>
+      <input type="range" id="minDistSq" min="1" max="2000" step="1" value="1">
+    </div>
+    <div class="row">
+      <label for="speed">Speed (steps/frame)</label><output id="speedOut">1.0</output>
+      <input type="range" id="speed" min="0" max="8" step="0.25" value="1">
+    </div>
+    <div class="btns">
+      <button id="playPause">Pause</button>
+      <button id="shake">Shake</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Nodes</legend>
+    <div class="row inline">
+      <label for="radiusMode">Radius</label>
+      <select id="radiusMode">
+        <option value="const">constant</option>
+        <option value="degree" selected>by degree</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="radius">Base radius</label><output id="radiusOut">10</output>
+      <input type="range" id="radius" min="2" max="60" step="1" value="10">
+    </div>
+    <div class="row inline">
+      <label for="massMode">Mass</label>
+      <select id="massMode">
+        <option value="const" selected>constant</option>
+        <option value="radius">∝ radius²</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="mass">Mass</label><output id="massOut">1.0</output>
+      <input type="range" id="mass" min="0.2" max="10" step="0.1" value="1">
+    </div>
+    <div class="row inline">
+      <label for="colorMode">Fill</label>
+      <select id="colorMode">
+        <option value="group" selected>by group</option>
+        <option value="const">constant</option>
+      </select>
+    </div>
+    <div class="row inline">
+      <label for="nodeColor">Fill color</label>
+      <input type="color" id="nodeColor" value="#61afef">
+    </div>
+    <div class="row inline">
+      <label for="outlineColor">Outline</label>
+      <input type="color" id="outlineColor" value="#15171c">
+    </div>
+    <div class="row">
+      <label for="outlineWidth">Outline width</label><output id="outlineWidthOut">2</output>
+      <input type="range" id="outlineWidth" min="0" max="10" step="0.5" value="2">
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Edges</legend>
+    <div class="row inline">
+      <label for="edgeColor">Color</label>
+      <input type="color" id="edgeColor" value="#4a515e">
+    </div>
+    <div class="row">
+      <label for="edgeWidth">Width</label><output id="edgeWidthOut">1.5</output>
+      <input type="range" id="edgeWidth" min="0.5" max="8" step="0.5" value="1.5">
+    </div>
+    <div class="row inline">
+      <label for="edgeWidthMode">Width mode</label>
+      <select id="edgeWidthMode">
+        <option value="const" selected>constant</option>
+        <option value="degree">by endpoint degree</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>View</legend>
+    <div class="row inline">
+      <label for="background">Background</label>
+      <input type="color" id="background" value="#15171c">
+    </div>
+    <div class="row">
+      <label for="zoom">Zoom</label><output id="zoomOut">1.00</output>
+      <input type="range" id="zoom" min="0.1" max="4" step="0.05" value="1">
+    </div>
+    <div class="btns">
+      <button id="recenter">Recenter</button>
+    </div>
+  </fieldset>
+
+  <p class="note">
+    ES modules need HTTP — serve the repo root, e.g.
+    <code>npx serve .</code>, then open <code>/demo/demo.html</code>.
+  </p>
+</aside>
+
+<script type="module">
+import { GraphJS } from "../src/graphjs.js";
+
+const canvas = document.getElementById("canvas");
+const $ = id => document.getElementById(id);
+
+const GROUP_COLORS = ["#e06c75", "#61afef", "#98c379", "#e5c07b", "#c678dd"];
+const GROUPS = GROUP_COLORS.length;
+
+let gjs = null;
+let running = true;
+let dpr = 1;
+
+/* ---------- control values ---------- */
+
+const ui = {};
+function readUI() {
+  for (const el of document.querySelectorAll("input, select")) {
+    ui[el.id] = el.type === "checkbox" ? el.checked
+              : el.type === "range"    ? Number(el.value)
+              : el.value;
+    const out = $(el.id + "Out");
+    if (out) {
+      const step = Number(el.step) || 1;
+      const dec = step < 0.001 ? 4 : step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+      out.textContent = Number(el.value).toFixed(dec);
+    }
+  }
+}
+
+/* ---------- graph construction ---------- */
+
+function buildGraph() {
+  if (gjs) gjs.stop();
+
+  gjs = new GraphJS(canvas, { graph: { directed: ui.directed } });
+
+  const n = ui.nodeCount;
+  for (let i = 0; i < n; i++) {
+    gjs.addNode({ id: "n" + i, group: i % GROUPS });
+    if (i > 0) gjs.addEdge("n" + ((Math.random() * i) | 0), "n" + i);  // random tree
+  }
+  for (let k = 0; k < ui.extraEdges; k++) addRandomEdge();
+
+  applySimConfig();
+  applyNodeConfig();
+  applyEdgeConfig();
+  applyViewConfig();
+  resize();
+}
+
+function nodeIds() { return [...gjs.graph.nodes.keys()]; }
+
+function addRandomEdge() {
+  const ids = nodeIds();
+  if (ids.length < 2) return;
+  const a = ids[(Math.random() * ids.length) | 0];
+  const b = ids[(Math.random() * ids.length) | 0];
+  if (a !== b) gjs.addEdge(a, b);
+}
+
+/* ---------- config application ---------- */
+
+function applySimConfig() {
+  // simulation.opts is read every frame, so direct assignment is live
+  Object.assign(gjs.simulation.opts, {
+    friction:        ui.friction,
+    repulsion:       ui.repulsion,
+    springStiffness: ui.springStiffness,
+    springLength:    ui.springLength,
+    gravity:         ui.gravity,
+    minDistSq:       ui.minDistSq,
+  });
+}
+
+function applyNodeConfig() {
+  const g = gjs.graph;
+  const base = ui.radius;
+
+  const radius = ui.radiusMode === "degree"
+    ? node => base + 2.2 * Math.sqrt(g.degree(node.id))
+    : base;
+
+  gjs.simulation.setDefaultNodeConfig({
+    radius,
+    mass: ui.massMode === "radius"
+      ? node => { const r = typeof radius === "function" ? radius(node) : radius; return (r * r) / 100; }
+      : ui.mass,
+  });
+
+  gjs.renderer.setDefaultNodeConfig({
+    color: ui.colorMode === "group"
+      ? node => GROUP_COLORS[(node.data.group ?? 0) % GROUPS]
+      : ui.nodeColor,
+    outlineColor: ui.outlineColor,
+    outlineWidth: ui.outlineWidth,
+  });
+}
+
+function applyEdgeConfig() {
+  const g = gjs.graph;
+  gjs.renderer.setDefaultEdgeConfig({
+    color: ui.edgeColor,
+    width: ui.edgeWidthMode === "degree"
+      ? edge => ui.edgeWidth * (0.5 + 0.25 * Math.min(6, Math.min(g.degree(edge.src.id), g.degree(edge.dest.id))))
+      : ui.edgeWidth,
+  });
+}
+
+function applyViewConfig() {
+  gjs.renderer.opts.background = ui.background;
+  gjs.renderer.view.zoom = ui.zoom * dpr;
+}
+
+/* ---------- sizing ----------
+   The demo manages the canvas itself rather than calling gjs.resize():
+   Renderer.simToCanvas centers on canvas.width (backing-store pixels), so a
+   ctx dpr transform would double-count. Sizing the backing store to device
+   pixels with an identity transform keeps the geometry correct, and folding
+   dpr into view.zoom keeps apparent sizes right on HiDPI screens.         */
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, Math.round(r.width * dpr));
+  canvas.height = Math.max(1, Math.round(r.height * dpr));
+  gjs.renderer.view.zoom = ui.zoom * dpr;
+}
+
+new ResizeObserver(() => { if (gjs) { resize(); gjs.renderer.render(); } }).observe(canvas);
+
+/* ---------- interaction ---------- */
+
+function pointerToSim(e) {
+  const r = canvas.getBoundingClientRect();
+  return gjs.renderer.canvasToSim((e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr);
+}
+
+function nodeAt(sx, sy) {
+  const list = gjs.simulation._nodeList;
+  for (let i = list.length - 1; i >= 0; i--) {          // topmost first
+    const nd = list[i];
+    const dx = nd.x - sx, dy = nd.y - sy;
+    const r = nd.radius + 4 / gjs.renderer.view.zoom;   // a little pointer slack
+    if (dx * dx + dy * dy <= r * r) return nd;
+  }
+  return null;
+}
+
+let drag = null;
+
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  const [sx, sy] = pointerToSim(e);
+  const nd = nodeAt(sx, sy);
+  if (nd) {
+    gjs.simulation.setNodeConfig(nd.id, { fixed: true });
+    gjs.simulation.sync();
+    drag = { kind: "node", node: nd, dx: nd.x - sx, dy: nd.y - sy };
+  } else {
+    const v = gjs.renderer.view;
+    drag = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
+  }
+  canvas.classList.add("dragging");
+});
+
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  if (drag.kind === "node") {
+    const [sx, sy] = pointerToSim(e);
+    drag.node.x = sx + drag.dx;
+    drag.node.y = sy + drag.dy;
+    drag.node.vx = drag.node.vy = 0;
+  } else {
+    const v = gjs.renderer.view;
+    v.x = drag.vx - (e.clientX - drag.sx) * dpr / v.zoom;
+    v.y = drag.vy - (e.clientY - drag.sy) * dpr / v.zoom;
+  }
+  if (!running) gjs.renderer.render();
+});
+
+function endDrag() {
+  if (drag?.kind === "node") gjs.simulation.clearNodeConfig(drag.node.id);
+  drag = null;
+  canvas.classList.remove("dragging");
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const [bx, by] = pointerToSim(e);                      // anchor under cursor
+  const next = Math.min(4, Math.max(0.1, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  $("zoom").value = next;
+  readUI();
+  gjs.renderer.view.zoom = next * dpr;
+  const [ax, ay] = pointerToSim(e);
+  gjs.renderer.view.x += bx - ax;
+  gjs.renderer.view.y += by - ay;
+  if (!running) gjs.renderer.render();
+}, { passive: false });
+
+/* ---------- control wiring ---------- */
+
+const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "minDistSq"];
+const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
+const EDGE_IDS = ["edgeColor", "edgeWidth", "edgeWidthMode"];
+const VIEW_IDS = ["background", "zoom"];
+
+for (const el of document.querySelectorAll("input, select")) {
+  el.addEventListener("input", () => {
+    readUI();
+    if (el.id === "directed") { buildGraph(); return; }
+    if (SIM_IDS.includes(el.id))  applySimConfig();
+    if (NODE_IDS.includes(el.id)) applyNodeConfig();
+    if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
+    if (VIEW_IDS.includes(el.id)) applyViewConfig();
+    if (!running) gjs.renderer.render();
+  });
+}
+
+$("regen").addEventListener("click", buildGraph);
+
+$("addNode").addEventListener("click", () => {
+  const ids = nodeIds();
+  const id = gjs.addNode({ group: (Math.random() * GROUPS) | 0 });
+  if (ids.length) gjs.addEdge(ids[(Math.random() * ids.length) | 0], id);
+  applyNodeConfig();                       // degree-derived radii changed
+  applyEdgeConfig();
+});
+
+$("addEdge").addEventListener("click", () => { addRandomEdge(); applyNodeConfig(); applyEdgeConfig(); });
+
+$("rmNode").addEventListener("click", () => {
+  const ids = nodeIds();
+  if (!ids.length) return;
+  gjs.removeNode(ids[(Math.random() * ids.length) | 0]);
+  applyNodeConfig();
+  applyEdgeConfig();
+});
+
+$("playPause").addEventListener("click", e => {
+  running = !running;
+  e.target.textContent = running ? "Pause" : "Play";
+});
+
+$("shake").addEventListener("click", () => {
+  for (const nd of gjs.simulation._nodeList) {
+    nd.vx += (Math.random() - 0.5) * 40;
+    nd.vy += (Math.random() - 0.5) * 40;
+  }
+  running = true;
+  $("playPause").textContent = "Pause";
+});
+
+$("recenter").addEventListener("click", () => {
+  const list = gjs.simulation._nodeList;
+  if (!list.length) return;
+  let x = 0, y = 0;
+  for (const nd of list) { x += nd.x; y += nd.y; }
+  gjs.renderer.view.x = x / list.length;
+  gjs.renderer.view.y = y / list.length;
+  if (!running) gjs.renderer.render();
+});
+
+/* ---------- main loop ---------- */
+
+let frames = 0, fpsClock = performance.now(), stepAcc = 0;
+
+/* Speed is steps per frame, accumulated so fractional values tick on only some
+   frames. Every step keeps dt = 1: the integrator is tuned for that step size,
+   and scaling dt instead would make stability depend on frame rate.          */
+
+function frame() {
+  if (running) {
+    stepAcc = Math.min(stepAcc + ui.speed, 16);
+    while (stepAcc >= 1) { gjs.simulation.tick(); stepAcc -= 1; }
+  } else {
+    stepAcc = 0;
+  }
+  gjs.renderer.render();
+
+  frames++;
+  const now = performance.now();
+  if (now - fpsClock >= 500) {
+    $("statFps").textContent = Math.round((frames * 1000) / (now - fpsClock));
+    $("statNodes").textContent = gjs.graph.nodes.size;
+    $("statEdges").textContent = gjs.graph.edges.size;
+    $("statSprings").textContent = gjs.simulation._springs.length / 2;
+    frames = 0; fpsClock = now;
+  }
+  requestAnimationFrame(frame);
+}
+
+readUI();
+buildGraph();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
