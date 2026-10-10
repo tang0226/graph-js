@@ -11,6 +11,9 @@ const NODE_RENDER_DEFAULTS = {
 const EDGE_RENDER_DEFAULTS = {
   color: "#000000",
   width: 1,
+  arrow: null,     // null follows graph.directed; true/false forces it per edge
+  arrowSize: 10,   // canvas px — like width, does not scale with zoom
+  bow: 14,         // world px of perpendicular bow for reciprocal directed pairs
 };
 
 export class Renderer {
@@ -74,6 +77,9 @@ export class Renderer {
     this._edgeAccessors = {
       color: asFn(this._defaultEdgeConfig.color),
       width: asFn(this._defaultEdgeConfig.width),
+      arrow: asFn(this._defaultEdgeConfig.arrow),
+      arrowSize: asFn(this._defaultEdgeConfig.arrowSize),
+      bow: asFn(this._defaultEdgeConfig.bow),
     };
     this._stylesDirty = true;
   }
@@ -104,6 +110,12 @@ export class Renderer {
     const acc = this._edgeAccessors, g = this.graph, o = this._edgeOverrides.get(gEdge);
     rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
     rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
+    rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
+    rEdge.bow = o?.bow?.(gEdge, g) ?? acc.bow(gEdge, g);
+
+    // unset (null/undefined) means "whatever the graph is"
+    const arrow = o?.arrow?.(gEdge, g) ?? acc.arrow(gEdge, g);
+    rEdge.arrow = arrow === null || arrow === undefined ? g.directed : arrow === true;
   }
 
   // Create a node based on a new graph node
@@ -179,15 +191,17 @@ export class Renderer {
     for (let k = 0; k < refs.length; k++)
       this._edgeStyles.push(this.edges.get(refs[k]));
 
-    // Edge bow
+    /* Edge bow: 1 when this edge is one half of a reciprocal directed pair, so
+       it should curve instead of overlapping its twin. No sign is needed — the
+       bow is offset along the edge's own perpendicular, which already points
+       the opposite way for the reverse edge. */
     const ep = sim._edgePairs;
     const sNodes = sim._nodeList;
     this._edgeBow = new Int8Array(ep.length / 2);
     for (let k = 0, i = 0; i < ep.length; k++, i += 2) {
       const a = ep[i], b = ep[i + 1];
       if (a === b || !this.graph.directed) { this._edgeBow[k] = 0; continue; }
-      const aId = sNodes[a].id, bId = sNodes[b].id;
-      this._edgeBow[k] = this.graph.hasEdge(bId, aId) ? (aId < bId ? 1 : -1) : 0;
+      this._edgeBow[k] = this.graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
     }
 
     this._syncedSimulation = this.simulation._version;
@@ -241,20 +255,13 @@ export class Renderer {
 
     // Render edges
     for (const i of toRender.edgesI) {
-      const edgeStyle = this._edgeStyles[i];
       const iDbl = 2 * i;
-      const srcNode = sim._nodeList[sim._edgePairs[iDbl]];
-      const destNode = sim._nodeList[sim._edgePairs[iDbl + 1]];
-      if (this.graph.directed) {
-
-      } else {
-        this.ctx.strokeStyle = edgeStyle.color;
-        this.ctx.lineWidth = edgeStyle.width;
-        this.ctx.beginPath();
-        this.ctx.moveTo(...this.simToCanvas(srcNode.x, srcNode.y));
-        this.ctx.lineTo(...this.simToCanvas(destNode.x, destNode.y));
-        this.ctx.stroke();
-      }
+      this._drawEdge(
+        sim._nodeList[sim._edgePairs[iDbl]],
+        sim._nodeList[sim._edgePairs[iDbl + 1]],
+        this._edgeStyles[i],
+        this._edgeBow[i],
+      );
     }
 
     // Render nodes
@@ -269,6 +276,106 @@ export class Renderer {
         this.ctx.strokeStyle = nodeStyle.outlineColor;
         this.ctx.lineWidth = nodeStyle.outlineWidth;
         this.ctx.stroke();
+      }
+    }
+  }
+
+  _drawEdge(src, dest, style, bowDir) {
+    const ctx = this.ctx, z = this.view.zoom;
+    const [ax, ay] = this.simToCanvas(src.x, src.y);
+    const [bx, by] = this.simToCanvas(dest.x, dest.y);
+    const ra = src.radius * z, rb = dest.radius * z;
+
+    if (src === dest) return this._drawSelfLoop(ax, ay, ra, style);
+
+    const dx = bx - ax, dy = by - ay;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-6) return;
+
+    const head = style.arrow ? style.arrowSize : 0;
+    if (d <= ra + rb + head) return;
+
+    const ux = dx / d, uy = dy / d;
+    const bow = bowDir * style.bow * this.view.zoom;  // Scale bow with zoom
+
+    // Tangents at each end, and the trimmed endpoints along them.
+    let t0x = ux, t0y = uy, t1x = ux, t1y = uy, cx = 0, cy = 0;
+    if (bow) {
+      cx = (ax + bx) / 2 - uy * bow;            // (-uy, ux) is the perpendicular
+      cy = (ay + by) / 2 + ux * bow;
+      const l0 = Math.hypot(cx - ax, cy - ay) || 1;
+      const l1 = Math.hypot(bx - cx, by - cy) || 1;
+      t0x = (cx - ax) / l0; t0y = (cy - ay) / l0;
+      t1x = (bx - cx) / l1; t1y = (by - cy) / l1;
+    }
+
+    const sx = ax + t0x * ra, sy = ay + t0y * ra;
+    const ex = bx - t1x * rb, ey = by - t1y * rb;
+
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.width;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    // Stop the stroke at the arrowhead's base so a thick line can't show
+    // through the notch of the filled triangle.
+    if (bow) ctx.quadraticCurveTo(cx, cy, ex - t1x * head, ey - t1y * head);
+    else ctx.lineTo(ex - ux * head, ey - uy * head);
+    ctx.stroke();
+
+    if (style.arrow) this._drawArrowhead(ex, ey, t1x, t1y, head, style);
+  }
+
+  _drawArrowhead(tipX, tipY, tx, ty, size, style) {
+    const ctx = this.ctx;
+    const halfW = size * 0.45;
+    const baseX = tipX - tx * size, baseY = tipY - ty * size;
+    const px = -ty, py = tx;
+
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + px * halfW, baseY + py * halfW);
+    ctx.lineTo(baseX - px * halfW, baseY - py * halfW);
+    ctx.closePath();
+    ctx.fillStyle = style.color;
+    ctx.fill();
+  }
+
+  /* Self-loop: a circle overlapping the node, up and to the right. Nodes are
+     painted after edges, so the inner part of the loop is covered. */
+  _drawSelfLoop(cx, cy, r, style) {
+    const ctx = this.ctx;
+    const lr = Math.max(r * 0.8, (style.arrow ? style.arrowSize : 6) * 1.6);
+    const a = -Math.PI / 4;
+    const D = r + lr * 0.6;                      // node centre -> loop centre
+    const ux = Math.cos(a), uy = Math.sin(a);
+    const lx = cx + ux * D, ly = cy + uy * D;
+
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.width;
+    ctx.beginPath();
+    ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (!style.arrow) return;
+
+    /* Put the tip where the loop crosses the node's boundary. The loop's
+       nearest point to the node centre lies *inside* the node, so an
+       arrowhead there would be painted over by the node's fill. */
+    const t = (D * D + r * r - lr * lr) / (2 * D);
+    const h2 = r * r - t * t;
+    if (h2 <= 0) return;                         // circles don't intersect
+    const h = Math.sqrt(h2);
+    const px = -uy, py = ux;
+
+    for (const s of [1, -1]) {                   // pick the crossing that points inward
+      const tipX = cx + ux * t + px * h * s;
+      const tipY = cy + uy * t + py * h * s;
+      let tx = -(tipY - ly), ty = tipX - lx;     // counter-clockwise tangent on the loop
+      const l = Math.hypot(tx, ty) || 1;
+      tx /= l; ty /= l;
+      if (tx * (cx - tipX) + ty * (cy - tipY) > 0) {
+        this._drawArrowhead(tipX, tipY, tx, ty, style.arrowSize, style);
+        return;
       }
     }
   }
