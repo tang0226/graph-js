@@ -9,11 +9,12 @@ export class Simulation {
 
     this.opts = {
       friction:        opts.friction ?? 0.9,
-      gravity:         opts.gravity ?? 0.01,
-      repulsion:       opts.repulsion ?? 100,
-      springStiffness: opts.springStiffness ?? 0.5,
-      springLength:    opts.springLength ?? 60,
-      minDistSq:       opts.minDistSq ?? 1,
+      gravity:         opts.gravity ?? 0.005,
+      repulsion:       opts.repulsion ?? 1000,
+      springStiffness: opts.springStiffness ?? 0.15,
+      springLength:    opts.springLength ?? 50,
+      minDistSq:       opts.minDistSq ?? 100,
+      maxSpeed:        opts.maxSpeed ?? 100,
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
@@ -92,7 +93,7 @@ export class Simulation {
       x: sx / n + jitter(), y: sy / n + jitter(),
       vx: 0, vy: 0,
     } : {
-      x: jitter() * 100, y: jitter() * 100,
+      x: jitter() * 200, y: jitter() * 200,
       vx: 0, vy: 0,
     };
   }
@@ -239,11 +240,17 @@ export class Simulation {
     this._apply_springs();
     this._apply_gravity();
 
+    const maxV = this.opts.maxSpeed;
     for (let i = 0; i < list.length; i++) {
       const r = list[i];
       if (r.fixed) { r.vx = 0; r.vy = 0; continue; }
       r.vx = (r.vx + (r.fx / r.mass) * dt) * this.opts.friction;
       r.vy = (r.vy + (r.fy / r.mass) * dt) * this.opts.friction;
+      
+      // Limit speed
+      const v = Math.hypot(r.vx, r.vy);
+      if (v > maxV) { r.vx *= maxV / v; r.vy *= maxV / v; }
+
       r.x += r.vx * dt;
       r.y += r.vy * dt;
     }
