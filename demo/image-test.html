@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+</head>
+<body>
+<canvas id="canvas" style="border: 1px solid black"></canvas>
+<script type="module">
+import { GraphJS } from "../src/graphjs.js";
+
+const width = 1000;
+const height = 1000;
+const canvas = document.querySelector("#canvas");
+
+canvas.style.width = width + "px";
+canvas.style.height = height + "px";
+canvas.width = width;
+canvas.height = height;
+
+const gjs = new GraphJS(canvas);
+
+gjs.addNode({id: "a"});
+gjs.addNode({id: "b"});
+gjs.addNode({id: "c"});
+gjs.addNode({id: "d"});
+gjs.addNode({id: "e"});
+
+gjs.addEdge("a", "b");
+gjs.addEdge("a", "c");
+gjs.addEdge("b", "d");
+gjs.addEdge("a", "e");
+
+
+// Test on some unsplash images
+gjs.renderer.setNodeConfig("a", {
+  image: "https://plus.unsplash.com/premium_photo-1790975903282-5fd06b30f35f?w=400&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
+});
+
+gjs.renderer.setNodeConfig("b", {
+  image: "https://plus.unsplash.com/premium_photo-1762564681819-6f6f626ffabc?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
+});
+
+gjs.renderer.setNodeConfig("c", {
+  image: "https://plus.unsplash.com/premium_photo-1790117179082-8bd550a356e2?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
+});
+
+gjs.renderer.view.zoom = 2;
+
+gjs.resize();
+gjs.start();
+
+</script>
+</body>
+</html>

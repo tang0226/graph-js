@@ -9,7 +9,7 @@ export class Simulation {
 
     this.opts = {
       friction:        opts.friction ?? 0.9,
-      gravity:         opts.gravity ?? 0.005,
+      gravity:         opts.gravity ?? 0.002,
       repulsion:       opts.repulsion ?? 1000,
       springStiffness: opts.springStiffness ?? 0.15,
       springLength:    opts.springLength ?? 50,
@@ -93,7 +93,7 @@ export class Simulation {
       x: sx / n + jitter(), y: sy / n + jitter(),
       vx: 0, vy: 0,
     } : {
-      x: jitter() * 200, y: jitter() * 200,
+      x: jitter() * 5, y: jitter() * 5,
       vx: 0, vy: 0,
     };
   }

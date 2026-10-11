@@ -6,7 +6,7 @@ export class GraphJS {
   constructor(canvas, opts = {}) {
     this.graph = new Graph(opts.graph ?? {});
     this.simulation = new Simulation(this.graph, opts.simulation ?? {});
-    this.renderer = new Renderer(this.simulation, canvas, opts.render ?? {});
+    this.renderer = new Renderer(this.simulation, canvas, opts.renderer ?? {});
     this.canvas = canvas;
 
     this._raf = null;
@@ -23,9 +23,9 @@ export class GraphJS {
   }
 
   addNode(data, id)        { return this.graph.addNode(data, id); }
-  addEdge(src, dest, data) { return this.graph.addEdge(src, dest, data); }
+  addEdge(srcId, destId, data) { return this.graph.addEdge(srcId, destId, data); }
   removeNode(id)           { return this.graph.removeNode(id); }
-  removeEdge(src, dest)    { return this.graph.removeEdge(src, dest); }
+  removeEdge(srcId, destId)    { return this.graph.removeEdge(srcId, destId); }
 
   start() {
     if (this._raf !== null) return this;

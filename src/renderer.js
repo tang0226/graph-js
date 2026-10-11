@@ -4,8 +4,8 @@ import { asFn, circleRectCollision } from "./utils.js";
 const NODE_RENDER_DEFAULTS = {
   color: "#ffffff",
   outlineColor: "#000000",
-  outlineWidth: 0,
-  image: false,
+  outlineWidth: 1,
+  image: null,
 };
 
 const EDGE_RENDER_DEFAULTS = {
@@ -17,6 +17,9 @@ const EDGE_RENDER_DEFAULTS = {
 };
 
 export class Renderer {
+  static IMAGE_LOADING = "loading";
+  static IMAGE_FAILED = "failed";
+
   constructor(simulation, canvas, opts = {}) {
     if (!(simulation instanceof Simulation)) throw new TypeError("simulation argument is not a Simulation instance");
     this.simulation = simulation;
@@ -36,6 +39,8 @@ export class Renderer {
     this.edges = new Map();
     this._nodeOverrides = new Map();
     this._edgeOverrides = new Map();
+    this._images = new Map();
+    this._imageDebt = 0;
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
     this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
@@ -134,6 +139,24 @@ export class Renderer {
     return rEdge;
   }
 
+  _loadImage(src) {
+    if (this._images.has(src)) return false;
+    this._images.set(src, Renderer.IMAGE_LOADING);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload  = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, img); };
+    img.onerror = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, Renderer.IMAGE_FAILED); };
+    img.src = src;
+    return true;
+  }
+
+  // Find and delete images that are no longer used by any nodes
+  _garbageCollectImages() {
+    const live = new Set();
+    for (const rNode of this.nodes.values()) if (rNode.image) live.add(rNode.image);
+    for (const src of this._images.keys()) if (!live.has(src)) this._images.delete(src);
+  }
+
   // Update 
   sync() {
     if (this._syncedDataVersion !== this.graph._dataVersion) {
@@ -145,9 +168,18 @@ export class Renderer {
     
     // Update node styles and seed new ones
     for (const [id, gNode] of this.graph.nodes) {
-      const rNode = this.nodes.get(id);
+      let rNode = this.nodes.get(id);
       if (rNode) this._resolveNode(gNode, rNode);
-      else this.nodes.set(id, this._seedNode(gNode));
+      else {
+        rNode = this._seedNode(gNode);
+        this.nodes.set(id, rNode);
+      }
+      // Load node image into cache
+      if (rNode.image) {
+        const img = this._images.get(rNode.image)
+        if (!img)
+          this._loadImage(rNode.image);
+      }
     }
 
     // Update edge styles and seed new ones
@@ -164,10 +196,12 @@ export class Renderer {
     // Delete old node styles
     for (const id of this.nodes.keys()) {
       if (!this.graph.nodes.has(id)) {
+        if (this.nodes.get(id).image) this._imageDebt++;
         this.nodes.delete(id);
         this._nodeOverrides.delete(id);
       }
     }
+    if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
 
     // Delete old edge styles
     for (const gEdge of this.edges.keys()) {
@@ -268,10 +302,22 @@ export class Renderer {
     for (const i of toRender.nodesI) {
       const nodeStyle = this._nodeStyles[i];
       const sNode = sim._nodeList[i];
+      const [cx, cy] = this.simToCanvas(sNode.x, sNode.y);
+      const r = sNode.radius * this.view.zoom;
       this.ctx.beginPath();
-      this.ctx.arc(...this.simToCanvas(sNode.x, sNode.y), sNode.radius * this.view.zoom, 0, 2 * Math.PI);
-      this.ctx.fillStyle = nodeStyle.color;
-      this.ctx.fill();
+      this.ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      const img = nodeStyle.image && this._images.get(nodeStyle.image);
+      if (img && typeof img !== "string") {
+        const scale = r * 2 / Math.min(img.width, img.height);
+        const dw = img.width * scale, dh = img.height * scale;
+        this.ctx.save();
+        this.ctx.clip();
+        this.ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+        this.ctx.restore();
+      } else {
+        this.ctx.fillStyle = nodeStyle.color;
+        this.ctx.fill();
+      }
       if (nodeStyle.outlineWidth) {
         this.ctx.strokeStyle = nodeStyle.outlineColor;
         this.ctx.lineWidth = nodeStyle.outlineWidth;
