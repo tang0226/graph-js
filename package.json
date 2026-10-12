@@ -1,0 +1,25 @@
+{
+  "name": "graph-js",
+  "version": "0.1.0",
+  "description": "Physics-based graph library with canvas rendering and headless simulation layer",
+  "keywords": [
+    "graph",
+    "canvas",
+    "visualization"
+  ],
+  "homepage": "https://github.com/tang0226/graph-js#readme",
+  "bugs": {
+    "url": "https://github.com/tang0226/graph-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tang0226/graph-js.git"
+  },
+  "license": "MIT",
+  "author": "Toby Ang",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
