@@ -22,10 +22,12 @@ export class GraphJS {
     return this;
   }
 
-  addNode(data, id)        { return this.graph.addNode(data, id); }
-  addEdge(srcId, destId, data) { return this.graph.addEdge(srcId, destId, data); }
-  removeNode(id)           { return this.graph.removeNode(id); }
-  removeEdge(srcId, destId)    { return this.graph.removeEdge(srcId, destId); }
+  // Defaults mirror Graph's, so forwarding does not make optional arguments
+  // required for callers (which TypeScript consumers see as an arity error).
+  addNode(data = {}, id = undefined)        { return this.graph.addNode(data, id); }
+  addEdge(srcId, destId, data = {})         { return this.graph.addEdge(srcId, destId, data); }
+  removeNode(id)                            { return this.graph.removeNode(id); }
+  removeEdge(srcId, destId)                 { return this.graph.removeEdge(srcId, destId); }
 
   start() {
     if (this._raf !== null) return this;
@@ -66,7 +68,7 @@ export class GraphJS {
     return p ? this.simToCanvas(...p) : null;
   }
 
-  pin(id, cx, cy) { this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
+  pin(id, cx, cy) { return this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
 
-  unpin(id) { this.simulation.unpin(id); }
+  unpin(id) { return this.simulation.unpin(id); }
 }

@@ -1,9 +1,12 @@
 {
-  "name": "graph-js",
-  "version": "0.1.0",
+  "name": "@tang0226/graph-js",
+  "version": "0.2.0",
   "description": "Physics-based graph library with canvas rendering and headless simulation layer",
   "keywords": [
     "graph",
+    "network",
+    "force-directed",
+    "layout",
     "canvas",
     "visualization"
   ],
@@ -18,8 +21,43 @@
   "license": "MIT",
   "author": "Toby Ang",
   "type": "module",
-  "main": "src/index.js",
+  "main": "./src/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./graph": {
+      "types": "./types/graph.d.ts",
+      "default": "./src/graph.js"
+    },
+    "./simulation": {
+      "types": "./types/simulation.d.ts",
+      "default": "./src/simulation.js"
+    },
+    "./renderer": {
+      "types": "./types/renderer.d.ts",
+      "default": "./src/renderer.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "types",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "types": "tsc -p tsconfig.types.json",
+    "prepublishOnly": "npm run types && npm test"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
   }
 }
