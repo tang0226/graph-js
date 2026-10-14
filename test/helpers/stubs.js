@@ -65,8 +65,9 @@ export function installWindow(devicePixelRatio = 1) {
   return () => { globalThis.window = prev; };
 }
 
-/* requestAnimationFrame that never actually fires, so start()/stop() can be
-   tested without running frames. `frames` collects the queued callbacks. */
+/* A manually driven requestAnimationFrame. Nothing runs until `flushFrame()`
+   is called, so loop behaviour is deterministic: `pending.size` shows whether
+   a frame is queued, and each flush advances the loop exactly one step. */
 export function installRaf() {
   const prev = [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame];
   const pending = new Map();
@@ -75,6 +76,15 @@ export function installRaf() {
   globalThis.cancelAnimationFrame = id => { pending.delete(id); };
   return {
     pending,
+    /* Runs every queued callback once. Callbacks that re-queue land in the
+       next flush rather than looping forever. */
+    flushFrame(times = 1) {
+      for (let i = 0; i < times; i++) {
+        const due = [...pending.entries()];
+        pending.clear();
+        for (const [, cb] of due) cb(i);
+      }
+    },
     restore() { [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame] = prev; },
   };
 }

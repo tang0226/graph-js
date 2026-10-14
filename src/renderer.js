@@ -20,19 +20,21 @@ export class Renderer {
   static IMAGE_LOADING = "loading";
   static IMAGE_FAILED = "failed";
 
-  constructor(simulation, canvas, opts = {}) {
+  constructor(simulation, opts = {}) {
     if (!(simulation instanceof Simulation)) throw new TypeError("simulation argument is not a Simulation instance");
     this.simulation = simulation;
     this.graph = simulation.graph;
 
-    this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
+    this.canvas = opts.canvas ?? null;
+    this.ctx = this.canvas ? this.canvas.getContext("2d") : null;
 
     this.opts = {
       background: opts.background ?? "#ffffff",
     };
 
-    this.size = { w: canvas.width, h: canvas.height };
+    this.size = this.canvas ?
+      { w: this.canvas.width, h: this.canvas.height }
+      : null;
     this.view = { x: 0, y: 0, zoom: 1 };
 
     this.nodes = new Map();
@@ -53,6 +55,21 @@ export class Renderer {
     this.sync();
   }
 
+  attach(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.size = { w: this.canvas.width, h: this.canvas.height };
+    return this;
+  }
+
+  detach() {
+    if (!this.canvas) return this;
+    this.canvas = null;
+    this.ctx = null;
+    this.size = null;
+    return this;
+  }
+
   // Style management functions
   setDefaultNodeConfig(config = {}) {
     this._defaultNodeConfig = { ...NODE_RENDER_DEFAULTS, ...this._defaultNodeConfig, ...config };
@@ -63,6 +80,7 @@ export class Renderer {
       image: asFn(this._defaultNodeConfig.image),
     };
     this._stylesDirty = true;
+    return this;
   }
 
   setNodeConfig(id, config = {}) {
@@ -70,11 +88,13 @@ export class Renderer {
     for (const k in merged) merged[k] = asFn(merged[k]);
     this._nodeOverrides.set(id, merged);
     this._stylesDirty = true;
+    return this;
   }
 
   clearNodeConfig(id) {
     this._nodeOverrides.delete(id);
     this._stylesDirty = true;
+    return this;
   }
 
   setDefaultEdgeConfig(config = {}) {
@@ -87,6 +107,7 @@ export class Renderer {
       bow: asFn(this._defaultEdgeConfig.bow),
     };
     this._stylesDirty = true;
+    return this;
   }
 
   setEdgeConfig(gEdge, config = {}) {
@@ -94,11 +115,13 @@ export class Renderer {
     for (const k in merged) merged[k] = asFn(merged[k]);
     this._edgeOverrides.set(gEdge, merged);
     this._stylesDirty = true;
+    return this;
   }
 
   clearEdgeConfig(gEdge) {
     this._edgeOverrides.delete(gEdge);
     this._stylesDirty = true;
+    return this;
   }
 
   // Update render-node config based on graph node
@@ -244,11 +267,13 @@ export class Renderer {
   }
 
   simToCanvas(x, y) {
+    if (!this.canvas) throw new Error("Renderer: no canvas attached");
     const v = this.view;
     return [this.size.w / 2 + (x - v.x) * v.zoom, this.size.h / 2 + (y - v.y) * v.zoom];
   }
 
   canvasToSim(x, y) {
+    if (!this.canvas) throw new Error("Renderer: no canvas attached");
     const v = this.view;
     return [(x - this.size.w / 2) / v.zoom + v.x, (y - this.size.h / 2) / v.zoom + v.y];
   }
@@ -279,6 +304,7 @@ export class Renderer {
   }
 
   render() {
+    if (!this.ctx) return false;
     this.sync();
 
     const toRender = this._cull();
@@ -324,6 +350,8 @@ export class Renderer {
         this.ctx.stroke();
       }
     }
+
+    return true;
   }
 
   _drawEdge(src, dest, style, bowDir) {
@@ -427,6 +455,7 @@ export class Renderer {
   }
 
   nodeAt(cx, cy) {
+    if (!this.canvas) throw new Error("Renderer: no canvas attached");
     const [x, y] = this.canvasToSim(cx, cy);
     const nodes = this.simulation._nodeList;
     const slack = 4 / this.view.zoom; // 4 world-coordinate radius slack
@@ -438,11 +467,15 @@ export class Renderer {
   }
 
   getPosition(id) {
+    if (!this.canvas) throw new Error("Renderer: no canvas attached");
     const p = this.simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
 
-  pin(id, cx, cy) { this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
+  pin(id, cx, cy) {
+    if (!this.canvas) throw new Error("Renderer: no canvas attached");
+    return this.simulation.pin(id, ...this.canvasToSim(cx, cy));
+  }
 
-  unpin(id) { this.simulation.unpin(id); }
+  unpin(id) { this.simulation.unpin(id); return this; }
 }

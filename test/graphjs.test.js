@@ -7,7 +7,7 @@ import { makeCanvas, installWindow, installRaf, r2 } from "./helpers/stubs.js";
 function build({ dpr = 1, directed = false, w = 800, h = 600 } = {}) {
   const restoreWindow = installWindow(dpr);
   const canvas = makeCanvas({ w, h });
-  const gjs = new GraphJS(canvas, { graph: { directed } });
+  const gjs = new GraphJS({ canvas, graph: { directed } });
   gjs.addNode({ id: "a" });
   gjs.addNode({ id: "b" });
   gjs.addEdge("a", "b");
@@ -35,7 +35,8 @@ describe("GraphJS: composition", () => {
   test("options are namespaced per layer", () => {
     const restoreWindow = installWindow(1);
     try {
-      const gjs = new GraphJS(makeCanvas(), {
+      const gjs = new GraphJS({
+        canvas: makeCanvas(),
         graph: { directed: true },
         simulation: { friction: 0.5 },
         renderer: { background: "#123456" },
@@ -57,6 +58,26 @@ describe("GraphJS: composition", () => {
       assert.equal(gjs.removeNode("c"), true);
       assert.equal(gjs.removeNode("c"), false);
     } finally { restoreWindow(); }
+  });
+
+  test("chainable forwarders return the facade, not the layer they delegate to", () => {
+    const { gjs, restoreWindow } = build();
+    const raf = installRaf();
+    try {
+      // Simulation.unpin returns the Simulation, so forwarding it verbatim
+      // would hand callers an object without start/stop/attach on it.
+      assert.equal(gjs.unpin("a"), gjs);
+      assert.doesNotThrow(() => gjs.unpin("a").stop());
+
+      for (const [name, call] of [
+        ["attach", () => gjs.attach(makeCanvas())],
+        ["resize", () => gjs.resize()],
+        ["start", () => gjs.start()],
+        ["stop", () => gjs.stop()],
+        ["step", () => gjs.step()],
+        ["detach", () => gjs.detach()],
+      ]) assert.equal(call(), gjs, `${name}() should return the GraphJS instance`);
+    } finally { raf.restore(); restoreWindow(); }
   });
 });
 
@@ -236,6 +257,214 @@ describe("GraphJS: end to end", () => {
         assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
       assert.equal(gjs.renderer._nodeStyles.length, gjs.simulation._nodeList.length);
       assert.equal(gjs.renderer._edgeStyles.length, gjs.graph.edges.size);
+    } finally { restoreWindow(); }
+  });
+});
+
+describe("GraphJS: detached lifecycle", () => {
+  test("constructs with no canvas", () => {
+    const gjs = new GraphJS({});
+    assert.equal(gjs.canvas, null);
+    assert.equal(gjs.renderer.ctx, null);
+    assert.equal(gjs.renderer.size, null);
+  });
+
+  test("the simulation still runs headless", () => {
+    const gjs = new GraphJS({});
+    gjs.addNode({ id: "a" });
+    gjs.addNode({ id: "b" });
+    gjs.addEdge("a", "b");
+    const before = gjs.simulation.getPosition("a");
+    for (let t = 0; t < 20; t++) gjs.step();
+    assert.notDeepEqual(gjs.simulation.getPosition("a"), before,
+      "step() should advance the layout without a canvas");
+  });
+
+  test("render is a no-op rather than a crash", () => {
+    const gjs = new GraphJS({});
+    gjs.addNode({ id: "a" });
+    assert.equal(gjs.renderer.render(), false);
+  });
+
+  test("start refuses without a canvas", () => {
+    const raf = installRaf();
+    try {
+      const gjs = new GraphJS({});
+      gjs.start();
+      assert.equal(gjs.isRunning(), false);
+      assert.equal(raf.pending.size, 0, "no frame should be queued");
+    } finally { raf.restore(); }
+  });
+
+  test("canvas-space methods throw a named error", () => {
+    const gjs = new GraphJS({});
+    gjs.addNode({ id: "a" });
+    for (const call of [
+      () => gjs.simToCanvas(0, 0),
+      () => gjs.canvasToSim(0, 0),
+      () => gjs.getPosition("a"),
+    ]) assert.throws(call, /no canvas attached/);
+  });
+
+  test("every canvas-space method throws, so null keeps its own meaning", () => {
+    const gjs = new GraphJS({});
+    gjs.addNode({ id: "a" });
+    for (const call of [
+      () => gjs.nodeAt(0, 0),
+      () => gjs.pin("a", 0, 0),
+    ]) assert.throws(call, /no canvas attached/);
+  });
+
+  test("simulation-only methods still work detached", () => {
+    const gjs = new GraphJS({});
+    gjs.addNode({ id: "a" });
+    assert.doesNotThrow(() => gjs.unpin("a"));
+
+    // A node has no position until sync() seeds a record for it.
+    assert.equal(gjs.simulation.getPosition("a"), null);
+    gjs.simulation.sync();
+    assert.equal(gjs.simulation.getPosition("a").length, 2,
+      "world-space queries need no canvas");
+  });
+
+  test("the error names the class that threw", () => {
+    const gjs = new GraphJS({});
+    assert.throws(() => gjs.nodeAt(0, 0), /^Error: GraphJS:/);
+    assert.throws(() => gjs.renderer.nodeAt(0, 0), /^Error: Renderer:/);
+  });
+});
+
+describe("GraphJS: attach and detach", () => {
+  test("canvas is a view onto the renderer, not a second copy", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const gjs = new GraphJS({});
+      const canvas = makeCanvas();
+      gjs.attach(canvas);
+      assert.equal(gjs.canvas, canvas);
+      assert.equal(gjs.canvas, gjs.renderer.canvas, "the two must never diverge");
+
+      gjs.renderer.detach();
+      assert.equal(gjs.canvas, null, "detaching the renderer must be visible on the facade");
+    } finally { restoreWindow(); }
+  });
+
+  test("attach applies the dpr transform and logical size", () => {
+    const restoreWindow = installWindow(2);
+    try {
+      const gjs = new GraphJS({});
+      const canvas = makeCanvas({ w: 500, h: 400 });
+      gjs.attach(canvas);
+      assert.deepEqual([canvas.width, canvas.height], [1000, 800]);
+      assert.deepEqual(gjs.renderer.size, { w: 500, h: 400 },
+        "attach must resize, or geometry is wrong at dpr != 1");
+    } finally { restoreWindow(); }
+  });
+
+  test("attach makes rendering work again after a detach", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const gjs = new GraphJS({ canvas: makeCanvas() });
+      gjs.addNode({ id: "a" });
+      gjs.detach();
+      assert.equal(gjs.renderer.render(), false);
+
+      const next = makeCanvas();
+      gjs.attach(next);
+      gjs.step();
+      assert.ok(next.ctx.ops.some(o => o[0] === "fillRect"), "the new canvas was not painted");
+    } finally { restoreWindow(); }
+  });
+
+  test("attach over an existing canvas releases the old one", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const first = makeCanvas(), second = makeCanvas({ w: 400, h: 300 });
+      const gjs = new GraphJS({ canvas: first });
+      gjs.attach(second);
+      assert.equal(gjs.canvas, second);
+      gjs.addNode({ id: "a" });
+      first.ctx.ops.length = 0;
+      gjs.step();
+      assert.equal(first.ctx.ops.length, 0, "the replaced canvas must not keep receiving draws");
+    } finally { restoreWindow(); }
+  });
+
+  test("detach stops the loop", () => {
+    const restoreWindow = installWindow(1);
+    const raf = installRaf();
+    try {
+      const gjs = new GraphJS({ canvas: makeCanvas() });
+      gjs.start();
+      assert.equal(gjs.isRunning(), true);
+      gjs.detach();
+      assert.equal(gjs.isRunning(), false);
+      assert.equal(raf.pending.size, 0);
+    } finally { raf.restore(); restoreWindow(); }
+  });
+
+  test("stop works while detached", () => {
+    const restoreWindow = installWindow(1);
+    const raf = installRaf();
+    try {
+      const gjs = new GraphJS({ canvas: makeCanvas() });
+      gjs.start();
+      gjs.renderer.detach();          // bypasses gjs.detach(), so the loop is still queued
+      gjs.stop();
+      assert.equal(gjs.isRunning(), false, "stop() must not depend on a canvas being present");
+      assert.equal(raf.pending.size, 0);
+    } finally { raf.restore(); restoreWindow(); }
+  });
+
+  test("the loop ends itself when the renderer is detached behind its back", () => {
+    const restoreWindow = installWindow(1);
+    const raf = installRaf();
+    try {
+      const gjs = new GraphJS({ canvas: makeCanvas() });
+      gjs.addNode({ id: "a" });
+      gjs.start();
+      raf.flushFrame();
+      assert.equal(raf.pending.size, 1, "the loop should re-queue while attached");
+
+      gjs.renderer.detach();          // no notification reaches GraphJS
+      raf.flushFrame();
+      assert.equal(raf.pending.size, 0, "the frame callback should not re-queue");
+      assert.equal(gjs.isRunning(), false, "isRunning must reflect the ended chain");
+    } finally { raf.restore(); restoreWindow(); }
+  });
+
+  test("detach is idempotent", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const gjs = new GraphJS({ canvas: makeCanvas() });
+      assert.doesNotThrow(() => { gjs.detach(); gjs.detach(); });
+      assert.equal(gjs.canvas, null);
+    } finally { restoreWindow(); }
+  });
+
+  test("resize is a no-op while detached", () => {
+    const gjs = new GraphJS({});
+    assert.doesNotThrow(() => gjs.resize());
+    assert.equal(gjs.renderer.size, null);
+  });
+
+  test("opts.canvas and opts.renderer.canvas are equivalent", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const a = makeCanvas(), b = makeCanvas();
+      assert.equal(new GraphJS({ canvas: a }).canvas, a);
+      assert.equal(new GraphJS({ renderer: { canvas: b } }).canvas, b);
+    } finally { restoreWindow(); }
+  });
+
+  test("the constructor does not mutate the options object it is given", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const opts = { canvas: makeCanvas(), graph: { directed: true } };
+      const snapshot = Object.keys(opts).sort();
+      new GraphJS(opts);
+      assert.deepEqual(Object.keys(opts).sort(), snapshot,
+        "a reused or memoised options object must survive construction unchanged");
     } finally { restoreWindow(); }
   });
 });

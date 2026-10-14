@@ -3,16 +3,38 @@ import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
 
 export class GraphJS {
-  constructor(canvas, opts = {}) {
+  constructor(opts = {}) {
     this.graph = new Graph(opts.graph ?? {});
     this.simulation = new Simulation(this.graph, opts.simulation ?? {});
-    this.renderer = new Renderer(this.simulation, canvas, opts.renderer ?? {});
-    this.canvas = canvas;
 
+    // Build a local copy: writing back onto `opts` would mutate the caller's
+    // object, which breaks reuse of a memoised options literal.
+    const rendererOpts = opts.canvas
+      ? { ...opts.renderer, canvas: opts.canvas }
+      : opts.renderer ?? {};
+    this.renderer = new Renderer(this.simulation, rendererOpts);
+    
     this._raf = null;
   }
 
+  get canvas() { return this.renderer.canvas; }
+
+  attach(canvas) {
+    if (this.canvas) this.detach();
+    this.renderer.attach(canvas);
+    this.resize();
+    return this;
+  }
+
+  detach() {
+    if (!this.canvas) return this;
+    this.stop();
+    this.renderer.detach();
+    return this;
+  }
+
   resize() {
+    if (!this.canvas) return this;
     const dpr = window.devicePixelRatio ?? 1;
     const { clientWidth: w, clientHeight: h } = this.canvas;
     this.canvas.width = Math.round(w * dpr);
@@ -30,8 +52,9 @@ export class GraphJS {
   removeEdge(srcId, destId)                 { return this.graph.removeEdge(srcId, destId); }
 
   start() {
-    if (this._raf !== null) return this;
+    if (this._raf !== null || !this.canvas) return this;
     const frame = () => {
+      if (!this.canvas) { this._raf = null; return; }
       this.simulation.tick();
       this.renderer.render();
       this._raf = requestAnimationFrame(frame);
@@ -49,10 +72,17 @@ export class GraphJS {
 
   isRunning() { return this._raf !== null; }
 
-  simToCanvas(x, y) { return this.renderer.simToCanvas(x, y); }
-  canvasToSim(cx, cy) { return this.renderer.canvasToSim(cx, cy); }
+  simToCanvas(x, y) {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    return this.renderer.simToCanvas(x, y);
+  }
+  canvasToSim(cx, cy) {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    return this.renderer.canvasToSim(cx, cy);
+  }
 
   nodeAt(cx, cy) {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
     const [x, y] = this.canvasToSim(cx, cy);
     const nodes = this.simulation._nodeList;
     const slack = 4 / this.renderer.view.zoom; // 4 world-coordinate radius slack
@@ -64,11 +94,17 @@ export class GraphJS {
   }
 
   getPosition(id) {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
     const p = this.simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
 
-  pin(id, cx, cy) { return this.simulation.pin(id, ...this.canvasToSim(cx, cy)); }
+  pin(id, cx, cy) {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    return this.simulation.pin(id, ...this.canvasToSim(cx, cy));
+  }
 
-  unpin(id) { return this.simulation.unpin(id); }
+  // Forward values, but not `this`: Simulation.unpin returns the Simulation,
+  // so returning it verbatim would hand callers the wrong object.
+  unpin(id) { this.simulation.unpin(id); return this; }
 }

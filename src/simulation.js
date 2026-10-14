@@ -44,6 +44,7 @@ export class Simulation {
       fixed: asFn(this._defaultNodeConfig.fixed),
     };
     this._configDirty = true;
+    return this;
   }
 
   setNodeConfig(id, config = {}) {
@@ -51,11 +52,13 @@ export class Simulation {
     for (const k in merged) merged[k] = asFn(merged[k]);
     this._overrides.set(id, merged);
     this._configDirty = true;
+    return this;
   }
 
   clearNodeConfig(id) {
     this._overrides.delete(id);
     this._configDirty = true;
+    return this;
   }
 
   // Update sim-node config based on graph node
@@ -257,6 +260,7 @@ export class Simulation {
 
     // Enforce radius
     this._enforce_radius();
+    return this;
   }
 
   getPosition(id) {
@@ -270,7 +274,8 @@ export class Simulation {
     if (!node) return false;
     this.setNodeConfig(id, { fixed: true });
     [node.x, node.y] = [x, y];
+    return true;
   }
 
-  unpin(id) { this.setNodeConfig(id, { fixed: undefined }); }
+  unpin(id) { this.setNodeConfig(id, { fixed: undefined }); return this; }
 }

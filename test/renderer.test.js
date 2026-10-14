@@ -21,7 +21,7 @@ function scene(directed, edges, { radius = 20, nodeCfg, edgeCfg } = {}) {
   const A = sim.nodes.get("a"), B = sim.nodes.get("b");
   A.x = -100; A.y = 0; B.x = 100; B.y = 0;
 
-  const r = new Renderer(sim, canvas, { nodeConfig: nodeCfg, edgeConfig: edgeCfg });
+  const r = new Renderer(sim, { canvas, nodeConfig: nodeCfg, edgeConfig: edgeCfg });
   r.sync();
   canvas.ctx.ops.length = 0;
   return { g, sim, r, ctx: canvas.ctx, canvas };
@@ -29,8 +29,8 @@ function scene(directed, edges, { radius = 20, nodeCfg, edgeCfg } = {}) {
 
 describe("Renderer: construction", () => {
   test("rejects anything that is not a Simulation", () => {
-    assert.throws(() => new Renderer({}, makeCanvas(), {}), { name: "TypeError" });
-    assert.throws(() => new Renderer(null, makeCanvas(), {}), { name: "TypeError" });
+    assert.throws(() => new Renderer({}, { canvas: makeCanvas() }), { name: "TypeError" });
+    assert.throws(() => new Renderer(null, { canvas: makeCanvas() }), { name: "TypeError" });
   });
 });
 
@@ -180,7 +180,7 @@ describe("Renderer: cache alignment", () => {
       if (i) g.addEdge("n" + (i - 1), "n" + i);
     }
     const sim = new Simulation(g, {});
-    const r = new Renderer(sim, canvas, {});
+    const r = new Renderer(sim, { canvas });
 
     for (const id of ["n3", "n7", "n0"]) {
       g.removeNode(id);
@@ -199,7 +199,7 @@ describe("Renderer: cache alignment", () => {
     const g = new Graph();
     for (let i = 0; i < 6; i++) g.addNode({ id: "n" + i });
     const sim = new Simulation(g, {});
-    const r = new Renderer(sim, canvas, {});
+    const r = new Renderer(sim, { canvas });
     g.removeNode("n2");
     sim.sync();
     r.sync();
@@ -252,7 +252,7 @@ describe("Renderer: images", () => {
     const sim = new Simulation(g, {});
     sim.setDefaultNodeConfig({ radius: 20 });
     sim.sync();
-    const r = new Renderer(sim, canvas, { nodeConfig: { image: n => n.data.img ?? null } });
+    const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
     r.sync();
     return { g, sim, r, ctx: canvas.ctx, restore };
   }
@@ -308,7 +308,7 @@ describe("Renderer: images", () => {
       const canvas = makeCanvas();
       const g = new Graph();
       const sim = new Simulation(g, {});
-      const r = new Renderer(sim, canvas, { nodeConfig: { image: n => n.data.img ?? null } });
+      const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
 
       for (let i = 0; i < 40; i++) {
         g.addNode({ id: "u" + i, img: "u" + i + ".png" });
@@ -332,7 +332,7 @@ describe("Renderer: images", () => {
       const g = new Graph();
       g.addNode({ id: "a", img: "late.png" });
       const sim = new Simulation(g, {});
-      const r = new Renderer(sim, canvas, { nodeConfig: { image: n => n.data.img ?? null } });
+      const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
       r.sync();
       assert.equal(r._images.get("late.png"), Renderer.IMAGE_LOADING);
 
@@ -341,5 +341,74 @@ describe("Renderer: images", () => {
       assert.equal(r._images.has("late.png"), false,
         "an in-flight load must not re-add an entry for a node that is gone");
     } finally { restore(); }
+  });
+});
+
+describe("Renderer: attach lifecycle", () => {
+  function headless() {
+    const g = new Graph();
+    g.addNode({ id: "a" });
+    g.addNode({ id: "b" });
+    g.addEdge("a", "b");
+    const sim = new Simulation(g, {});
+    return new Renderer(sim, {});
+  }
+
+  test("constructs with no canvas and still resolves styles", () => {
+    const r = headless();
+    assert.equal(r.canvas, null);
+    assert.equal(r.ctx, null);
+    assert.equal(r.size, null);
+    assert.equal(r.nodes.size, 2, "style resolution must not depend on a canvas");
+    assert.equal(r._nodeStyles.length, 2);
+  });
+
+  test("render reports that it did nothing", () => {
+    assert.equal(headless().render(), false);
+  });
+
+  test("attach wires up canvas, context and size together", () => {
+    const r = headless();
+    const canvas = makeCanvas({ w: 640, h: 480 });
+    r.attach(canvas);
+    assert.equal(r.canvas, canvas);
+    assert.equal(r.ctx, canvas.ctx);
+    assert.deepEqual(r.size, { w: 640, h: 480 });
+    assert.equal(r.render(), true, "render should now proceed and report that it drew");
+    assert.ok(canvas.ctx.ops.some(o => o[0] === "fillRect"));
+  });
+
+  test("detach clears all three fields together", () => {
+    const r = headless();
+    r.attach(makeCanvas());
+    r.detach();
+    assert.deepEqual([r.canvas, r.ctx, r.size], [null, null, null],
+      "a partial detach would leave render() dereferencing null");
+  });
+
+  test("detach is idempotent", () => {
+    const r = headless();
+    assert.doesNotThrow(() => { r.detach(); r.detach(); });
+  });
+
+  test("styles and caches survive a detach/attach cycle", () => {
+    const r = headless();
+    r.setNodeConfig("a", { color: "#abcdef" });
+    r.sync();
+    const style = r.nodes.get("a");
+
+    r.attach(makeCanvas());
+    r.detach();
+    r.attach(makeCanvas());
+    r.sync();
+    assert.equal(r.nodes.get("a"), style, "the style cache should not be rebuilt by attaching");
+    assert.equal(style.color, "#abcdef");
+  });
+
+  test("the view is preserved across attach", () => {
+    const r = headless();
+    r.view = { x: 10, y: -20, zoom: 3 };
+    r.attach(makeCanvas());
+    assert.deepEqual(r.view, { x: 10, y: -20, zoom: 3 });
   });
 });
