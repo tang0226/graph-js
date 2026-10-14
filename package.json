@@ -54,6 +54,7 @@
   },
   "scripts": {
     "test": "node --test test/",
+    "check": "tsc -p tsconfig.json",
     "types": "tsc -p tsconfig.types.json",
     "prepublishOnly": "npm run types && npm test"
   },
