@@ -2,7 +2,7 @@
  * @typedef {object} GraphNode
  * @property {any} id - id of the node
  * @property {any} data - custom data associated with the node
-*/
+ */
 
 /**
  * @typedef {object} GraphEdge
@@ -22,21 +22,21 @@ export class Graph {
    * All edges of the graph, each appearing exactly once.
    * Keyed by Edge object (go through `adjacency` or `getEdge`)
    * @type {Set<GraphEdge>}
-  */
+   */
   edges = new Set();
 
   /**
    * Nested lookup map (`srcId -> destId -> Edge`).
    * Symmetric in an undirected graph: both directions reference the *same* Edge object.
    * @type {Map<any, Map<any, GraphEdge>>}
-  */
+   */
   adjacency = new Map();
 
   /**
    * Boolean indicating whether the graph is directed or undirected.
    * Frozen at instantiation.
    * @type {boolean}
-  */
+   */
   directed;
 
   /**
