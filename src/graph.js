@@ -1,4 +1,10 @@
 /**
+ * Custom data for a node. Any fields are allowed; `id`, if present, becomes
+ * the node's id when no explicit `id` argument is passed.
+ * @typedef {{ id?: any, [key: string]: any }} NodeData
+ */
+
+/**
  * @typedef {object} GraphNode
  * @property {any} id - id of the node
  * @property {any} data - custom data associated with the node
@@ -37,7 +43,7 @@ export class Graph {
    * Frozen at instantiation.
    * @type {boolean}
    */
-  directed;
+  directed = false;
 
   /**
    * Monotonic counter for *structural* change: bumped whenever a node or edge
@@ -67,7 +73,7 @@ export class Graph {
 
 
   /**
-   * Initialize a Graph instance.
+   * Initialize a `Graph` instance.
    * @param {object} [opts={}] - options object
    * @param {boolean} [opts.directed=false] - whether the graph is directed or undirected (constant; set once)
    */
@@ -88,8 +94,8 @@ export class Graph {
    * Adds a node to the graph if the id is not already in use.
    * If an id is not specified in the data object or id field, addNode will generate an id automatically using crypto.randomUUID().
    * If the id is already in use, no node is added and the existing id is returned.
-   * @param {object} [data={}] - custom data to associate with the node
-   * @param {any} [id=data.id??crypto.randomUUID()] - id of the new node
+   * @param {NodeData} [data] - custom data to associate with the node
+   * @param {any} [id] - id of the new node; defaults to `data.id`, then a random UUID
    * @returns {any} id of the node
    */
   addNode(data = {}, id = data.id ?? crypto.randomUUID()) {
@@ -149,11 +155,11 @@ export class Graph {
     const dest = this.nodes.get(destId);
     if (!src) throw new ReferenceError(`Cannot find source node with id "${srcId}"`);
     if (!dest) throw new ReferenceError(`Cannot find destination node with id "${destId}"`);
-    if (this.adjacency.get(srcId).get(destId)) return false;
+    if (this.adjacency.get(srcId)?.get(destId)) return false;
     const edge = { src, dest, data };
     this.edges.add(edge);
-    this.adjacency.get(srcId).set(destId, edge);
-    if (!this.directed) this.adjacency.get(destId).set(srcId, edge);
+    this.adjacency.get(srcId)?.set(destId, edge);
+    if (!this.directed) this.adjacency.get(destId)?.set(srcId, edge);
     this._version++;
     return true;
   }
