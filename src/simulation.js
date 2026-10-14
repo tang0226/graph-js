@@ -1,9 +1,203 @@
 import { asFn } from "./utils.js";
 
-const NODE_SIM_DEFAULTS = { mass: 1, radius: 20, fixed: false };
+/** @typedef {import("./graph.js").Graph} Graph */
+/** @typedef {import("./graph.js").GraphNode} GraphNode */
+/** @typedef {import("./graph.js").GraphEdge} GraphEdge */
+/**
+ * @template T
+ * @typedef {import("./types.js").NodeAccessor<T>} NodeAccessor
+ */
+/**
+ * @template T
+ * @typedef {import("./types.js").NodeOption<T>} NodeOption
+ */
 
 
+/**
+ * @typedef {object} SimOptions
+ * @property {number} friction - friction coefficient to apply to all node
+ *    velocities each tick
+ * @property {number} gravity - strength of pull toward (0, 0), applied as a
+ *    force proportional to distance
+ * @property {number} repulsion - coefficient for inverse-square repulsion
+ *    calculations
+ * @property {number} springStiffness - coefficient for spring forces
+ * @property {number} springLength - target length of edges/springs between nodes
+ * @property {number} minDistSq - minimum distance to clamp to before applying
+ *    repulsive force between two nodes (to avoid extreme velocities from the
+ *    inverse-square law)
+ * @property {number} maxSpeed - maximum speed of each node (clamped to at the
+ *    end of each tick)
+ */
+
+/**
+ * Full simulation node object
+ * @typedef {object} SimNode
+ * @property {any} id - node id (matches corresponding `GraphNode`)
+ * @property {number} mass - physical mass of the node
+ * @property {number} radius - physical (and rendered) radius of the node
+ * @property {boolean} fixed - whether the node is immovable
+ * @property {number} x - x coordinate
+ * @property {number} y - y coordinate
+ * @property {number} vx - x velocity
+ * @property {number} vy - y velocity
+ * @property {number} fx - [temp] x force total, reset and populated every tick
+ * @property {number} fy - [temp] y force total, reset and populated every tick
+ */
+
+/**
+ * Partial config specifier
+ * @typedef {object} SimNodeConfig
+ * @property {NodeOption<number>} [mass] - physical mass of the node
+ * @property {NodeOption<number>} [radius] - physical (and rendered) radius of the node
+ * @property {NodeOption<boolean>} [fixed] - whether the node is immovable
+ */
+
+/**
+ * Fully populated config after merging with defaults.
+ * @typedef {Required<SimNodeConfig>} ResolvedSimNodeConfig
+ */
+
+/**
+ * Sim-node options collapsed into functions
+ * @typedef {object} SimNodeAccessors
+ * @property {NodeAccessor<number>} [mass] - function returning the physical
+ *    mass of a node
+ * @property {NodeAccessor<number>} [radius] - function returning the radius of
+ *    a node
+ * @property {NodeAccessor<boolean>} [fixed] - function returning whether a node
+ *    is immovable
+ */
+
+/**
+ * Fully populated config accessors
+ * @typedef {Required<SimNodeAccessors>} ResolvedSimNodeAccessors
+ */
+
+
+/** @type {{ mass: number, radius: number, fixed: boolean }} */
+const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, fixed: false };
+
+/**
+ * @param {ResolvedSimNodeConfig} config
+ * @returns {ResolvedSimNodeAccessors}
+ */
+const toAccessors = config => ({
+  mass: asFn(config.mass),
+  radius: asFn(config.radius),
+  fixed: asFn(config.fixed),
+});
+
+
+/**
+ * Simulates repulsion, springs, friction, gravity,
+ * and collision resolution for an underlying `Graph` instance.
+ */
 export class Simulation {
+  /** @type {Graph} */
+  graph;
+
+  /** @type {SimOptions} */
+  opts;
+
+  /**
+   * Map of physical node body data, keyed by keys used in the underlying
+   * `graph` (mirrors Map shape of `Graph.nodes`)
+   * @type {Map<any, SimNode>}
+   */
+  nodes = new Map();
+
+  /**
+   * Cached array of simulation nodes, recreated in effective `sync()` calls.
+   * @type {SimNode[]}
+   */
+  _nodeList = [];
+
+  /**
+   * Cached map connecting node ids to indices in `_nodeList`. Recreated in
+   * effective `sync()` calls.
+   * @type {Map<any, number>}
+   */
+  _nodeIndex = new Map();
+
+  /**
+   * Cached flattened array of index pairs for applying spring forces.
+   * Recreated in effective `sync()` calls.
+   * Because it is used in force application, it does not contain
+   * reverse-twin pairs, unlike `_edgePairs`.
+   * @type {Int32Array}
+   */
+  _springs = new Int32Array(0);
+
+  /**
+   * Cached flattened array of index pairs for drawing edges. Recreated in
+   * effective `sync()` calls. Used for drawing edges, so it can contain
+   * reverse-twin pairs in digraphs (unlike `_springs`).
+   * @type {Int32Array}
+   */
+  _edgePairs = new Int32Array(0);
+
+  /**
+   * Cached edge objects, parallel to `_edgePairs` by edge slot.
+   * @type {GraphEdge[]}
+   */
+  _edgeRefs = [];
+
+  /**
+   * Cached, node-specific config overrides.
+   * Node props specified here get first priority over the simulation's current
+   * default config and the global default config.
+   * @type {Map<any, SimNodeAccessors>}
+   */
+  _overrides = new Map();
+
+  /**
+   * Current default node config. Takes precedence over the global default config,
+   * but can be overridden for specific nodes in `_overrides`.
+   * @type {ResolvedSimNodeConfig}
+   */
+  _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
+
+  /**
+   * `_defaultNodeConfig` as functions. Used to apply the simulation's default
+   * config when resolving a `SimNode`'s raw configuration.
+   * @type {ResolvedSimNodeAccessors}
+   */
+  _accessors = toAccessors(SIM_NODE_DEFAULTS);
+
+  /**
+   * Set to `true` whenever any node config (default or override) is changed.
+   * Set back to `false` once those changes are applied in `sync()`.
+   * @type {boolean} */
+  _configDirty = false;
+
+  /**
+   * Monotonic counter for *structural* changes to the node and edge tables.
+   * Incremented in `sync()` only when graph shape changes.
+   * Higher layers rebuild slot-indexed caches on it.
+   * @type {number}
+   */
+  _version = 1;
+
+  /**
+   * Stores the latest synced `Graph` version. Used to gate node and edge
+   * cache updates.
+   * @type {number}
+   */
+  _syncedVersion = -1;
+
+  /**
+   * Stores the latest synced `Graph` *data* version. Used to efficiently
+   * update physical node config based on underlying graph node payloads.
+   * @type {number} */
+  _syncedDataVersion = -1;
+
+
+  /**
+   * Initializes a `Simulation` instance.
+   * @param {Graph} graph - `Graph` instance to simulate on top of
+   * @param {any} opts - physics engine and node body options
+   */
   constructor(graph, opts = {}) {
     this.graph = graph;
 
@@ -18,65 +212,91 @@ export class Simulation {
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
-    this._overrides = new Map();
-
-    this.nodes = new Map();
-    this._nodeList = [];
-    this._nodeIndex = new Map();
-    this._springs = [];
-    this._edgePairs = [];
-
-
-    // Self version
-    this._version = 1;
-
-    // Graph sync
-    this._syncedVersion = -1;
-    this._syncedDataVersion = -1;
     this.sync();
   }
 
+
+  /**
+   * Sets the default physical attributes for all nodes.
+   * `sync()` will update all nodes with the new defaults, except for
+   * specific overrides
+   * @param {SimNodeConfig} config 
+   * @returns {this} self reference
+   */
   setDefaultNodeConfig(config = {}) {
-    this._defaultNodeConfig = { ...NODE_SIM_DEFAULTS, ...this._defaultNodeConfig, ...config };
-    this._accessors = {
-      mass: asFn(this._defaultNodeConfig.mass),
-      radius: asFn(this._defaultNodeConfig.radius),
-      fixed: asFn(this._defaultNodeConfig.fixed),
+    this._defaultNodeConfig = {
+      ...SIM_NODE_DEFAULTS,
+      ...this._defaultNodeConfig,
+      ...config
     };
+    this._accessors = toAccessors(this._defaultNodeConfig);
     this._configDirty = true;
     return this;
   }
 
+
+  /**
+   * Merges new config data into the current overrides of a specific node
+   * @param {any} id - node id
+   * @param {SimNodeConfig} [config] - sim-node config
+   * @returns {this} self reference
+   */
   setNodeConfig(id, config = {}) {
+    /** @type {Record<string, any>} */
     const merged = { ...this._overrides.get(id), ...config };
     for (const k in merged) merged[k] = asFn(merged[k]);
-    this._overrides.set(id, merged);
+    this._overrides.set(
+      id,
+      /** @type {SimNodeAccessors} */
+      merged,
+    );
     this._configDirty = true;
     return this;
   }
 
+
+  /**
+   * Clears all config overrides for a specific node
+   * @param {any} id - node id
+   * @returns {this} self reference
+   */
   clearNodeConfig(id) {
     this._overrides.delete(id);
     this._configDirty = true;
     return this;
   }
 
-  // Update sim-node config based on graph node
+
+  /**
+   * Updates a sim-node's config based on its corresponding graph node.
+   * @param {GraphNode} gNode - graph node
+   * @param {SimNode} sNode - matching sim-node
+   * @returns {void}
+   */
   _resolve(gNode, sNode) {
-    const acc = this._accessors, g = this.graph, o = this._overrides.get(gNode.id);
+    const acc = this._accessors,
+          g = this.graph,
+          o = this._overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ??  acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ??  acc.radius(gNode, g);
-    sNode.mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : NODE_SIM_DEFAULTS.mass;
-    sNode.radius = Number.isFinite(radius) ? Math.max(radius, 0)  : NODE_SIM_DEFAULTS.radius;
+    sNode.mass   = Number.isFinite(mass)   ?
+      Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
+    sNode.radius = Number.isFinite(radius) ?
+      Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
     sNode.fixed  = (o?.fixed?.(gNode, g) ??  acc.fixed(gNode, g)) === true;
   }
 
-  // Create a sim-node object based on the given graph node
+
+  /**
+   * Creates a sim-node object based on the given graph node
+   * @param {GraphNode} gNode - graph node to seed sim-node from
+   * @returns {SimNode} resulting sim-node
+   */
   _seedNode(gNode) {
     const pos = this._seedPos(gNode);
     const sNode = {
       id: gNode.id,
-      ...NODE_SIM_DEFAULTS,
+      ...SIM_NODE_DEFAULTS,
       ...pos,
       fx: 0, fy: 0,
     };
@@ -84,6 +304,15 @@ export class Simulation {
     return sNode;
   }
 
+
+  /**
+   * Seeds a sim-node's position based on the simulated positions of its graph
+   * neighbors. With no graph neighbors, it defaults to a random position
+   * within +/-75 of the origin
+   * @param {GraphNode} gNode - graph node
+   * @returns {{ x: number, y: number, vx: number, vy: number }} - initial
+   *    position and velocity of sim-node
+   */
   _seedPos(gNode) {
     const neighbors = this.graph.adjacency.get(gNode.id);
     let sx = 0, sy = 0, n = 0;
@@ -101,13 +330,21 @@ export class Simulation {
     };
   }
 
+
   // Update physics tables to match graph
+  /**
+   * Updates internal node and edge storage to match the shape of `this.graph`.
+   * Also resolves node configs to apply new overrides or defaults.
+   * Gates on config changes, graph data changes, and graph shape changes.
+   * @returns {boolean} whether graph shape or node configs were updated
+   */
   sync() {
     if (this._syncedDataVersion !== this.graph._dataVersion) {
       this._configDirty = true;
       this._syncedDataVersion = this.graph._dataVersion;
     }
-    if (this._syncedVersion === this.graph._version && !this._configDirty) return false;
+    if (this._syncedVersion === this.graph._version && !this._configDirty)
+      return false;
 
     // Update and add nodes
     for (const [id, gNode] of this.graph.nodes) {
@@ -138,7 +375,9 @@ export class Simulation {
     const seen = this.graph.directed ? new Set() : null;
 
     for (const edge of this.graph.edges) {
-      const i = this._nodeIndex.get(edge.src.id), j = this._nodeIndex.get(edge.dest.id);
+      const i = this._nodeIndex.get(edge.src.id);
+      const j = this._nodeIndex.get(edge.dest.id);
+      if (i === undefined || j === undefined) continue;
       pairs.push(i, j);
       refs.push(edge);
       if (i === j) continue;
@@ -152,7 +391,9 @@ export class Simulation {
 
     this._edgeRefs = refs;
     this._edgePairs = Int32Array.from(pairs);
-    this._springs   = this.graph.directed ? Int32Array.from(springs) : this._edgePairs;
+    this._springs   = this.graph.directed ?
+      Int32Array.from(springs) :
+      this._edgePairs;
 
     this._syncedVersion = this.graph._version;
     this._version++;
@@ -160,6 +401,12 @@ export class Simulation {
     return true;
   }
 
+
+  /**
+   * Applies repulsive forces with O(n^2) pairwise force accumulation.
+   * Uses Coulomb's law, without any charge parameters.
+   * @returns {void}
+   */
   _apply_repulsion() {
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
@@ -182,6 +429,11 @@ export class Simulation {
     }
   }
 
+
+  /**
+   * Applies spring forces between nodes connected by edges.
+   * @returns {void}
+   */
   _apply_springs() {
     const list = this._nodeList;
     const springs = this._springs;
@@ -195,6 +447,11 @@ export class Simulation {
     }
   }
 
+
+  /**
+   * Applies graviational acceleration towards the origin
+   * @returns {void}
+   */
   _apply_gravity() {
     const list = this._nodeList;
     const g = this.opts.gravity;
@@ -205,6 +462,10 @@ export class Simulation {
     }
   }
 
+  /**
+   * Pushes intersecting nodes apart.
+   * @returns {void}
+   */
   _enforce_radius() {
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
@@ -232,6 +493,14 @@ export class Simulation {
     }
   }
 
+  
+  /**
+   * Simulates the graph's physics for one tick, after syncing graph shape and
+   * sim-node config.
+   * @param {number} [dt=1] - time step, scaling both velocity and position
+   *    updates. Tuned for dt=1. Friction applies once per tick.
+   * @returns {this} self reference
+   */
   tick(dt = 1) {
     this.sync();
 
@@ -263,12 +532,27 @@ export class Simulation {
     return this;
   }
 
+
+  /**
+   * Gets the simulation coordinates of a node by id.
+   * @param {any} id - node id
+   * @returns {[number, number] | null} the node's simulation coordinates, or
+   *    `null` if it was not found
+   */
   getPosition(id) {
     const node = this.nodes.get(id);
     if (node) return [node.x, node.y];
     return null;
   }
 
+
+  /**
+   * Finds a node by id and pins it to specified coordinates in simulation space.
+   * @param {any} id - node id
+   * @param {number} x - simulation x coordinate to pin to
+   * @param {number} y - simulation y coordinate
+   * @returns {boolean} whether the node was pinned (`false` if node not found)
+   */
   pin(id, x, y) {
     const node = this.nodes.get(id);
     if (!node) return false;
@@ -277,5 +561,11 @@ export class Simulation {
     return true;
   }
 
+
+  /**
+   * Unpins a node by id by reverting `fixed` to its default.
+   * @param {any} id - node id
+   * @returns {this} self reference
+   */
   unpin(id) { this.setNodeConfig(id, { fixed: undefined }); return this; }
 }

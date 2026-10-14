@@ -6,7 +6,10 @@
  * @param {T | ((...args: A) => T)} v
  * @returns {(...args: A) => T}
  */
-export const asFn = v => (typeof v === "function" ? v: () => v);
+export const asFn = v =>
+  typeof v === "function" ?
+    /** @type {(...args: A) => T} */ (v) :
+    () => v;
 
 
 /**
