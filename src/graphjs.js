@@ -34,14 +34,7 @@ export class GraphJS {
   }
 
   resize() {
-    if (!this.canvas) return this;
-    const dpr = window.devicePixelRatio ?? 1;
-    const { clientWidth: w, clientHeight: h } = this.canvas;
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
-    this.renderer.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.renderer.size = { w, h };
-    return this;
+    // todo: forward to `Renderer`
   }
 
   // Defaults mirror Graph's, so forwarding does not make optional arguments
