@@ -18,6 +18,11 @@
 */
 
 /**
+ * @typedef {object} GraphOpts
+ * @property {boolean} [directed=false] - whether the graph is directed; fixed at instantiation
+ */
+
+/**
  * Represents the shape of a directed or undirected graph and stores custom data for nodes and edges.
  */
 export class Graph {

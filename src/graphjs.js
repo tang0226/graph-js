@@ -5,11 +5,15 @@ import { Renderer } from "./renderer.js";
 /** @typedef {import("./types.js").Canvas} Canvas */
 /** @typedef {import("./graph.js").NodeData} NodeData */
 
+/** @typedef {import("./graph.js").GraphOpts} GraphOpts */
+/** @typedef {import("./simulation.js").SimOptsInput} SimOptsInput */
+/** @typedef {import("./renderer.js").RendererOptsInput} RendererOptsInput */
+
 /**
  * @typedef {object} GraphJSOpts
- * @property {ConstructorParameters<typeof Graph>[0]} [graph] - options for the `Graph`
- * @property {ConstructorParameters<typeof Simulation>[1]} [simulation] - options for the `Simulation`
- * @property {ConstructorParameters<typeof Renderer>[1]} [renderer] - options for the `Renderer`
+ * @property {GraphOpts} [graph] - options for the `Graph`
+ * @property {SimOptsInput} [simulation] - options for the `Simulation`
+ * @property {RendererOptsInput} [renderer] - options for the `Renderer`
  * @property {Canvas} [canvas] - canvas to render to
  */
 

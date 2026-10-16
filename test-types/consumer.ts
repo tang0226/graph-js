@@ -17,6 +17,9 @@ const gjs = new GraphJS({
 // @ts-expect-error -- unknown option
 new GraphJS({ graph: { notAnOption: 1 } });
 
+// @ts-expect-error -- simulation options are type-checked too
+new GraphJS({ simulation: { friction: "high" } });
+
 // Graph mutators forward their results; an id can be passed through the facade
 const a: any = gjs.addNode({ label: "a" });
 gjs.addNode({ id: "b", group: 1 }, "b");

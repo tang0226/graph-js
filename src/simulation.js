@@ -14,7 +14,7 @@ import { asFn } from "./utils.js";
 
 
 /**
- * @typedef {object} SimOptions
+ * @typedef {object} SimOpts
  * @property {number} friction - friction coefficient to apply to all node
  *    velocities each tick
  * @property {number} gravity - strength of pull toward (0, 0), applied as a
@@ -29,6 +29,7 @@ import { asFn } from "./utils.js";
  * @property {number} maxSpeed - maximum speed of each node (clamped to at the
  *    end of each tick)
  */
+/** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig }} SimOptsInput */
 
 /**
  * Full simulation node object
@@ -97,7 +98,7 @@ export class Simulation {
   /** @type {Graph} */
   graph;
 
-  /** @type {SimOptions} */
+  /** @type {SimOpts} */
   opts;
 
   /**
@@ -196,7 +197,7 @@ export class Simulation {
   /**
    * Initializes a `Simulation` instance.
    * @param {Graph} graph - `Graph` instance to simulate on top of
-   * @param {any} opts - physics engine and node body options
+   * @param {SimOptsInput} [opts={}] - physics engine and node body options
    */
   constructor(graph, opts = {}) {
     this.graph = graph;
