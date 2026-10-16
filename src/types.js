@@ -1,3 +1,6 @@
+/** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
+/** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
+
 /**
  * A config value derived per node. Can accept a `GraphNode` parameter and a
  * `Graph` parameter.`

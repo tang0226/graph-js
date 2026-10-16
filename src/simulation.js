@@ -144,7 +144,7 @@ export class Simulation {
   _edgeRefs = [];
 
   /**
-   * Cached, node-specific config overrides.
+   * Node-specific config overrides.
    * Node props specified here get first priority over the simulation's current
    * default config and the global default config.
    * @type {Map<any, SimNodeAccessors>}
@@ -159,8 +159,8 @@ export class Simulation {
   _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
 
   /**
-   * `_defaultNodeConfig` as functions. Used to apply the simulation's default
-   * config when resolving a `SimNode`'s raw configuration.
+   * `_defaultNodeConfig` as cached functions. Used to apply the simulation's
+   * default config when resolving a `SimNode`'s raw configuration.
    * @type {ResolvedSimNodeAccessors}
    */
   _accessors = toAccessors(SIM_NODE_DEFAULTS);

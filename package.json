@@ -1,6 +1,6 @@
 {
   "name": "@tang0226/graph-js",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Physics-based graph library with canvas rendering and headless simulation layer",
   "keywords": [
     "graph",
@@ -56,7 +56,8 @@
     "test": "node --test test/",
     "check": "tsc -p tsconfig.json",
     "types": "tsc -p tsconfig.types.json",
-    "prepublishOnly": "npm run types && npm test"
+    "test:types": "tsc -p test-types/tsconfig.json",
+    "prepublishOnly": "npm run types && npm test && npm run test:types"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

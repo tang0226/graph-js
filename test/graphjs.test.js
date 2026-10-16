@@ -468,3 +468,28 @@ describe("GraphJS: attach and detach", () => {
     } finally { restoreWindow(); }
   });
 });
+
+describe("GraphJS: resize", () => {
+  test("attach resizes exactly once", () => {
+    // Regression: GraphJS.attach called resize() after Renderer.attach had
+    // already done so.
+    const restoreWindow = installWindow(2);
+    try {
+      const canvas = makeCanvas();
+      new GraphJS({}).attach(canvas);
+      assert.equal(canvas.ctx.ops.filter(o => o[0] === "setTransform").length, 1);
+    } finally { restoreWindow(); }
+  });
+
+  test("resize forwards to the renderer and returns the facade", () => {
+    const restoreWindow = installWindow(1);
+    try {
+      const canvas = makeCanvas({ w: 500, h: 400 });
+      const gjs = new GraphJS({ canvas });
+      canvas.clientWidth = 700;
+      canvas.clientHeight = 300;
+      assert.equal(gjs.resize(), gjs);
+      assert.deepEqual(gjs.renderer.size, { w: 700, h: 300 });
+    } finally { restoreWindow(); }
+  });
+});

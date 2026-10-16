@@ -1,6 +1,9 @@
 import { Simulation } from "./simulation.js";
 import { asFn, circleRectCollision } from "./utils.js";
 
+/** @typedef {import("./types.js").Canvas} Canvas */
+/** @typedef {import("./types.js").CanvasContext} CanvasContext */
+
 /** @typedef {import("./graph.js").GraphEdge} GraphEdge */
 /** @typedef {import("./graph.js").GraphNode} GraphNode */
 /** @typedef {import("./simulation.js").SimNode} SimNode */
@@ -21,8 +24,6 @@ import { asFn, circleRectCollision } from "./utils.js";
  * @typedef {import("./types.js").EdgeAccessor<T>} EdgeAccessor
  */
 
-/** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
-/** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
 
 /**
  * @typedef {object} RendererOptsInput
@@ -35,9 +36,6 @@ import { asFn, circleRectCollision } from "./utils.js";
 /**
  * @typedef {object} RendererOpts
  * @property {string} background - background color
- * @property {Canvas} [canvas] - canvas to render to
- * @property {NodeStyleConfig} [nodeConfig] - default node config
- * @property {EdgeStyleConfig} [edgeConfig] - default edge config
  */
 
 /**
@@ -144,6 +142,9 @@ import { asFn, circleRectCollision } from "./utils.js";
  */
 
 
+/** @type {RendererOpts} */
+const RENDERER_DEFAULTS = { background: "#ffffff" };
+
 /** @type {NodeStyle} */
 const NODE_STYLE_DEFAULTS = {
   color: "#ffffff",
@@ -200,7 +201,7 @@ export class Renderer {
   ctx = null;
 
   /** @type {RendererOpts} */
-  opts = { background: "#ffffff" };
+  opts = { background: RENDERER_DEFAULTS.background };
 
 
   /**
@@ -338,10 +339,7 @@ export class Renderer {
     this.simulation = simulation;
     this.graph = simulation.graph;
 
-    this.opts = {
-      background: opts.background ?? "#ffffff",
-      ...opts
-    };
+    this.opts = { background: opts.background ?? RENDERER_DEFAULTS.background };
 
     if (opts.canvas) this.attach(opts.canvas);
 
@@ -380,15 +378,14 @@ export class Renderer {
     return this;
   }
 
-
+  
   /**
    * Resizes internal canvas dimensions based on DPR (defaults to DPR = 1).
    * Also updates cached `size` dimensions object.
    * @returns {this} self reference
-   * @throws {Error} throws when no canvas is attached
    */
   resize() {
-    if (!this.canvas || !this.ctx) throw new Error("Renderer: no canvas attached");
+    if (!this.canvas || !this.ctx) return this;
     const canvas = this.canvas;
     let w, h, dpr;
     // Check that canvas is not an OffscreenCanvas
@@ -760,7 +757,7 @@ export class Renderer {
     const toRender = this._cull();
     const sim = this.simulation;
 
-    this.ctx.fillStyle = this.opts.background ?? "#ffffff";
+    this.ctx.fillStyle = this.opts.background;
     this.ctx.fillRect(0, 0, this.size.w, this.size.h);
 
     // Render edges

@@ -59,10 +59,15 @@ export function installImage({ fail = () => false, size = 64 } = {}) {
   return () => { globalThis.Image = prev; };
 }
 
+/* In a browser `window` *is* the global object, so `window.devicePixelRatio`
+   and `globalThis.devicePixelRatio` are the same value. Mirror that, so code
+   reading either form sees the stubbed ratio. Code should read the
+   `globalThis` form: `window` does not exist in workers or Node. */
 export function installWindow(devicePixelRatio = 1) {
-  const prev = globalThis.window;
-  globalThis.window = { devicePixelRatio };
-  return () => { globalThis.window = prev; };
+  const prev = [globalThis.window, globalThis.devicePixelRatio];
+  globalThis.window = globalThis;
+  globalThis.devicePixelRatio = devicePixelRatio;
+  return () => { [globalThis.window, globalThis.devicePixelRatio] = prev; };
 }
 
 /* A manually driven requestAnimationFrame. Nothing runs until `flushFrame()`

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
 import { Simulation } from "../src/simulation.js";
 import { Renderer } from "../src/renderer.js";
-import { makeCanvas, installImage, opsNamed, flush, r2 } from "./helpers/stubs.js";
+import { makeCanvas, installImage, installWindow, opsNamed, flush, r2 } from "./helpers/stubs.js";
 
 /* Two nodes of radius 20, placed 200 world units apart on the x axis. With an
    800x600 canvas at zoom 1 they land at canvas (300,300) and (500,300), so a
@@ -410,5 +410,102 @@ describe("Renderer: attach lifecycle", () => {
     r.view = { x: 10, y: -20, zoom: 3 };
     r.attach(makeCanvas());
     assert.deepEqual(r.view, { x: 10, y: -20, zoom: 3 });
+  });
+});
+
+describe("Renderer: resize and canvas kinds", () => {
+  const sim = () => new Simulation(new Graph(), {});
+
+  /* Removes the DPR globals for one test, restoring them exactly afterwards. */
+  function withoutWindow(fn) {
+    const had = { window: "window" in globalThis, dpr: "devicePixelRatio" in globalThis };
+    const prev = [globalThis.window, globalThis.devicePixelRatio];
+    delete globalThis.window;
+    delete globalThis.devicePixelRatio;
+    try { fn(); } finally {
+      if (had.window) globalThis.window = prev[0];
+      if (had.dpr) globalThis.devicePixelRatio = prev[1];
+    }
+  }
+
+  test("works with no window at all, as in a worker or Node", () => {
+    // Regression: `window?.devicePixelRatio` throws a ReferenceError when
+    // `window` is undeclared; `?.` only guards a null value.
+    withoutWindow(() => {
+      const canvas = makeCanvas({ w: 400, h: 300 });
+      const r = new Renderer(sim(), { canvas });
+      assert.deepEqual([canvas.width, canvas.height], [400, 300], "DPR should fall back to 1");
+      assert.deepEqual(r.size, { w: 400, h: 300 });
+    });
+  });
+
+  test("an on-screen canvas before layout reads as 0x0, not the 300x150 default", () => {
+    // Regression: a truthiness check on clientWidth sent unlaid-out canvases
+    // down the OffscreenCanvas path, giving a plausible but wrong size.
+    const canvas = makeCanvas();
+    canvas.clientWidth = 0;
+    canvas.clientHeight = 0;
+    canvas.width = 300;
+    canvas.height = 150;
+    const r = new Renderer(sim(), { canvas });
+    assert.deepEqual(r.size, { w: 0, h: 0 });
+  });
+
+  test("an OffscreenCanvas is used as-is, with an identity transform", () => {
+    const restoreWindow = installWindow(2);
+    try {
+      const canvas = makeCanvas({ w: 640, h: 480 });
+      delete canvas.clientWidth;          // OffscreenCanvas has no layout size
+      delete canvas.clientHeight;
+      const r = new Renderer(sim(), { canvas });
+      assert.deepEqual(r.size, { w: 640, h: 480 });
+      assert.deepEqual([canvas.width, canvas.height], [640, 480],
+        "the caller owns an OffscreenCanvas's backing store; DPR must not rescale it");
+      assert.deepEqual(opsNamed(canvas.ctx, "setTransform").pop(), ["setTransform", 1, 0, 0, 1, 0, 0]);
+    } finally { restoreWindow(); }
+  });
+
+  test("attach rejects a canvas without a 2D context and stays detached", () => {
+    const r = new Renderer(sim(), {});
+    const canvas = { ...makeCanvas(), getContext: () => null };
+    assert.throws(() => r.attach(canvas), { name: "TypeError", message: /2D context/ });
+    assert.equal(r.canvas, null, "a failed attach must not leave a canvas without a context");
+    assert.equal(r.ctx, null);
+  });
+
+  test("resize does nothing while detached", () => {
+    const r = new Renderer(sim(), {});
+    assert.equal(r.resize(), r);
+    assert.equal(r.size, null);
+  });
+
+  test("attach resizes exactly once", () => {
+    const canvas = makeCanvas();
+    new Renderer(sim(), {}).attach(canvas);
+    assert.equal(opsNamed(canvas.ctx, "setTransform").length, 1);
+  });
+});
+
+describe("Renderer: options", () => {
+  const sim = () => new Simulation(new Graph(), {});
+
+  test("opts keeps only persistent settings, not setup values", () => {
+    // Regression: spreading the input copied canvas/nodeConfig into opts,
+    // where they went stale after attach() or setDefaultNodeConfig().
+    const r = new Renderer(sim(), { canvas: makeCanvas(), nodeConfig: { color: "red" }, background: "#000" });
+    assert.deepEqual(Object.keys(r.opts), ["background"]);
+  });
+
+  test("a forwarded undefined background falls back to the default", () => {
+    // e.g. React's background={props.bg} when the prop is unset
+    const r = new Renderer(sim(), { background: undefined });
+    assert.equal(r.opts.background, "#ffffff");
+  });
+
+  test("the background is painted from opts", () => {
+    const canvas = makeCanvas();
+    const r = new Renderer(sim(), { canvas, background: "#123456" });
+    r.render();
+    assert.equal(canvas.ctx.fillStyle, "#123456");
   });
 });
