@@ -378,7 +378,7 @@ export class Renderer {
     return this;
   }
 
-  
+
   /**
    * Resizes internal canvas dimensions based on DPR (defaults to DPR = 1).
    * Also updates cached `size` dimensions object.
@@ -467,11 +467,15 @@ export class Renderer {
 
   /**
    * Merges new config data into an edge's current style overrides.
-   * @param {GraphEdge} gEdge - edge to modify
+   * @param {any} srcId - source node id
+   * @param {any} destId - destination node id
    * @param {EdgeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
+   * @throws {Error} throws if edge not found
    */
-  setEdgeConfig(gEdge, config = {}) {
+  setEdgeConfig(srcId, destId, config = {}) {
+    const gEdge = this.graph.getEdge(srcId, destId);
+    if (!gEdge) throw new Error(`Renderer: no edge from "${srcId}" to "${destId}"`);
     /** @type {Record<string, any>} */
     const merged = { ...this._edgeOverrides.get(gEdge), ...config };
     for (const k in merged) merged[k] = asFn(merged[k]);
@@ -487,10 +491,13 @@ export class Renderer {
 
   /**
    * Clears all of an edge's style overrides.
-   * @param {GraphEdge} gEdge - edge to modify
+   * @param {any} srcId - source node id
+   * @param {any} destId - destination node id
    * @returns {this} self reference
    */
-  clearEdgeConfig(gEdge) {
+  clearEdgeConfig(srcId, destId) {
+    const gEdge = this.graph.getEdge(srcId, destId);
+    if (!gEdge) return this;
     this._edgeOverrides.delete(gEdge);
     this._stylesDirty = true;
     return this;

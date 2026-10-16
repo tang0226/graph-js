@@ -147,10 +147,24 @@ describe("Renderer: style cascade", () => {
   });
 
   test("a per-edge override suppresses the arrow", () => {
-    const { g, r } = scene(true, [["a", "b"]]);
-    r.setEdgeConfig(g.getEdge("a", "b"), { arrow: false });
+    const { r } = scene(true, [["a", "b"]]);
+    r.setEdgeConfig("a", "b", { arrow: false });
     r.sync();
-    assert.equal(r._edgeStyles[0].arrow, false, "edge overrides are keyed by the edge object");
+    assert.equal(r._edgeStyles[0].arrow, false);
+  });
+
+  test("setEdgeConfig throws for a missing edge rather than dropping the config", () => {
+    const { r } = scene(true, [["a", "b"]]);
+    // Reversed ids on a directed graph: the mistake a silent no-op would hide.
+    assert.throws(() => r.setEdgeConfig("b", "a", { color: "red" }), /Renderer:/);
+    assert.throws(() => r.setEdgeConfig("a", "nope", { color: "red" }), /Renderer:/);
+  });
+
+  test("setEdgeConfig accepts either id order in an undirected graph", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    r.setEdgeConfig("b", "a", { color: "#123456" });
+    r.sync();
+    assert.equal(r._edgeStyles[0].color, "#123456");
   });
 
   test("node accessors resolve against graph data", () => {
