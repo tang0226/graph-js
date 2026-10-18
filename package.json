@@ -1,6 +1,6 @@
 {
   "name": "@tang0226/graph-js",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Physics-based graph library with canvas rendering and headless simulation layer",
   "keywords": [
     "graph",
