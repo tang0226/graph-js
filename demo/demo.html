@@ -306,7 +306,7 @@ function readUI() {
 function buildGraph() {
   if (gjs) gjs.stop();
 
-  gjs = new GraphJS(canvas, { graph: { directed: ui.directed } });
+  gjs = new GraphJS({ canvas, graph: { directed: ui.directed } });
 
   const n = ui.nodeCount;
   for (let i = 0; i < n; i++) {

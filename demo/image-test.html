@@ -12,12 +12,13 @@ const width = 1000;
 const height = 1000;
 const canvas = document.querySelector("#canvas");
 
+// Size the canvas with CSS only. Attaching measures it and sizes the drawing
+// buffer to match the device pixel ratio, so setting canvas.width/height by
+// hand would just be overwritten.
 canvas.style.width = width + "px";
 canvas.style.height = height + "px";
-canvas.width = width;
-canvas.height = height;
 
-const gjs = new GraphJS(canvas);
+const gjs = new GraphJS({ canvas });
 
 gjs.addNode({id: "a"});
 gjs.addNode({id: "b"});
@@ -46,7 +47,6 @@ gjs.renderer.setNodeConfig("c", {
 
 gjs.renderer.view.zoom = 2;
 
-gjs.resize();
 gjs.start();
 
 </script>
