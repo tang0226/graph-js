@@ -53,4 +53,11 @@ r.opts.canvas;
 const sim: Simulation = new Simulation(new Graph(), {});
 sim.tick().tick();
 
+// Image request options use the DOM's own types, so invalid values are rejected
+new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });
+// @ts-expect-error -- misspelled policy (the HTTP header is "Referer", the values aren't)
+new GraphJS({ renderer: { imageReferrerPolicy: "no-referer" } });
+// @ts-expect-error -- not a crossOrigin value
+new GraphJS({ renderer: { crossOrigin: "anon" } });
+
 export {};

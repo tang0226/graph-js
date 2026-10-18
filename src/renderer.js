@@ -31,11 +31,18 @@ import { asFn, circleRectCollision } from "./utils.js";
  * @property {Canvas} [canvas] - canvas to render to
  * @property {NodeStyleConfig} [nodeConfig] - default node config
  * @property {EdgeStyleConfig} [edgeConfig] - default edge config
+ * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
+ *    for image requests.
+ * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
+ *    cross-origin parameter for image requests.
  */
 
 /**
  * @typedef {object} RendererOpts
  * @property {string} background - background color
+ * @property {ReferrerPolicy} imageReferrerPolicy - referrer policy for image requests
+ * @property {"anonymous" | "use-credentials" | null} crossOrigin - default
+ *    cross-origin parameter for image requests
  */
 
 /**
@@ -143,7 +150,11 @@ import { asFn, circleRectCollision } from "./utils.js";
 
 
 /** @type {RendererOpts} */
-const RENDERER_DEFAULTS = { background: "#ffffff" };
+const RENDERER_DEFAULTS = {
+  background: "#ffffff",
+  imageReferrerPolicy: "no-referrer",
+  crossOrigin: "anonymous",
+};
 
 /** @type {NodeStyle} */
 const NODE_STYLE_DEFAULTS = {
@@ -201,7 +212,7 @@ export class Renderer {
   ctx = null;
 
   /** @type {RendererOpts} */
-  opts = { background: RENDERER_DEFAULTS.background };
+  opts = { ...RENDERER_DEFAULTS };
 
 
   /**
@@ -339,7 +350,14 @@ export class Renderer {
     this.simulation = simulation;
     this.graph = simulation.graph;
 
-    this.opts = { background: opts.background ?? RENDERER_DEFAULTS.background };
+    this.opts = {
+      background: opts.background ?? RENDERER_DEFAULTS.background,
+      imageReferrerPolicy:
+        opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
+      
+      crossOrigin: opts.crossOrigin === undefined ?
+        RENDERER_DEFAULTS.crossOrigin : opts.crossOrigin,
+    };
 
     if (opts.canvas) this.attach(opts.canvas);
 
@@ -564,18 +582,19 @@ export class Renderer {
 
 
   /**
-   * Initializes asynchronous loading of an image into the image cache,
-   * inserting the `Image` object into the cache when loaded; inserts a
-   * "loading" string while waiting for the image and a "failed" string if the
-   * load fails.
-   * @param {string} src - source of image, used as the key to the image cache `Map`
-   * @returns {boolean} `false` if the source string has already been cached
+   * Starts loading an image into the cache, keyed by its source. The entry
+   * holds `IMAGE_LOADING` until the request settles, then the loaded image or
+   * `IMAGE_FAILED`. Uses the renderer's current `crossOrigin` and
+   * `imageReferrerPolicy`. A source that is already cached is not requested again.
+   * @param {string} src - image source; also the cache key
+   * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
    */
   _loadImage(src) {
     if (this._images.has(src)) return false;
     this._images.set(src, Renderer.IMAGE_LOADING);
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    img.crossOrigin = this.opts.crossOrigin;
+    img.referrerPolicy = this.opts.imageReferrerPolicy;
     img.onload  = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, img); };
     img.onerror = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, Renderer.IMAGE_FAILED); };
     img.src = src;

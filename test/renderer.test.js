@@ -506,8 +506,12 @@ describe("Renderer: options", () => {
   test("opts keeps only persistent settings, not setup values", () => {
     // Regression: spreading the input copied canvas/nodeConfig into opts,
     // where they went stale after attach() or setDefaultNodeConfig().
-    const r = new Renderer(sim(), { canvas: makeCanvas(), nodeConfig: { color: "red" }, background: "#000" });
-    assert.deepEqual(Object.keys(r.opts), ["background"]);
+    const r = new Renderer(sim(), {
+      canvas: makeCanvas(), nodeConfig: { color: "red" }, edgeConfig: { width: 3 }, background: "#000",
+    });
+    for (const setup of ["canvas", "nodeConfig", "edgeConfig"])
+      assert.equal(setup in r.opts, false, `${setup} is applied once, not stored`);
+    assert.equal(r.opts.background, "#000");
   });
 
   test("a forwarded undefined background falls back to the default", () => {
@@ -521,5 +525,71 @@ describe("Renderer: options", () => {
     const r = new Renderer(sim(), { canvas, background: "#123456" });
     r.render();
     assert.equal(canvas.ctx.fillStyle, "#123456");
+  });
+});
+
+describe("Renderer: image request options", () => {
+  /* A renderer with one image node per source. `requests` records each load
+     as it was sent; see installImage. */
+  function load(opts = {}, srcs = ["a.png"]) {
+    const restore = installImage();
+    const g = new Graph();
+    srcs.forEach((src, i) => g.addNode({ id: "n" + i, img: src }));
+    const sim = new Simulation(g, {});
+    const r = new Renderer(sim, {
+      canvas: makeCanvas(),
+      nodeConfig: { image: n => n.data.img ?? null },
+      ...opts,
+    });
+    return { r, g, sim, requests: restore.requests, restore };
+  }
+
+  test("requests use crossOrigin \"anonymous\" and no referrer by default", () => {
+    const { requests, restore } = load();
+    try {
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].crossOrigin, "anonymous");
+      assert.equal(requests[0].referrerPolicy, "no-referrer");
+    } finally { restore(); }
+  });
+
+  test("constructor options are applied to the request", () => {
+    const { requests, restore } = load({ crossOrigin: "use-credentials", imageReferrerPolicy: "origin" });
+    try {
+      assert.deepEqual([requests[0].crossOrigin, requests[0].referrerPolicy], ["use-credentials", "origin"],
+        "options must be in place before src is assigned, or the request goes out without them");
+    } finally { restore(); }
+  });
+
+  test("an explicit null crossOrigin is kept, not replaced by the default", () => {
+    // Regression guard: `??` treats null as missing, which would silently turn
+    // a deliberate "no CORS" back into "anonymous".
+    const { r, requests, restore } = load({ crossOrigin: null });
+    try {
+      assert.equal(r.opts.crossOrigin, null);
+      assert.equal(requests[0].crossOrigin, null);
+    } finally { restore(); }
+  });
+
+  test("an undefined option falls back to its default", () => {
+    // e.g. a framework prop forwarded while unset
+    const { r, restore } = load({ crossOrigin: undefined, imageReferrerPolicy: undefined });
+    try {
+      assert.equal(r.opts.crossOrigin, "anonymous");
+      assert.equal(r.opts.imageReferrerPolicy, "no-referrer");
+    } finally { restore(); }
+  });
+
+  test("changing the options affects later loads only", () => {
+    const { r, g, sim, requests, restore } = load({}, ["a.png"]);
+    try {
+      r.opts.imageReferrerPolicy = "origin";
+      g.addNode({ id: "late", img: "b.png" });
+      sim.sync();
+      r.sync();
+      assert.deepEqual(requests.map(q => [q.src, q.referrerPolicy]),
+        [["a.png", "no-referrer"], ["b.png", "origin"]],
+        "a.png is already cached, so it is not requested again with the new policy");
+    } finally { restore(); }
   });
 });

@@ -49,14 +49,25 @@ export function makeCanvas({ w = 800, h = 600 } = {}) {
 
 /* Installs a fake Image whose load resolves on a microtask. `fail(src)`
    decides which sources error. Returns a restore function. */
+/* `restore.requests` lists every load as it was sent: `crossOrigin` and
+   `referrerPolicy` are read when `src` is assigned, because that is when a
+   browser starts the request. Anything set afterwards doesn't affect it, so a
+   test asserting on this list also catches options applied too late. */
 export function installImage({ fail = () => false, size = 64 } = {}) {
   const prev = globalThis.Image;
+  const requests = [];
   globalThis.Image = class {
     constructor() { this.width = size; this.height = size; this.onload = null; this.onerror = null; }
-    set src(v) { this._src = v; queueMicrotask(() => (fail(v) ? this.onerror?.() : this.onload?.())); }
+    set src(v) {
+      this._src = v;
+      requests.push({ src: v, crossOrigin: this.crossOrigin, referrerPolicy: this.referrerPolicy });
+      queueMicrotask(() => (fail(v) ? this.onerror?.() : this.onload?.()));
+    }
     get src() { return this._src; }
   };
-  return () => { globalThis.Image = prev; };
+  const restore = () => { globalThis.Image = prev; };
+  restore.requests = requests;
+  return restore;
 }
 
 /* In a browser `window` *is* the global object, so `window.devicePixelRatio`
