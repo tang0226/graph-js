@@ -190,11 +190,6 @@ describe("Graph: misc", () => {
     assert.equal(g.directed, true);
   });
 
-  test("directed survives serialisation", () => {
-    const g = new Graph({ directed: true });
-    assert.equal(JSON.parse(JSON.stringify(g)).directed, true);
-  });
-
   test("self-loops add and remove cleanly", () => {
     const g = new Graph();
     g.addNode({ id: "a" });

@@ -35,7 +35,8 @@ import { asFn } from "./utils.js";
 /** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig }} SimOptsInput */
 
 /**
- * Full simulation node object
+ * Full simulation node object. Position and velocity props can be set directly,
+ * but `mass`, `radius`, and `fixed` must be set using `setNodeConfig()`.
  * @typedef {object} SimNode
  * @property {any} id - node id (matches corresponding `GraphNode`)
  * @property {number} mass - physical mass of the node
@@ -99,61 +100,96 @@ const toAccessors = config => ({
  */
 export class Simulation {
   /** @type {Graph} */
-  graph;
+  _graph;
+  get graph() { return this._graph; }
+
 
   /** @type {SimOpts} */
-  opts;
-
+  _opts;
   /**
-   * Map of physical node body data, keyed by keys used in the underlying
-   * `graph` (mirrors Map shape of `Graph.nodes`)
-   * @type {Map<any, SimNode>}
+   * [read-only, set with `setOpts()`]
+   * Simulation physics options
    */
-  nodes = new Map();
+  get opts() { return this._opts; }
 
+
+  /** @type {Map<any, SimNode>} */
+  _nodes = new Map();
   /**
+   * Map of mutable physical node objects, keyed by keys used in the
+   * underlying `graph` (mirrors Map shape of `Graph.nodes`).
+   * @returns {ReadonlyMap<any, SimNode>}
+   */
+  get nodes() { return this._nodes; }
+
+
+  /** @type {number} */
+  _temp = 0;
+  /**
+   * [read-only, reset with `heat()`]
    * Temperature value that forces are multiplied by. Decays each tick
    * according to the rate of `opts.cooling`. Once it is lower than
    * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
    * which is called after config or settings changes.
    */
-  temp = 0;
+  get temp() { return this._temp; }
 
-  /**
-   * Cached array of simulation nodes, recreated in effective `sync()` calls.
-   * @type {SimNode[]}
-   */
+
+  /** @type {SimNode[]} */
   _nodeList = [];
+  /**
+   * Cached array of mutable simulation nodes, recreated in effective
+   * `sync()` calls.
+   * @returns {ReadonlyArray<SimNode>}
+   */
+  get nodeList() { return this._nodeList; }
+
 
   /**
-   * Cached map connecting node ids to indices in `_nodeList`. Recreated in
-   * effective `sync()` calls.
    * @type {Map<any, number>}
    */
   _nodeIndex = new Map();
-
   /**
-   * Cached flattened array of index pairs for applying spring forces.
+   * Cached map connecting node ids to indices in `nodeList`.
    * Recreated in effective `sync()` calls.
-   * Because it is used in force application, it does not contain
-   * reverse-twin pairs, unlike `_edgePairs`.
-   * @type {Int32Array}
+   * @returns {ReadonlyMap<any, number>}
    */
-  _springs = new Int32Array(0);
+  get nodeIndex() { return this._nodeIndex; }
 
+
+  /** @type {Int32Array} */
+  _springs = new Int32Array(0);
+  /**
+   * Cached flattened array of index pairs for applying spring
+   * forces. Recreated in effective `sync()` calls.
+   * Because it is used in force application, it does not contain
+   * reverse-twin pairs, unlike `edgePairs`.
+   * @returns {Readonly<Int32Array>}
+   */
+  get springs() { return this._springs; }
+
+  
+  /** @type {Int32Array} */
+  _edgePairs = new Int32Array(0);
   /**
    * Cached flattened array of index pairs for drawing edges. Recreated in
    * effective `sync()` calls. Used for drawing edges, so it can contain
-   * reverse-twin pairs in digraphs (unlike `_springs`).
-   * @type {Int32Array}
+   * reverse-twin pairs in digraphs (unlike `springs`).
+   * @returns {Readonly<Int32Array>}
    */
-  _edgePairs = new Int32Array(0);
+  get edgePairs() { return this._edgePairs; }
+
 
   /**
-   * Cached edge objects, parallel to `_edgePairs` by edge slot.
+   * Cached edge objects, parallel to index pairs in `edgePairs`.
    * @type {GraphEdge[]}
    */
   _edgeRefs = [];
+  /**
+   * @returns {ReadonlyArray<GraphEdge>}
+   */
+  get edgeRefs() { return this._edgeRefs; }
+
 
   /**
    * Node-specific config overrides.
@@ -163,19 +199,25 @@ export class Simulation {
    */
   _overrides = new Map();
 
-  /**
-   * Current default node config. Takes precedence over the global default config,
-   * but can be overridden for specific nodes in `_overrides`.
-   * @type {ResolvedSimNodeConfig}
-   */
+
+  /** @type {ResolvedSimNodeConfig} */
   _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
+  /**
+   * [read-only, set with `setDefaultNodeConfig()` or `setOpts()`]
+   * Current default node config. Takes precedence over the global default config,
+   * but can be overridden for specific nodes using `setNodeConfig()`.
+   * @returns {Readonly<ResolvedSimNodeConfig>}
+   */
+  get defaultNodeConfig() { return this._defaultNodeConfig; }
+
 
   /**
-   * `_defaultNodeConfig` as cached functions. Used to apply the simulation's
+   * `defaultNodeConfig` as cached functions. Used to apply the simulation's
    * default config when resolving a `SimNode`'s raw configuration.
    * @type {ResolvedSimNodeAccessors}
    */
   _accessors = toAccessors(SIM_NODE_DEFAULTS);
+
 
   /**
    * Set to `true` whenever any node config (default or override) is changed.
@@ -183,26 +225,30 @@ export class Simulation {
    * @type {boolean} */
   _configDirty = false;
 
+
+  /** @type {number} */
+  _version = 1;
   /**
    * Monotonic counter for *structural* changes to the node and edge tables.
    * Incremented in `sync()` only when graph shape changes.
    * Higher layers rebuild slot-indexed caches on it.
-   * @type {number}
    */
-  _version = 1;
+  get version() { return this._version; }
+
 
   /**
    * Stores the latest synced `Graph` version. Used to gate node and edge
    * cache updates.
    * @type {number}
    */
-  _syncedVersion = -1;
+  _syncedGraphVersion = -1;
+
 
   /**
    * Stores the latest synced `Graph` *data* version. Used to efficiently
    * update physical node config based on underlying graph node payloads.
    * @type {number} */
-  _syncedDataVersion = -1;
+  _syncedGraphDataVersion = -1;
 
 
   /**
@@ -211,9 +257,9 @@ export class Simulation {
    * @param {SimOptsInput} [opts={}] - physics engine and node body options
    */
   constructor(graph, opts = {}) {
-    this.graph = graph;
+    this._graph = graph;
 
-    this.opts = {
+    this._opts = {
       friction:        opts.friction ?? 0.9,
       gravity:         opts.gravity ?? 0.002,
       repulsion:       opts.repulsion ?? 1000,
@@ -232,11 +278,11 @@ export class Simulation {
 
   /**
    * Sets properties of `opts` using a partial object.
-   * @param {SimOptsInput} opts - options to set
+   * @param {SimOptsInput} optsInput - options to set
    * @returns {this} self reference
    */
   setOpts({nodeConfig, ...opts} = {}) {
-    Object.assign(this.opts, opts);
+    Object.assign(this._opts, opts);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     this.heat();
     return this;
@@ -249,8 +295,8 @@ export class Simulation {
    * @returns {this} self reference
    */
   heat(t = 1) {
-    if (t >= 0) this.temp = t;
-    else this.temp = 0;
+    if (t >= 0) this._temp = t;
+    else this._temp = 0;
     return this;
   }
 
@@ -314,7 +360,7 @@ export class Simulation {
    */
   _resolve(gNode, sNode) {
     const acc = this._accessors,
-          g = this.graph,
+          g = this._graph,
           o = this._overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ??  acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ??  acc.radius(gNode, g);
@@ -358,10 +404,10 @@ export class Simulation {
    *    position and velocity of sim-node
    */
   _seedPos(gNode) {
-    const neighbors = this.graph.adjacency.get(gNode.id);
+    const neighbors = this._graph.adjacency.get(gNode.id);
     let sx = 0, sy = 0, n = 0;
     if (neighbors) for (const id of neighbors.keys()) {
-      const sNode = this.nodes.get(id);
+      const sNode = this._nodes.get(id);
       if (sNode) { sx += sNode.x; sy += sNode.y; n++; }
     }
     const jitter = () => (Math.random() - 0.5) * 30;
@@ -383,46 +429,46 @@ export class Simulation {
    * @returns {boolean} whether graph shape or node configs were updated
    */
   sync() {
-    if (this._syncedDataVersion !== this.graph._dataVersion) {
+    if (this._syncedGraphDataVersion !== this._graph.dataVersion) {
       this._configDirty = true;
-      this._syncedDataVersion = this.graph._dataVersion;
+      this._syncedGraphDataVersion = this._graph.dataVersion;
     }
-    if (this._syncedVersion === this.graph._version && !this._configDirty)
+    if (this._syncedGraphVersion === this._graph.version && !this._configDirty)
       return false;
 
     // Update and add nodes
     let changed = false;
-    for (const [id, gNode] of this.graph.nodes) {
-      const sNode = this.nodes.get(id);
+    for (const [id, gNode] of this._graph.nodes) {
+      const sNode = this._nodes.get(id);
       if (sNode) changed = this._resolve(gNode, sNode) || changed;
-      else { this.nodes.set(id, this._seedNode(gNode)); changed = true; }
+      else { this._nodes.set(id, this._seedNode(gNode)); changed = true; }
     }
     this._configDirty = false;
     if (changed) this.heat();
 
-    if (this._syncedVersion === this.graph._version) return true;
+    if (this._syncedGraphVersion === this._graph.version) return true;
 
     this.heat(); // Structural change
 
     // Delete old nodes
-    for (const id of this.nodes.keys()) {
-      if (!this.graph.nodes.has(id)) {
-        this.nodes.delete(id);
+    for (const id of this._nodes.keys()) {
+      if (!this._graph.nodes.has(id)) {
+        this._nodes.delete(id);
         this._overrides.delete(id);
       }
     }
 
     this._nodeList = [];
     this._nodeIndex = new Map();
-    for (const [id, sNode] of this.nodes) {
+    for (const [id, sNode] of this._nodes) {
       this._nodeIndex.set(id, this._nodeList.length);
       this._nodeList.push(sNode);
     }
 
-    const pairs = [], springs = [], refs = [], n = this.nodes.size;
-    const seen = this.graph.directed ? new Set() : null;
+    const pairs = [], springs = [], refs = [], n = this._nodes.size;
+    const seen = this._graph.directed ? new Set() : null;
 
-    for (const edge of this.graph.edges) {
+    for (const edge of this._graph.edges) {
       const i = this._nodeIndex.get(edge.src.id);
       const j = this._nodeIndex.get(edge.dest.id);
       if (i === undefined || j === undefined) continue;
@@ -439,11 +485,11 @@ export class Simulation {
 
     this._edgeRefs = refs;
     this._edgePairs = Int32Array.from(pairs);
-    this._springs   = this.graph.directed ?
+    this._springs   = this._graph.directed ?
       Int32Array.from(springs) :
       this._edgePairs;
 
-    this._syncedVersion = this.graph._version;
+    this._syncedGraphVersion = this._graph.version;
     this._version++;
 
     return true;
@@ -468,9 +514,9 @@ export class Simulation {
           dx = Math.random() - 0.5; dy = Math.random() - 0.5;
           dSq = dx * dx + dy * dy;
         }
-        dSq = Math.max(dSq, this.opts.minDistSq); // short-range clamp
+        dSq = Math.max(dSq, this._opts.minDistSq); // short-range clamp
 
-        const s = this.opts.repulsion / (dSq * Math.sqrt(dSq));
+        const s = this._opts.repulsion / (dSq * Math.sqrt(dSq));
         const fx = s * dx, fy = s * dy;
         n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
       }
@@ -489,7 +535,7 @@ export class Simulation {
       const n1 = list[springs[i]], n2 = list[springs[i + 1]];
       const dx = n1.x - n2.x, dy = n1.y - n2.y;
       const d = Math.hypot(dx, dy) || 1e-6;
-      const s = -this.opts.springStiffness * (d - this.opts.springLength) / d;
+      const s = -this._opts.springStiffness * (d - this._opts.springLength) / d;
       const fx = s * dx, fy = s * dy;
       n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
     }
@@ -502,7 +548,7 @@ export class Simulation {
    */
   _apply_gravity() {
     const list = this._nodeList;
-    const g = this.opts.gravity;
+    const g = this._opts.gravity;
     for (let i = 0; i < list.length; i++) {
       const n = list[i];
       n.fx -= g * n.x;
@@ -556,18 +602,18 @@ export class Simulation {
     const list = this._nodeList;
     for (let i = 0; i < list.length; i++) { list[i].fx = 0; list[i].fy = 0; }
 
-    if (!this.temp) return this;
+    if (!this._temp) return this;
 
     this._apply_repulsion();
     this._apply_springs();
     this._apply_gravity();
 
-    const maxV = this.opts.maxSpeed;
+    const maxV = this._opts.maxSpeed;
     for (let i = 0; i < list.length; i++) {
       const r = list[i];
       if (r.fixed) { r.vx = 0; r.vy = 0; continue; }
-      r.vx = (r.vx + (r.fx / r.mass) * dt * this.temp) * this.opts.friction;
-      r.vy = (r.vy + (r.fy / r.mass) * dt * this.temp) * this.opts.friction;
+      r.vx = (r.vx + (r.fx / r.mass) * dt * this._temp) * this._opts.friction;
+      r.vy = (r.vy + (r.fy / r.mass) * dt * this._temp) * this._opts.friction;
       
       // Limit speed
       const v = Math.hypot(r.vx, r.vy);
@@ -577,9 +623,9 @@ export class Simulation {
       r.y += r.vy * dt;
     }
 
-    this.temp *= this.opts.cooling;
-    if (this.temp < this.opts.freezePoint) {
-      this.temp = 0;
+    this._temp *= this._opts.cooling;
+    if (this._temp < this._opts.freezePoint) {
+      this._temp = 0;
       // Drop residual velocities
       for (let i = 0; i < list.length; i++) { list[i].vx = 0; list[i].vy = 0; }
     }
@@ -597,7 +643,7 @@ export class Simulation {
    *    `null` if it was not found
    */
   getPosition(id) {
-    const node = this.nodes.get(id);
+    const node = this._nodes.get(id);
     if (node) return [node.x, node.y];
     return null;
   }
@@ -611,7 +657,7 @@ export class Simulation {
    * @returns {boolean} whether the node was pinned (`false` if node not found)
    */
   pin(id, x, y) {
-    const node = this.nodes.get(id);
+    const node = this._nodes.get(id);
     if (!node) return false;
     this.setNodeConfig(id, { fixed: true });
     if (node.x !== x || node.y !== y) this.heat();

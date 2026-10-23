@@ -28,22 +28,22 @@ function pairSim(directed, edges) {
 describe("Simulation: records", () => {
   test("every record carries the full field set in a stable order", () => {
     const sim = new Simulation(chain(3), {});
-    for (const rec of sim._nodeList) assert.deepEqual(Object.keys(rec), RECORD_FIELDS);
+    for (const rec of sim.nodeList) assert.deepEqual(Object.keys(rec), RECORD_FIELDS);
   });
 
   test("seeded positions are finite and jittered apart", () => {
     const sim = new Simulation(chain(12), {});
     const seen = new Set();
-    for (const r of sim._nodeList) {
+    for (const r of sim.nodeList) {
       assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
       seen.add(r.x + "," + r.y);
     }
     assert.equal(seen.size, 12, "coincident seeds produce NaN repulsion forces");
   });
 
-  test("_nodeIndex maps ids to their slot in _nodeList", () => {
+  test("nodeIndex maps ids to their slot in nodeList", () => {
     const sim = new Simulation(chain(5), {});
-    for (const [id, i] of sim._nodeIndex) assert.equal(sim._nodeList[i].id, id);
+    for (const [id, i] of sim.nodeIndex) assert.equal(sim.nodeList[i].id, id);
   });
 
   test("getPosition returns a copy, not the live record", () => {
@@ -163,23 +163,23 @@ describe("Simulation: sync paths", () => {
 
   test("a config-only change re-resolves without rebuilding the slot space", () => {
     const sim = new Simulation(chain(4), {});
-    const list = sim._nodeList, index = sim._nodeIndex, version = sim._version;
+    const list = sim.nodeList, index = sim.nodeIndex, version = sim.version;
     sim.setDefaultNodeConfig({ radius: 33 });
     assert.equal(sim.sync(), true);
-    assert.equal(sim._nodeList, list, "slots must not be rebuilt for a config change");
-    assert.equal(sim._nodeIndex, index);
-    assert.equal(sim._version, version, "_version signals structural change only");
+    assert.equal(sim.nodeList, list, "slots must not be rebuilt for a config change");
+    assert.equal(sim.nodeIndex, index);
+    assert.equal(sim.version, version, "version signals structural change only");
     assert.equal(sim.nodes.get("n0").radius, 33);
   });
 
   test("a topology change rebuilds the slot space and bumps _version", () => {
     const g = chain(4);
     const sim = new Simulation(g, {});
-    const version = sim._version;
+    const version = sim.version;
     g.addNode({ id: "extra" });
     assert.equal(sim.sync(), true);
-    assert.ok(sim._version > version);
-    assert.equal(sim._nodeList.length, 5);
+    assert.ok(sim.version > version);
+    assert.equal(sim.nodeList.length, 5);
   });
 
   test("a data change re-resolves accessors", () => {
@@ -200,7 +200,7 @@ describe("Simulation: sync paths", () => {
     const before = sim.getPosition("n0");
     g.removeNode("n2");
     sim.sync();
-    assert.equal(sim._nodeList.length, 3);
+    assert.equal(sim.nodeList.length, 3);
     assert.equal(sim.nodes.has("n2"), false);
     assert.deepEqual(sim.getPosition("n0"), before, "a rebuild must not teleport survivors");
   });
@@ -220,21 +220,21 @@ describe("Simulation: sync paths", () => {
 describe("Simulation: springs and edge pairs", () => {
   test("undirected: one pair, one spring", () => {
     const sim = pairSim(false, [["a", "b"]]);
-    assert.deepEqual([...sim._edgePairs], [0, 1]);
-    assert.deepEqual([...sim._springs], [0, 1]);
+    assert.deepEqual([...sim.edgePairs], [0, 1]);
+    assert.deepEqual([...sim.springs], [0, 1]);
   });
 
-  test("_edgeRefs is parallel to _edgePairs", () => {
+  test("edgeRefs is parallel to edgePairs", () => {
     const sim = pairSim(false, [["a", "b"]]);
-    assert.equal(sim._edgeRefs.length, sim._edgePairs.length / 2);
-    assert.equal(sim._edgeRefs[0].src.id, "a");
-    assert.equal(sim._edgeRefs[0].dest.id, "b");
+    assert.equal(sim.edgeRefs.length, sim.edgePairs.length / 2);
+    assert.equal(sim.edgeRefs[0].src.id, "a");
+    assert.equal(sim.edgeRefs[0].dest.id, "b");
   });
 
   test("directed: reciprocal edges draw twice but pull once", () => {
     const sim = pairSim(true, [["a", "b"], ["b", "a"]]);
-    assert.equal(sim._edgePairs.length / 2, 2, "both directions must stay drawable");
-    assert.equal(sim._springs.length / 2, 1, "a mutual link must not double the stiffness");
+    assert.equal(sim.edgePairs.length / 2, 2, "both directions must stay drawable");
+    assert.equal(sim.springs.length / 2, 1, "a mutual link must not double the stiffness");
   });
 
   test("spring force on a mutual pair equals the single-edge force", () => {
@@ -251,17 +251,17 @@ describe("Simulation: springs and edge pairs", () => {
 
   test("directed: self-loops are excluded from springs", () => {
     const sim = pairSim(true, [["a", "a"]]);
-    assert.deepEqual([...sim._edgePairs], [0, 0]);
-    assert.equal(sim._springs.length, 0);
+    assert.deepEqual([...sim.edgePairs], [0, 0]);
+    assert.equal(sim.springs.length, 0);
   });
 
   test("undirected: self-loops are excluded from springs", {
-    todo: "the undirected path aliases _springs to _edgePairs, re-admitting the "
+    todo: "the undirected path aliases springs to edgePairs, re-admitting the "
         + "self-loop the build loop filtered out. Fix: alias only when nothing "
         + "was filtered (springs.length === pairs.length).",
   }, () => {
     const sim = pairSim(false, [["a", "a"]]);
-    assert.equal(sim._springs.length, 0);
+    assert.equal(sim.springs.length, 0);
   });
 });
 
@@ -272,7 +272,7 @@ describe("Simulation: integration", () => {
     const sim = new Simulation(chain(n, { extra: [["n0", "n" + ((n / 2) | 0)]] }), {});
     sim.setDefaultNodeConfig({ radius });
     sim.sync();
-    sim._nodeList.forEach((r, i) => {
+    sim.nodeList.forEach((r, i) => {
       const a = (i / n) * 2 * Math.PI;
       r.x = Math.cos(a) * 300; r.y = Math.sin(a) * 300; r.vx = 0; r.vy = 0;
     });
@@ -283,7 +283,7 @@ describe("Simulation: integration", () => {
     const sim = ring(25);
     for (let t = 0; t < 3000; t++) sim.tick();
     let maxV = 0;
-    for (const r of sim._nodeList) {
+    for (const r of sim.nodeList) {
       assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y), "position went non-finite");
       maxV = Math.max(maxV, Math.hypot(r.vx, r.vy));
     }
@@ -294,7 +294,7 @@ describe("Simulation: integration", () => {
     for (let trial = 0; trial < 10; trial++) {
       const sim = new Simulation(chain(30, { extra: [["n0", "n15"]] }), {});
       for (let t = 0; t < 2000; t++) sim.tick();
-      for (const r of sim._nodeList) {
+      for (const r of sim.nodeList) {
         assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y), "position went non-finite");
         assert.ok(Math.hypot(r.vx, r.vy) < sim.opts.maxSpeed + 1e-9, "maxSpeed was exceeded");
       }
@@ -307,16 +307,16 @@ describe("Simulation: integration", () => {
     for (let trial = 0; trial < 20; trial++) {
       const sim = new Simulation(chain(40, { extra: [["n0", "n20"]] }), {});
       for (let t = 0; t < 4000; t++) sim.tick();
-      const maxV = Math.max(...sim._nodeList.map(r => Math.hypot(r.vx, r.vy)));
+      const maxV = Math.max(...sim.nodeList.map(r => Math.hypot(r.vx, r.vy)));
       assert.ok(maxV < 0.01, `seed ${trial} never settled, max speed ${maxV}`);
     }
   });
 
   test("coincident nodes separate instead of producing NaN", () => {
     const sim = new Simulation(chain(4), {});
-    for (const r of sim._nodeList) { r.x = 0; r.y = 0; r.vx = 0; r.vy = 0; }
+    for (const r of sim.nodeList) { r.x = 0; r.y = 0; r.vx = 0; r.vy = 0; }
     for (let t = 0; t < 50; t++) sim.tick();
-    for (const r of sim._nodeList) assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
+    for (const r of sim.nodeList) assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
   });
 
   test("fixed nodes never move and hold zero velocity", () => {
@@ -332,9 +332,9 @@ describe("Simulation: integration", () => {
 
   test("maxSpeed bounds the per-step velocity", () => {
     const sim = new Simulation(chain(3), { maxSpeed: 2 });
-    for (const r of sim._nodeList) { r.vx = 500; r.vy = 500; }
+    for (const r of sim.nodeList) { r.vx = 500; r.vy = 500; }
     sim.tick();
-    for (const r of sim._nodeList)
+    for (const r of sim.nodeList)
       if (!r.fixed) assert.ok(Math.hypot(r.vx, r.vy) <= 2 + 1e-9);
   });
 
@@ -361,7 +361,7 @@ describe("Simulation: temperature", () => {
     return sim;
   }
 
-  function snapshot(sim) { return sim._nodeList.map(r => [r.x, r.y, r.vx, r.vy]); }
+  function snapshot(sim) { return sim.nodeList.map(r => [r.x, r.y, r.vx, r.vy]); }
 
   test("a new simulation starts hot with default cooling", () => {
     const sim = new Simulation(chain(2), {});
@@ -390,13 +390,13 @@ describe("Simulation: temperature", () => {
     const sim = new Simulation(chain(5), { cooling: 0.5, freezePoint: 0.1 });
     for (let t = 0; t < 4; t++) sim.tick();       // 1 -> .5 -> .25 -> .125 -> .0625
     assert.equal(sim.temp, 0);
-    for (const r of sim._nodeList) assert.deepEqual([r.vx, r.vy], [0, 0],
+    for (const r of sim.nodeList) assert.deepEqual([r.vx, r.vy], [0, 0],
       "leftover velocity would be replayed by the next heat()");
   });
 
   test("a frozen tick moves nothing", () => {
     const sim = frozen(chain(5));
-    for (const r of sim._nodeList) { r.vx = 3; r.vy = -3; }
+    for (const r of sim.nodeList) { r.vx = 3; r.vy = -3; }
     const before = snapshot(sim);
     for (let t = 0; t < 10; t++) sim.tick();
     assert.deepEqual(snapshot(sim), before);

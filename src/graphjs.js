@@ -21,20 +21,43 @@ import { Renderer } from "./renderer.js";
  * Unified interface over the `Graph`, `Simulation`, and `Renderer` layers.
  */
 export class GraphJS {
+  /** @type {Graph} */
+  _graph;
+  /**
+   * Underlying `Graph` instance.
+   */
+  get graph() { return this._graph; }
+
+
+  /** @type {Simulation} */
+  _simulation;
+  /**
+   * Underlying `Simulation` instance.
+   */
+  get simulation() { return this._simulation; }
+
+  /** @type {Renderer} */
+  _renderer;
+  /**
+   * Underlying `Renderer` instance.
+   */
+  get renderer() { return this._renderer; }
+
+
   /**
    * Initializes a GraphJS instance.
    * @param {GraphJSOpts} opts
    */
   constructor(opts = {}) {
-    this.graph = new Graph(opts.graph ?? {});
-    this.simulation = new Simulation(this.graph, opts.simulation ?? {});
+    this._graph = new Graph(opts.graph ?? {});
+    this._simulation = new Simulation(this._graph, opts.simulation ?? {});
 
     // Build a local copy: writing back onto `opts` would mutate the caller's
     // object, which breaks reuse of a memoised options literal.
     const rendererOpts = opts.canvas
       ? { ...opts.renderer, canvas: opts.canvas }
       : opts.renderer ?? {};
-    this.renderer = new Renderer(this.simulation, rendererOpts);
+    this._renderer = new Renderer(this._simulation, rendererOpts);
     
     this._raf = null;
   }
@@ -44,7 +67,7 @@ export class GraphJS {
    * The `Renderer`'s canvas
    * @type {Canvas | null}
    */
-  get canvas() { return this.renderer.canvas; }
+  get canvas() { return this._renderer.canvas; }
 
 
   /**
@@ -55,7 +78,7 @@ export class GraphJS {
    */
   attach(canvas) {
     if (this.canvas) this.detach();
-    this.renderer.attach(canvas);
+    this._renderer.attach(canvas);
     return this;
   }
 
@@ -68,7 +91,7 @@ export class GraphJS {
   detach() {
     if (!this.canvas) return this;
     this.stop();
-    this.renderer.detach();
+    this._renderer.detach();
     return this;
   }
 
@@ -78,7 +101,7 @@ export class GraphJS {
    * `Renderer.resize()`.
    * @returns {this} self reference
    */
-  resize() { this.renderer.resize(); return this; }
+  resize() { this._renderer.resize(); return this; }
 
 
   /**
@@ -128,8 +151,8 @@ export class GraphJS {
     if (this._raf !== null || !this.canvas) return this;
     const frame = () => {
       if (!this.canvas) { this._raf = null; return; }
-      this.simulation.tick();
-      this.renderer.render();
+      this._simulation.tick();
+      this._renderer.render();
       this._raf = requestAnimationFrame(frame);
     };
     this._raf = requestAnimationFrame(frame);
@@ -152,7 +175,7 @@ export class GraphJS {
    * (see `Renderer.render()`)
    * @returns {this} self reference
    */
-  step() { this.simulation.tick(); this.renderer.render(); return this; }
+  step() { this._simulation.tick(); this._renderer.render(); return this; }
 
 
   /**
@@ -172,7 +195,7 @@ export class GraphJS {
    */
   simToCanvas(x, y) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    return this.renderer.simToCanvas(x, y);
+    return this._renderer.simToCanvas(x, y);
   }
 
 
@@ -186,7 +209,7 @@ export class GraphJS {
    */
   canvasToSim(cx, cy) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    return this.renderer.canvasToSim(cx, cy);
+    return this._renderer.canvasToSim(cx, cy);
   }
 
 
@@ -202,14 +225,7 @@ export class GraphJS {
    */
   nodeAt(cx, cy) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    const [x, y] = this.canvasToSim(cx, cy);
-    const nodes = this.simulation._nodeList;
-    const slack = 4 / this.renderer.view.zoom;
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const node = nodes[i], r = node.radius + slack;
-      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
-    }
-    return null;
+    return this._renderer.nodeAt(cx, cy);
   }
 
 
@@ -223,7 +239,7 @@ export class GraphJS {
    */
   getPosition(id) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    const p = this.simulation.getPosition(id);
+    const p = this._simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
 
@@ -239,7 +255,7 @@ export class GraphJS {
    */
   pin(id, cx, cy) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    return this.simulation.pin(id, ...this.canvasToSim(cx, cy));
+    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
   }
 
 
@@ -249,5 +265,5 @@ export class GraphJS {
    * @param {any} id - node id
    * @returns {this} self reference
    */
-  unpin(id) { this.simulation.unpin(id); return this; }
+  unpin(id) { this._simulation.unpin(id); return this; }
 }

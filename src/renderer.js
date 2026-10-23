@@ -4,6 +4,7 @@ import { asFn, circleRectCollision } from "./utils.js";
 /** @typedef {import("./types.js").Canvas} Canvas */
 /** @typedef {import("./types.js").CanvasContext} CanvasContext */
 
+/** @typedef {import("./graph.js").Graph} Graph */
 /** @typedef {import("./graph.js").GraphEdge} GraphEdge */
 /** @typedef {import("./graph.js").GraphNode} GraphNode */
 /** @typedef {import("./simulation.js").SimNode} SimNode */
@@ -205,58 +206,112 @@ export class Renderer {
   static IMAGE_LOADING = "loading";
   static IMAGE_FAILED = "failed";
 
+
+  /** @type {Graph} */
+  _graph;
+  /**
+   * Underlying `Graph` instance.
+   */
+  get graph() { return this._graph; }
+
+
+  /** @type {Simulation} */
+  _simulation;
+  /**
+   * Underlying `Simulation` instance.
+   */
+  get simulation() { return this._simulation; }
+
+
   /** @type {Canvas | null} */
-  canvas = null;
+  _canvas = null;
+  /**
+   * Canvas element. Set with `attach()`, unset with `detach()`.
+   */
+  get canvas() { return this._canvas; }
+
 
   /** @type {CanvasContext | null} */
-  ctx = null;
+  _ctx = null;
+  /**
+   * Canvas context. Automatically set to correspond to `canvas`.
+   */
+  get ctx() { return this._ctx; }
+
 
   /** @type {RendererOpts} */
-  opts = { ...RENDERER_DEFAULTS };
-
-
+  _opts = { ...RENDERER_DEFAULTS };
   /**
-   * Logical canvas size in CSS pixels (`clientWidth`, `clientHeight`)
-   * @type {Size | null}
+   * [read-only, set with `setOpts()`] Renderer configuration options.
+   * @returns {Readonly<RendererOpts>}
    */
-  size = null;
+  get opts() { return this._opts; }
 
+
+  /** @type {Size | null} */
+  _size = null;
   /**
-   * Current viewing window of the `Renderer`. Contains center simulation
-   * coordinates and a zoom factor (canvasPx/simPx).
-   * @type {View}
+   * [read-only] Logical canvas size in CSS pixels (`clientWidth`, `clientHeight`).
+   * @returns {Readonly<Size> | null}
    */
-  view = { x: 0, y: 0, zoom: 1 };
+  get size() { return this._size; }
 
+
+  /** @type {View} */
+  _view = { x: 0, y: 0, zoom: 1 };
   /**
-   * Cached map of resolved node styles, keyed by node id from the underlying
+   * Current viewing window of the `Renderer`. Directly mutable. Contains
+   * center simulation coordinates and a zoom factor (canvasPx/simPx).
+   */
+  get view() { return this._view; }
+  /**
+   * @param {Partial<View>} v - view props to assign
+   */
+  set view(v) { Object.assign(this._view, v); }
+
+
+  /** @type {Map<any, NodeStyle>} */
+  _nodes = new Map();
+  /**
+   * [read-only] Cached map of resolved node styles, keyed by node id from the underlying
    * `Graph`. Recreated in effective `sync()` calls.
-   * @type {Map<any, NodeStyle>}
+   * @returns {ReadonlyMap<any, NodeStyle>}
    */
-  nodes = new Map();
+  get nodes() { return this._nodes; }
 
+
+  /** @type {Map<GraphEdge, EdgeStyle>} */
+  _edges = new Map();
   /**
    * Cached map of resolved edge styles, keyed by edge object from the
    * underlying `Graph`. Recreated in effective `sync()` calls.
-   * @type {Map<GraphEdge, EdgeStyle>}
+   * @returns {ReadonlyMap<GraphEdge, EdgeStyle>}
    */
-  edges = new Map();
+  get edges() { return this._edges; }
 
+
+  /** @type {ResolvedNodeStyleConfig} */
+  _defaultNodeConfig = {...NODE_STYLE_DEFAULTS};
   /**
+   * [read-only, set with `setDefaultNodeConfig()`]
    * Current default node style config. During style resolution, it takes
    * precedence over global config defaults, but can be overriden for specific
-   * nodes in `_nodeOverrides`.
-   * @type {ResolvedNodeStyleConfig}
+   * nodes using `setNodeConfig()`.
+   * @returns {Readonly<ResolvedNodeStyleConfig>}
    */
-  _defaultNodeConfig = {...NODE_STYLE_DEFAULTS};
+  get defaultNodeConfig() { return this._defaultNodeConfig; }
 
+
+  /** @type {ResolvedEdgeStyleConfig} */
+  _defaultEdgeConfig = {...EDGE_STYLE_DEFAULTS};
   /**
    * Current default edge style config. During style resolution, it takes
    * precedence over global config defaults, but can be overriden for specific
    * edges in `_edgeOverrides`.
-   * @type {ResolvedEdgeStyleConfig}
+   * @returns {Readonly<ResolvedEdgeStyleConfig>}
    */
-  _defaultEdgeConfig = {...EDGE_STYLE_DEFAULTS};
+  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
+
 
   /**
    * Node-specific style config overrides. Node style config here takes
@@ -288,19 +343,27 @@ export class Renderer {
    */
   _edgeAccessors = toEdgeAccessors(EDGE_STYLE_DEFAULTS);
 
+  /** @type {NodeStyle[]} */
+  _nodeStyles = [];
   /**
+   * [read-only]
    * Cached raw node styles for the hot render loop. Recreated in effective
    * `sync()` calls.
-   * @type {NodeStyle[]}
+   * @returns {ReadonlyArray<NodeStyle>}
    */
-  _nodeStyles = [];
+  get nodeStyles() { return this._nodeStyles; }
 
+
+  /** @type {EdgeStyle[]} */
+  _edgeStyles = [];
   /**
+   * [read_only]
    * Cached raw edge styles for the hot render loop. Recreated in effective
    * `sync()` calls.
-   * @type {EdgeStyle[]}
+   * @returns {ReadonlyArray<EdgeStyle>}
    */
-  _edgeStyles = [];
+  get edgeStyles() { return this._edgeStyles; }
+
 
   /**
    * Cached edge bowing coefficient (0 or 1) for digraphs. Recreated in
@@ -309,11 +372,15 @@ export class Renderer {
    */
   _edgeBow = new Int8Array(0);
 
+
+  /** @type {Map<string, HTMLImageElement | string>} */
+  _images = new Map();
   /**
    * Cache of node image elements, keyed by source string.
-   * @type {Map<string, HTMLImageElement | string>}
+   * @returns {ReadonlyMap<string, HTMLImageElement | string>}
    */
-  _images = new Map();
+  get images () { return this._images; }
+
 
   /**
    * Counter of deleted nodes with images. Controls periodic image garbage-
@@ -335,11 +402,13 @@ export class Renderer {
    * @type {number} */
   _syncedDataVersion = -1;
 
+  /** @type {number} */
+  _version = 1;
   /**
    * Monotonic counter for *structural* modifications adopted from the
    * underlying `Graph` instance.
-   * @type {number} */
-  _version = 1;
+   */
+  get version() { return this._version; }
 
   /**
    * Initializes a Renderer instance
@@ -347,10 +416,10 @@ export class Renderer {
    * @param {RendererOptsInput} [opts={}] - renderer options
    */
   constructor(simulation, opts = {}) {
-    this.simulation = simulation;
-    this.graph = simulation.graph;
+    this._simulation = simulation;
+    this._graph = simulation.graph;
 
-    this.opts = {
+    this._opts = {
       background: opts.background ?? RENDERER_DEFAULTS.background,
       imageReferrerPolicy:
         opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
@@ -369,6 +438,20 @@ export class Renderer {
 
 
   /**
+   * Sets properties of `opts` using a partial object.
+   * @param {RendererOptsInput} optsInput - options to set
+   * @returns {this} self reference
+   */
+  setOpts({canvas, nodeConfig, edgeConfig, ...opts} = {}) {
+    Object.assign(this._opts, opts);
+    if (canvas) this.attach(canvas);
+    if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
+    if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
+    return this;
+  }
+
+
+  /**
    * Sets the `Renderer`'s canvas, overwriting previous element, context, and size data.
    * @param {Canvas} canvas - canvas element
    * @returns {this} self reference
@@ -377,8 +460,8 @@ export class Renderer {
   attach(canvas) {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new TypeError("Renderer: canvas has no 2D context");
-    this.canvas = canvas;
-    this.ctx = ctx;
+    this._canvas = canvas;
+    this._ctx = ctx;
     this.resize();
     return this;
   }
@@ -389,10 +472,10 @@ export class Renderer {
    * @returns {this} self reference
    */
   detach() {
-    if (!this.canvas) return this;
-    this.canvas = null;
-    this.ctx = null;
-    this.size = null;
+    if (!this._canvas) return this;
+    this._canvas = null;
+    this._ctx = null;
+    this._size = null;
     return this;
   }
 
@@ -403,15 +486,15 @@ export class Renderer {
    * @returns {this} self reference
    */
   resize() {
-    if (!this.canvas || !this.ctx) return this;
-    const canvas = this.canvas;
+    if (!this._canvas || !this._ctx) return this;
+    const canvas = this._canvas;
     let w, h, dpr;
     // Check that canvas is not an OffscreenCanvas
     if ("clientWidth" in canvas) { // DPR only applies to on-screen canvases
       w = canvas.clientWidth, h = canvas.clientHeight;
       dpr = globalThis.devicePixelRatio ?? 1;
-      this.canvas.width = Math.round(w * dpr);
-      this.canvas.height = Math.round(h * dpr);
+      this._canvas.width = Math.round(w * dpr);
+      this._canvas.height = Math.round(h * dpr);
     }
     // OffscreenCanvas: fall back to canvas.width and canvas.height and set DPR to one
     // (DPR doesn't apply to OffscreenCanvas)
@@ -419,8 +502,8 @@ export class Renderer {
       w = canvas.width; h = canvas.height;
       dpr = 1;
     }
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.size = { w, h };
+    this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._size = { w, h };
     return this;
   }
 
@@ -492,7 +575,7 @@ export class Renderer {
    * @throws {Error} throws if edge not found
    */
   setEdgeConfig(srcId, destId, config = {}) {
-    const gEdge = this.graph.getEdge(srcId, destId);
+    const gEdge = this._graph.getEdge(srcId, destId);
     if (!gEdge) throw new Error(`Renderer: no edge from "${srcId}" to "${destId}"`);
     /** @type {Record<string, any>} */
     const merged = { ...this._edgeOverrides.get(gEdge), ...config };
@@ -514,7 +597,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   clearEdgeConfig(srcId, destId) {
-    const gEdge = this.graph.getEdge(srcId, destId);
+    const gEdge = this._graph.getEdge(srcId, destId);
     if (!gEdge) return this;
     this._edgeOverrides.delete(gEdge);
     this._stylesDirty = true;
@@ -528,7 +611,7 @@ export class Renderer {
    * @param {NodeStyle} rNode - node style
    */
   _resolveNode(gNode, rNode) {
-    const acc = this._nodeAccessors, g = this.graph, o = this._nodeOverrides.get(gNode.id);
+    const acc = this._nodeAccessors, g = this._graph, o = this._nodeOverrides.get(gNode.id);
     rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
     rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
     rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
@@ -542,7 +625,7 @@ export class Renderer {
    * @param {EdgeStyle} rEdge - edge style
    */
   _resolveEdge(gEdge, rEdge) {
-    const acc = this._edgeAccessors, g = this.graph, o = this._edgeOverrides.get(gEdge);
+    const acc = this._edgeAccessors, g = this._graph, o = this._edgeOverrides.get(gEdge);
     rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
     rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
     rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
@@ -589,12 +672,12 @@ export class Renderer {
    * @param {string} src - image source; also the cache key
    * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
    */
-  _loadImage(src) {
+  loadImage(src) {
     if (this._images.has(src)) return false;
     this._images.set(src, Renderer.IMAGE_LOADING);
     const img = new Image();
-    img.crossOrigin = this.opts.crossOrigin;
-    img.referrerPolicy = this.opts.imageReferrerPolicy;
+    img.crossOrigin = this._opts.crossOrigin;
+    img.referrerPolicy = this._opts.imageReferrerPolicy;
     img.onload  = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, img); };
     img.onerror = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, Renderer.IMAGE_FAILED); };
     img.src = src;
@@ -608,7 +691,7 @@ export class Renderer {
    */
   _garbageCollectImages() {
     const live = new Set();
-    for (const rNode of this.nodes.values()) if (rNode.image) live.add(rNode.image);
+    for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
     for (const src of this._images.keys()) if (!live.has(src)) this._images.delete(src);
   }
 
@@ -620,54 +703,54 @@ export class Renderer {
    * @returns {boolean} whether cached node and edge render configs were modified
    */
   sync() {
-    if (this._syncedDataVersion !== this.graph._dataVersion) {
+    if (this._syncedDataVersion !== this._graph.dataVersion) {
       this._stylesDirty = true;
-      this._syncedDataVersion = this.graph._dataVersion;
+      this._syncedDataVersion = this._graph.dataVersion;
     }
 
-    if (this._syncedSimulation === this.simulation._version && !this._stylesDirty) return false;
+    if (this._syncedSimulation === this._simulation.version && !this._stylesDirty) return false;
     
     // Update node styles and seed new ones
-    for (const [id, gNode] of this.graph.nodes) {
-      let rNode = this.nodes.get(id);
+    for (const [id, gNode] of this._graph.nodes) {
+      let rNode = this._nodes.get(id);
       if (rNode) this._resolveNode(gNode, rNode);
       else {
         rNode = this._seedNode(gNode);
-        this.nodes.set(id, rNode);
+        this._nodes.set(id, rNode);
       }
       // Load node image into cache
       if (rNode.image) {
         const img = this._images.get(rNode.image)
         if (!img)
-          this._loadImage(rNode.image);
+          this.loadImage(rNode.image);
       }
     }
 
     // Update edge styles and seed new ones
-    for (const gEdge of this.graph.edges) {
-      const rEdge = this.edges.get(gEdge);
+    for (const gEdge of this._graph.edges) {
+      const rEdge = this._edges.get(gEdge);
       if (rEdge) this._resolveEdge(gEdge, rEdge);
-      else this.edges.set(gEdge, this._seedEdge(gEdge));
+      else this._edges.set(gEdge, this._seedEdge(gEdge));
     }
 
     this._stylesDirty = false;
 
-    if (this._syncedSimulation === this.simulation._version) return true;
+    if (this._syncedSimulation === this._simulation.version) return true;
     
     // Delete old node styles
-    for (const id of this.nodes.keys()) {
-      if (!this.graph.nodes.has(id)) {
-        if (this.nodes.get(id)?.image) this._imageDebt++;
-        this.nodes.delete(id);
+    for (const id of this._nodes.keys()) {
+      if (!this._graph.nodes.has(id)) {
+        if (this._nodes.get(id)?.image) this._imageDebt++;
+        this._nodes.delete(id);
         this._nodeOverrides.delete(id);
       }
     }
     if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
 
     // Delete old edge styles
-    for (const gEdge of this.edges.keys()) {
-      if (!this.graph.edges.has(gEdge)) {
-        this.edges.delete(gEdge);
+    for (const gEdge of this._edges.keys()) {
+      if (!this._graph.edges.has(gEdge)) {
+        this._edges.delete(gEdge);
         this._edgeOverrides.delete(gEdge);
       }
     }
@@ -675,18 +758,18 @@ export class Renderer {
     // Refresh style caches
     // Node styles
     this._nodeStyles = [];
-    for (const sNode of this.simulation._nodeList) {
-      const rNode = this.nodes.get(sNode.id);
+    for (const sNode of this._simulation.nodeList) {
+      const rNode = this._nodes.get(sNode.id);
       if (rNode) this._nodeStyles.push(rNode);
     }
 
-    const sim = this.simulation;
+    const sim = this._simulation;
 
     // Edge pairs
-    const refs = sim._edgeRefs;
+    const refs = sim.edgeRefs;
     this._edgeStyles = [];
     for (let k = 0; k < refs.length; k++) {
-      const edge = this.edges.get(refs[k]);
+      const edge = this._edges.get(refs[k]);
       if (edge) this._edgeStyles.push(edge);
     }
 
@@ -694,16 +777,16 @@ export class Renderer {
        it should curve instead of overlapping its twin. No sign is needed — the
        bow is offset along the edge's own perpendicular, which already points
        the opposite way for the reverse edge. */
-    const ep = sim._edgePairs;
-    const sNodes = sim._nodeList;
+    const ep = sim.edgePairs;
+    const sNodes = sim.nodeList;
     this._edgeBow = new Int8Array(ep.length / 2);
     for (let k = 0, i = 0; i < ep.length; k++, i += 2) {
       const a = ep[i], b = ep[i + 1];
-      if (a === b || !this.graph.directed) { this._edgeBow[k] = 0; continue; }
-      this._edgeBow[k] = this.graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
+      if (a === b || !this._graph.directed) { this._edgeBow[k] = 0; continue; }
+      this._edgeBow[k] = this._graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
     }
 
-    this._syncedSimulation = this.simulation._version;
+    this._syncedSimulation = this._simulation.version;
     this._version++;
     return true;
   }
@@ -718,9 +801,9 @@ export class Renderer {
    * @throws {Error} throws when no canvas is attached
    */
   simToCanvas(x, y) {
-    if (!this.canvas || !this.size) throw new Error("Renderer: no canvas attached");
-    const v = this.view;
-    return [this.size.w / 2 + (x - v.x) * v.zoom, this.size.h / 2 + (y - v.y) * v.zoom];
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+    const v = this._view;
+    return [this._size.w / 2 + (x - v.x) * v.zoom, this._size.h / 2 + (y - v.y) * v.zoom];
   }
 
 
@@ -733,9 +816,9 @@ export class Renderer {
    * @throws {Error} throws when no canvas is attached
    */
   canvasToSim(x, y) {
-    if (!this.canvas || !this.size) throw new Error("Renderer: no canvas attached");
-    const v = this.view;
-    return [(x - this.size.w / 2) / v.zoom + v.x, (y - this.size.h / 2) / v.zoom + v.y];
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+    const v = this._view;
+    return [(x - this._size.w / 2) / v.zoom + v.x, (y - this._size.h / 2) / v.zoom + v.y];
   }
 
 
@@ -746,15 +829,15 @@ export class Renderer {
    * @returns {{nodesI: number[], edgesI: number[]}}
    */
   _cull() {
-    if (!this.size) return { nodesI: [], edgesI: [] };
+    if (!this._size) return { nodesI: [], edgesI: [] };
     const [xMin, yMin] = this.canvasToSim(0, 0);
-    const [xMax, yMax] = this.canvasToSim(this.size.w, this.size.h);
+    const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
 
     const nodesI = [];
     const shouldRender = new Set();
-    const sim = this.simulation;
-    for (let i = 0; i < sim._nodeList.length; i++) {
-      const sNode = sim._nodeList[i];
+    const sim = this._simulation;
+    for (let i = 0; i < sim.nodeList.length; i++) {
+      const sNode = sim.nodeList[i];
       if (circleRectCollision(sNode.x, sNode.y, sNode.radius, xMin, xMax, yMin, yMax)) {
         nodesI.push(i);
         shouldRender.add(i);
@@ -762,7 +845,7 @@ export class Renderer {
     }
 
     const edgesI = [];
-    const ep = sim._edgePairs;
+    const ep = sim.edgePairs;
     for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
       if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
         edgesI.push(i);
@@ -777,21 +860,21 @@ export class Renderer {
    * @returns {boolean} whether the `sync()` and render took place
    */
   render() {
-    if (!this.ctx || !this.size) return false;
+    if (!this._ctx || !this._size) return false;
     this.sync();
 
     const toRender = this._cull();
-    const sim = this.simulation;
+    const sim = this._simulation;
 
-    this.ctx.fillStyle = this.opts.background;
-    this.ctx.fillRect(0, 0, this.size.w, this.size.h);
+    this._ctx.fillStyle = this._opts.background;
+    this._ctx.fillRect(0, 0, this._size.w, this._size.h);
 
     // Render edges
     for (const i of toRender.edgesI) {
       const iDbl = 2 * i;
       this._drawEdge(
-        sim._nodeList[sim._edgePairs[iDbl]],
-        sim._nodeList[sim._edgePairs[iDbl + 1]],
+        sim.nodeList[sim.edgePairs[iDbl]],
+        sim.nodeList[sim.edgePairs[iDbl + 1]],
         this._edgeStyles[i],
         this._edgeBow[i],
       );
@@ -800,27 +883,27 @@ export class Renderer {
     // Render nodes
     for (const i of toRender.nodesI) {
       const nodeStyle = this._nodeStyles[i];
-      const sNode = sim._nodeList[i];
+      const sNode = sim.nodeList[i];
       const [cx, cy] = this.simToCanvas(sNode.x, sNode.y);
-      const r = sNode.radius * this.view.zoom;
-      this.ctx.beginPath();
-      this.ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      const r = sNode.radius * this._view.zoom;
+      this._ctx.beginPath();
+      this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
       const img = nodeStyle.image && this._images.get(nodeStyle.image);
       if (img && typeof img !== "string") {
         const scale = r * 2 / Math.min(img.width, img.height);
         const dw = img.width * scale, dh = img.height * scale;
-        this.ctx.save();
-        this.ctx.clip();
-        this.ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
-        this.ctx.restore();
+        this._ctx.save();
+        this._ctx.clip();
+        this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+        this._ctx.restore();
       } else {
-        this.ctx.fillStyle = nodeStyle.color;
-        this.ctx.fill();
+        this._ctx.fillStyle = nodeStyle.color;
+        this._ctx.fill();
       }
       if (nodeStyle.outlineWidth) {
-        this.ctx.strokeStyle = nodeStyle.outlineColor;
-        this.ctx.lineWidth = nodeStyle.outlineWidth;
-        this.ctx.stroke();
+        this._ctx.strokeStyle = nodeStyle.outlineColor;
+        this._ctx.lineWidth = nodeStyle.outlineWidth;
+        this._ctx.stroke();
       }
     }
 
@@ -838,8 +921,8 @@ export class Renderer {
    * @returns {void}
    */
   _drawEdge(src, dest, style, bowDir) {
-    if (!this.ctx) return;
-    const ctx = this.ctx, z = this.view.zoom;
+    if (!this._ctx) return;
+    const ctx = this._ctx, z = this._view.zoom;
     const [ax, ay] = this.simToCanvas(src.x, src.y);
     const [bx, by] = this.simToCanvas(dest.x, dest.y);
     const ra = src.radius * z, rb = dest.radius * z;
@@ -854,7 +937,7 @@ export class Renderer {
     if (d <= ra + rb + head) return;
 
     const ux = dx / d, uy = dy / d;
-    const bow = bowDir * style.bow * this.view.zoom;  // Scale bow with zoom
+    const bow = bowDir * style.bow * this._view.zoom;  // Scale bow with zoom
 
     // Tangents at each end, and the trimmed endpoints along them.
     let t0x = ux, t0y = uy, t1x = ux, t1y = uy, cx = 0, cy = 0;
@@ -895,8 +978,8 @@ export class Renderer {
    * @returns {void}
    */
   _drawArrowhead(tipX, tipY, tx, ty, size, style) {
-    if (!this.ctx) return;
-    const ctx = this.ctx;
+    if (!this._ctx) return;
+    const ctx = this._ctx;
     const halfW = size * 0.45;
     const baseX = tipX - tx * size, baseY = tipY - ty * size;
     const px = -ty, py = tx;
@@ -921,8 +1004,8 @@ export class Renderer {
    * @returns {void}
    */
   _drawSelfLoop(cx, cy, r, style) {
-    if (!this.ctx) return;
-    const ctx = this.ctx;
+    if (!this._ctx) return;
+    const ctx = this._ctx;
     const lr = Math.max(r * 0.8, (style.arrow ? style.arrowSize : 6) * 1.6);
     const a = -Math.PI / 4;
     const D = r + lr * 0.6;                      // node centre -> loop centre
@@ -968,10 +1051,10 @@ export class Renderer {
    * @throws {Error} throws when no canvas is attached
    */
   nodeAt(cx, cy) {
-    if (!this.canvas) throw new Error("Renderer: no canvas attached");
+    if (!this._canvas) throw new Error("Renderer: no canvas attached");
     const [x, y] = this.canvasToSim(cx, cy);
-    const nodes = this.simulation._nodeList;
-    const slack = 4 / this.view.zoom; // 4 world-coordinate radius slack
+    const nodes = this._simulation.nodeList;
+    const slack = 4 / this._view.zoom; // 4 world-coordinate radius slack
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i], r = node.radius + slack;
       if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
@@ -988,8 +1071,8 @@ export class Renderer {
    * @throws {Error} throws when no canvas is attached
    */
   getPosition(id) {
-    if (!this.canvas) throw new Error("Renderer: no canvas attached");
-    const p = this.simulation.getPosition(id);
+    if (!this._canvas) throw new Error("Renderer: no canvas attached");
+    const p = this._simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
 
@@ -1003,8 +1086,8 @@ export class Renderer {
    * @throws {Error} throws when no canvas is attached
    */
   pin(id, cx, cy) {
-    if (!this.canvas) throw new Error("Renderer: no canvas attached");
-    return this.simulation.pin(id, ...this.canvasToSim(cx, cy));
+    if (!this._canvas) throw new Error("Renderer: no canvas attached");
+    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
   }
 
 
@@ -1013,5 +1096,5 @@ export class Renderer {
    * @param {any} id - node id
    * @returns {this} self reference
    */
-  unpin(id) { this.simulation.unpin(id); return this; }
+  unpin(id) { this._simulation.unpin(id); return this; }
 }

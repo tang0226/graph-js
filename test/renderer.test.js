@@ -200,7 +200,7 @@ describe("Renderer: cache alignment", () => {
       g.removeNode(id);
       sim.sync();
       r.sync();
-      assert.equal(r._nodeStyles.length, sim._nodeList.length);
+      assert.equal(r._nodeStyles.length, sim.nodeList.length);
       assert.equal(r._edgeStyles.length, g.edges.size);
       assert.equal(r._nodeStyles.filter(s => !s).length, 0, "a slot resolved to no style");
       assert.equal(r._edgeStyles.filter(s => !s).length, 0);
@@ -217,8 +217,8 @@ describe("Renderer: cache alignment", () => {
     g.removeNode("n2");
     sim.sync();
     r.sync();
-    for (let i = 0; i < sim._nodeList.length; i++)
-      assert.equal(r._nodeStyles[i].id, sim._nodeList[i].id);
+    for (let i = 0; i < sim.nodeList.length; i++)
+      assert.equal(r._nodeStyles[i].id, sim.nodeList[i].id);
   });
 
   test("a config-only change reuses the cached style objects", () => {

@@ -253,9 +253,9 @@ describe("GraphJS: end to end", () => {
       for (let i = 0; i < 25; i += 3) { gjs.removeNode("n" + i); gjs.step(); }
       for (let t = 0; t < 100; t++) gjs.step();
 
-      for (const r of gjs.simulation._nodeList)
+      for (const r of gjs.simulation.nodeList)
         assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
-      assert.equal(gjs.renderer._nodeStyles.length, gjs.simulation._nodeList.length);
+      assert.equal(gjs.renderer._nodeStyles.length, gjs.simulation.nodeList.length);
       assert.equal(gjs.renderer._edgeStyles.length, gjs.graph.edges.size);
     } finally { restoreWindow(); }
   });

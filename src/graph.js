@@ -27,30 +27,50 @@
  */
 export class Graph {
   /** @type {Map<any, GraphNode>} */
-  nodes = new Map();
-
+  _nodes = new Map();
   /**
+   * [read-only]
+   * Map of nodes, keyed by id.
+   * @returns {ReadonlyMap<any, GraphNode>}
+   */
+  get nodes() { return this._nodes; }
+
+
+  /** @type {Set<GraphEdge>} */
+  _edges = new Set();
+  /**
+   * [read-only]
    * All edges of the graph, each appearing exactly once.
    * Keyed by Edge object (go through `adjacency` or `getEdge`)
-   * @type {Set<GraphEdge>}
+   * @returns {ReadonlySet<GraphEdge>}
    */
-  edges = new Set();
+  get edges() { return this._edges; }
 
+
+  /** @type {Map<any, Map<any, GraphEdge>>} */
+  _adjacency = new Map();
   /**
+   * [read-only]
    * Nested lookup map (`srcId -> destId -> Edge`).
    * Symmetric in an undirected graph: both directions reference the *same* Edge object.
-   * @type {Map<any, Map<any, GraphEdge>>}
+   * @returns {ReadonlyMap<any, ReadonlyMap<any, GraphEdge>>}
    */
-  adjacency = new Map();
+  get adjacency() { return this._adjacency; }
 
+
+  /** @type {boolean} */
+  _directed = false;
   /**
-   * Boolean indicating whether the graph is directed or undirected.
-   * Frozen at instantiation.
-   * @type {boolean}
+   * [read-only constant] Boolean indicating whether the graph is directed or
+   * undirected.
    */
-  directed = false;
+  get directed() { return this._directed; }
 
+
+  /** @type {number} */
+  _version = 1;
   /**
+   * [read-only]
    * Monotonic counter for *structural* change: bumped whenever a node or edge
    * is added or removed (not on no-ops).
    *
@@ -59,10 +79,11 @@ export class Graph {
    * it changes.
    *
    * Compare for inequality only; never assume a step of 1.
-   * @type {number}
    */
-  _version = 1;
+  get version() { return this._version; }
 
+  /** @type {number} */
+  _dataVersion = 1;
   /**
    * Monotonic counter for *payload* change: bumped only by `setNodeData` and
    * `setEdgeData`. Structural mutations leave it untouched.
@@ -72,18 +93,17 @@ export class Graph {
    * slot-indexed caches.
    *
    * Compare for inequality only.
-   * @type {number}
    */
-  _dataVersion = 1;
+  get dataVersion() { return this._dataVersion; }
 
 
   /**
    * Initialize a `Graph` instance.
    * @param {object} [opts={}] - options object
-   * @param {boolean} [opts.directed=false] - whether the graph is directed or undirected (constant; set once)
+   * @param {boolean} [opts.directed] - whether the graph is directed or undirected
    */
   constructor(opts = {}) {
-    Object.defineProperty(this, "directed", { value: opts.directed ?? false, writable: false, enumerable: true });
+    this._directed = opts.directed ?? false;
   }
 
 
@@ -92,7 +112,7 @@ export class Graph {
    * @param {any} id - id of the node
    * @returns {number} degree (out-degree in a digraph) of the corresponding node, or 0 if the node was not found
    */
-  degree(id) { return this.adjacency.get(id)?.size ?? 0; }
+  degree(id) { return this._adjacency.get(id)?.size ?? 0; }
 
 
   /**
@@ -104,9 +124,9 @@ export class Graph {
    * @returns {any} id of the node
    */
   addNode(data = {}, id = data.id ?? crypto.randomUUID()) {
-    if (this.nodes.has(id)) return id;
-    this.nodes.set(id, { id, data });
-    this.adjacency.set(id, new Map());
+    if (this._nodes.has(id)) return id;
+    this._nodes.set(id, { id, data });
+    this._adjacency.set(id, new Map());
     this._version++;
     return id;
   }
@@ -118,14 +138,14 @@ export class Graph {
    * @returns {boolean} success of the removal
    */
   removeNode(id) {
-    const adj = this.adjacency.get(id);
+    const adj = this._adjacency.get(id);
     if (!adj) return false;
     for (const destId of adj.keys()) this.removeEdge(id, destId);
-    if (this.directed) for (const [srcId, srcMap] of this.adjacency.entries()) {
+    if (this._directed) for (const [srcId, srcMap] of this._adjacency.entries()) {
       if (srcMap.has(id)) this.removeEdge(srcId, id);
     }
-    this.adjacency.delete(id);
-    this.nodes.delete(id);
+    this._adjacency.delete(id);
+    this._nodes.delete(id);
     this._version++;
     return true;
   }
@@ -139,7 +159,7 @@ export class Graph {
    * @throws {ReferenceError} thrown if given id matches no existing node
    */
   setNodeData(id, data) {
-    const node = this.nodes.get(id);
+    const node = this._nodes.get(id);
     if (!node) throw new ReferenceError(`Cannot find node with id "${id}"`);
     node.data = data;
     this._dataVersion++;
@@ -156,15 +176,15 @@ export class Graph {
    * @throws {ReferenceError} thrown if either id matches no existing node
    */
   addEdge(srcId, destId, data = {}) {
-    const src = this.nodes.get(srcId);
-    const dest = this.nodes.get(destId);
+    const src = this._nodes.get(srcId);
+    const dest = this._nodes.get(destId);
     if (!src) throw new ReferenceError(`Cannot find source node with id "${srcId}"`);
     if (!dest) throw new ReferenceError(`Cannot find destination node with id "${destId}"`);
-    if (this.adjacency.get(srcId)?.get(destId)) return false;
+    if (this._adjacency.get(srcId)?.get(destId)) return false;
     const edge = { src, dest, data };
-    this.edges.add(edge);
-    this.adjacency.get(srcId)?.set(destId, edge);
-    if (!this.directed) this.adjacency.get(destId)?.set(srcId, edge);
+    this._edges.add(edge);
+    this._adjacency.get(srcId)?.set(destId, edge);
+    if (!this._directed) this._adjacency.get(destId)?.set(srcId, edge);
     this._version++;
     return true;
   }
@@ -178,11 +198,11 @@ export class Graph {
    * @returns {boolean} whether the edge was successfully removed
    */
   removeEdge(srcId, destId) {
-    const edge = this.adjacency.get(srcId)?.get(destId);
+    const edge = this._adjacency.get(srcId)?.get(destId);
     if (!edge) return false;
-    this.edges.delete(edge);
-    this.adjacency.get(srcId)?.delete(destId);
-    if (!this.directed) this.adjacency.get(destId)?.delete(srcId);
+    this._edges.delete(edge);
+    this._adjacency.get(srcId)?.delete(destId);
+    if (!this._directed) this._adjacency.get(destId)?.delete(srcId);
     this._version++;
     return true;
   }
@@ -194,7 +214,7 @@ export class Graph {
    * @param {any} destId - destination node id
    * @returns {GraphEdge|undefined} corresponding edge, or undefined if not found
    */
-  getEdge(srcId, destId) { return this.adjacency.get(srcId)?.get(destId); }
+  getEdge(srcId, destId) { return this._adjacency.get(srcId)?.get(destId); }
 
 
   /**
@@ -203,7 +223,7 @@ export class Graph {
    * @param {any} destId - destination node id
    * @returns {boolean} whether the graph contains the edge
    */
-  hasEdge(srcId, destId) { return this.adjacency.get(srcId)?.has(destId) ?? false; }
+  hasEdge(srcId, destId) { return this._adjacency.get(srcId)?.has(destId) ?? false; }
 
 
   /**
@@ -215,7 +235,7 @@ export class Graph {
    * @throws {ReferenceError} thrown if no edge exists between the given nodes
    */
   setEdgeData(srcId, destId, data) {
-    const edge = this.adjacency.get(srcId)?.get(destId);
+    const edge = this._adjacency.get(srcId)?.get(destId);
     if (!edge) throw new ReferenceError(`Cannot find edge with srcId "${srcId}" and destId "${destId}"`);
     edge.data = data;
     this._dataVersion++;
