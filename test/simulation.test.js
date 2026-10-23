@@ -301,13 +301,9 @@ describe("Simulation: integration", () => {
     }
   });
 
-  test("always comes to rest, whatever the seed", {
-    todo: "position-based collision resolution does not damp velocity, so "
-        + "overlapping pairs re-collide forever. Measured a flat limit cycle at "
-        + "maxV 0.604 across 4k/16k/64k ticks; ~30/40 random seeds stay in "
-        + "motion. Damping the approaching component helps but does not fully "
-        + "fix it -- alpha cooling would force convergence regardless.",
-  }, () => {
+  // Collision resolution alone can hold overlapping pairs in a limit cycle;
+  // cooling is what guarantees convergence for every seed.
+  test("always comes to rest, whatever the seed", () => {
     for (let trial = 0; trial < 20; trial++) {
       const sim = new Simulation(chain(40, { extra: [["n0", "n20"]] }), {});
       for (let t = 0; t < 4000; t++) sim.tick();
@@ -353,6 +349,182 @@ describe("Simulation: integration", () => {
     A.x = 0; A.y = 0; B.x = 5; B.y = 0;
     sim._enforce_radius();
     assert.ok(Math.hypot(A.x - B.x, A.y - B.y) >= 39.99);
+  });
+});
+
+describe("Simulation: temperature", () => {
+  // Synced, then frozen: any later reheat must come from the code under test.
+  function frozen(g = chain(3), opts = {}) {
+    const sim = new Simulation(g, opts);
+    sim.sync();
+    sim.heat(0);
+    return sim;
+  }
+
+  function snapshot(sim) { return sim._nodeList.map(r => [r.x, r.y, r.vx, r.vy]); }
+
+  test("a new simulation starts hot with default cooling", () => {
+    const sim = new Simulation(chain(2), {});
+    assert.equal(sim.temp, 1);
+    assert.equal(sim.opts.cooling, 0.98);
+    assert.equal(sim.opts.freezePoint, 0.01);
+  });
+
+  test("heat() defaults to 1 and clamps invalid values to 0", () => {
+    const sim = frozen();
+    assert.equal(sim.heat().temp, 1);
+    assert.equal(sim.heat(0.4).temp, 0.4);
+    assert.equal(sim.heat(-1).temp, 0);
+    assert.equal(sim.heat(NaN).temp, 0);
+  });
+
+  test("each tick decays temp by opts.cooling", () => {
+    const sim = new Simulation(chain(3), { cooling: 0.5, freezePoint: 0.01 });
+    sim.tick();
+    assert.equal(sim.temp, 0.5);
+    sim.tick();
+    assert.equal(sim.temp, 0.25);
+  });
+
+  test("temp drops to 0 below freezePoint and zeroes residual velocity", () => {
+    const sim = new Simulation(chain(5), { cooling: 0.5, freezePoint: 0.1 });
+    for (let t = 0; t < 4; t++) sim.tick();       // 1 -> .5 -> .25 -> .125 -> .0625
+    assert.equal(sim.temp, 0);
+    for (const r of sim._nodeList) assert.deepEqual([r.vx, r.vy], [0, 0],
+      "leftover velocity would be replayed by the next heat()");
+  });
+
+  test("a frozen tick moves nothing", () => {
+    const sim = frozen(chain(5));
+    for (const r of sim._nodeList) { r.vx = 3; r.vy = -3; }
+    const before = snapshot(sim);
+    for (let t = 0; t < 10; t++) sim.tick();
+    assert.deepEqual(snapshot(sim), before);
+    assert.equal(sim.temp, 0);
+  });
+
+  test("temp scales forces, not displacement", () => {
+    function velocityAfterOneTick(t) {
+      const g = new Graph();
+      g.addNode({ id: "a" });
+      g.addNode({ id: "b" });
+      const sim = new Simulation(g, { gravity: 0, freezePoint: 0 });
+      const A = sim.nodes.get("a"), B = sim.nodes.get("b");
+      A.x = 0; A.y = 0; B.x = 100; B.y = 0;
+      sim.heat(t).tick();
+      return A.vx;
+    }
+    const full = velocityAfterOneTick(1), half = velocityAfterOneTick(0.5);
+    assert.ok(full !== 0);
+    assert.ok(Math.abs(half / full - 0.5) < 1e-12, `expected half the velocity, got ratio ${half / full}`);
+  });
+
+  test("setOpts merges options and reheats", () => {
+    const sim = frozen();
+    sim.setOpts({ repulsion: 1234 });
+    assert.equal(sim.opts.repulsion, 1234);
+    assert.equal(sim.opts.friction, 0.9, "unrelated options must survive the merge");
+    assert.equal(sim.temp, 1);
+  });
+
+  describe("sync() reheats only on physical changes", () => {
+    test("structural changes reheat", () => {
+      const g = chain(3);
+      const sim = frozen(g);
+      g.addNode({ id: "extra" });
+      sim.sync();
+      assert.equal(sim.temp, 1, "addNode");
+
+      sim.heat(0);
+      g.removeEdge("n0", "n1");
+      sim.sync();
+      assert.equal(sim.temp, 1, "removeEdge");
+    });
+
+    test("a config change that alters resolved values reheats", () => {
+      const sim = frozen();
+      sim.setDefaultNodeConfig({ radius: 35 });
+      assert.equal(sim.temp, 0, "the setter defers to sync()");
+      sim.sync();
+      assert.equal(sim.temp, 1);
+    });
+
+    test("a config change that resolves to the same values does not", () => {
+      const sim = frozen();
+      sim.setDefaultNodeConfig({ radius: 20, mass: 1, fixed: false });
+      sim.setNodeConfig("n0", { radius: 20 });
+      assert.equal(sim.sync(), true, "config was re-resolved");
+      assert.equal(sim.temp, 0);
+    });
+
+    test("a data change that does not affect physics does not", () => {
+      const g = chain(3);
+      const sim = frozen(g);
+      g.setNodeData("n0", { label: "renamed" });
+      assert.equal(sim.sync(), true, "data changes still re-resolve accessors");
+      assert.equal(sim.temp, 0);
+    });
+
+    test("a data change that resolves to a new radius does", () => {
+      const g = chain(3);
+      const sim = new Simulation(g, { nodeConfig: { radius: n => 10 * n.data.w } });
+      sim.sync();
+      sim.heat(0);
+      g.setNodeData("n0", { w: 5 });
+      sim.sync();
+      assert.equal(sim.nodes.get("n0").radius, 50);
+      assert.equal(sim.temp, 1);
+    });
+
+    test("clearNodeConfig reheats when it changes resolved values", () => {
+      const sim = frozen();
+      sim.setNodeConfig("n0", { mass: 9 });
+      sim.sync();
+      sim.heat(0);
+      sim.clearNodeConfig("n0");
+      sim.sync();
+      assert.equal(sim.nodes.get("n0").mass, 1);
+      assert.equal(sim.temp, 1);
+    });
+  });
+
+  describe("pin and unpin", () => {
+    test("pinning to a new position reheats immediately", () => {
+      const sim = frozen();
+      sim.pin("n0", 500, 500);
+      assert.equal(sim.temp, 1);
+    });
+
+    test("re-pinning a fixed node in place stays frozen", () => {
+      const sim = frozen();
+      const [x, y] = sim.getPosition("n0");
+      sim.pin("n0", x, y);
+      sim.sync();
+      assert.equal(sim.temp, 1, "fixed went false -> true, which is a physical change");
+
+      sim.heat(0);
+      sim.pin("n0", x, y);
+      sim.sync();
+      assert.equal(sim.temp, 0, "nothing moved and fixed was already true");
+    });
+
+    test("unpin reheats once fixed is released", () => {
+      const sim = frozen();
+      sim.pin("n0", 10, 10);
+      sim.sync();
+      sim.heat(0);
+      sim.unpin("n0");
+      sim.sync();
+      assert.equal(sim.nodes.get("n0").fixed, false);
+      assert.equal(sim.temp, 1);
+    });
+
+    test("a dragged node's neighbours keep responding while it is held", () => {
+      const sim = frozen(chain(3), { cooling: 0.5 });
+      sim.pin("n0", 0, 0);
+      for (let t = 0; t < 20; t++) { sim.pin("n0", t * 10, 0); sim.tick(); }
+      assert.ok(sim.temp > 0, "each move must keep the simulation awake");
+    });
   });
 });
 

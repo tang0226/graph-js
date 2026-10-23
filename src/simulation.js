@@ -28,6 +28,9 @@ import { asFn } from "./utils.js";
  *    inverse-square law)
  * @property {number} maxSpeed - maximum speed of each node (clamped to at the
  *    end of each tick)
+ * @property {number} cooling - coefficient to decay temperature by each tick
+ * @property {number} freezePoint - temperature value below which temp is set
+ *    to 0
  */
 /** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig }} SimOptsInput */
 
@@ -107,6 +110,14 @@ export class Simulation {
    * @type {Map<any, SimNode>}
    */
   nodes = new Map();
+
+  /**
+   * Temperature value that forces are multiplied by. Decays each tick
+   * according to the rate of `opts.cooling`. Once it is lower than
+   * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
+   * which is called after config or settings changes.
+   */
+  temp = 0;
 
   /**
    * Cached array of simulation nodes, recreated in effective `sync()` calls.
@@ -210,10 +221,37 @@ export class Simulation {
       springLength:    opts.springLength ?? 50,
       minDistSq:       opts.minDistSq ?? 100,
       maxSpeed:        opts.maxSpeed ?? 100,
+      cooling:         opts.cooling ?? 0.98,
+      freezePoint:     opts.freezePoint ?? 0.01,
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
     this.sync();
+  }
+
+
+  /**
+   * Sets properties of `opts` using a partial object.
+   * @param {SimOptsInput} opts - options to set
+   * @returns {this} self reference
+   */
+  setOpts({nodeConfig, ...opts} = {}) {
+    Object.assign(this.opts, opts);
+    if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
+    this.heat();
+    return this;
+  }
+
+
+  /**
+   * Sets the simulation's temp value
+   * @param {number} [t=1] - temperature to set
+   * @returns {this} self reference
+   */
+  heat(t = 1) {
+    if (t >= 0) this.temp = t;
+    else this.temp = 0;
+    return this;
   }
 
 
@@ -272,7 +310,7 @@ export class Simulation {
    * Updates a sim-node's config based on its corresponding graph node.
    * @param {GraphNode} gNode - graph node
    * @param {SimNode} sNode - matching sim-node
-   * @returns {void}
+   * @returns {boolean} whether resolved physical values changed
    */
   _resolve(gNode, sNode) {
     const acc = this._accessors,
@@ -280,11 +318,16 @@ export class Simulation {
           o = this._overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ??  acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ??  acc.radius(gNode, g);
+
+    const prevMass = sNode.mass, prevRadius = sNode.radius, prevFixed = sNode.fixed;
+
     sNode.mass   = Number.isFinite(mass)   ?
       Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
     sNode.radius = Number.isFinite(radius) ?
       Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
     sNode.fixed  = (o?.fixed?.(gNode, g) ??  acc.fixed(gNode, g)) === true;
+
+    return sNode.mass !== prevMass || sNode.radius !== prevRadius || sNode.fixed !== prevFixed;
   }
 
 
@@ -348,14 +391,18 @@ export class Simulation {
       return false;
 
     // Update and add nodes
+    let changed = false;
     for (const [id, gNode] of this.graph.nodes) {
       const sNode = this.nodes.get(id);
-      if (sNode) this._resolve(gNode, sNode);
-      else this.nodes.set(id, this._seedNode(gNode));
+      if (sNode) changed = this._resolve(gNode, sNode) || changed;
+      else { this.nodes.set(id, this._seedNode(gNode)); changed = true; }
     }
     this._configDirty = false;
+    if (changed) this.heat();
 
     if (this._syncedVersion === this.graph._version) return true;
+
+    this.heat(); // Structural change
 
     // Delete old nodes
     for (const id of this.nodes.keys()) {
@@ -509,6 +556,8 @@ export class Simulation {
     const list = this._nodeList;
     for (let i = 0; i < list.length; i++) { list[i].fx = 0; list[i].fy = 0; }
 
+    if (!this.temp) return this;
+
     this._apply_repulsion();
     this._apply_springs();
     this._apply_gravity();
@@ -517,8 +566,8 @@ export class Simulation {
     for (let i = 0; i < list.length; i++) {
       const r = list[i];
       if (r.fixed) { r.vx = 0; r.vy = 0; continue; }
-      r.vx = (r.vx + (r.fx / r.mass) * dt) * this.opts.friction;
-      r.vy = (r.vy + (r.fy / r.mass) * dt) * this.opts.friction;
+      r.vx = (r.vx + (r.fx / r.mass) * dt * this.temp) * this.opts.friction;
+      r.vy = (r.vy + (r.fy / r.mass) * dt * this.temp) * this.opts.friction;
       
       // Limit speed
       const v = Math.hypot(r.vx, r.vy);
@@ -526,6 +575,13 @@ export class Simulation {
 
       r.x += r.vx * dt;
       r.y += r.vy * dt;
+    }
+
+    this.temp *= this.opts.cooling;
+    if (this.temp < this.opts.freezePoint) {
+      this.temp = 0;
+      // Drop residual velocities
+      for (let i = 0; i < list.length; i++) { list[i].vx = 0; list[i].vy = 0; }
     }
 
     // Enforce radius
@@ -558,6 +614,7 @@ export class Simulation {
     const node = this.nodes.get(id);
     if (!node) return false;
     this.setNodeConfig(id, { fixed: true });
+    if (node.x !== x || node.y !== y) this.heat();
     [node.x, node.y] = [x, y];
     return true;
   }
