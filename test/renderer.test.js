@@ -8,7 +8,7 @@ import { makeCanvas, installImage, installWindow, opsNamed, flush, r2 } from "./
 /* Two nodes of radius 20, placed 200 world units apart on the x axis. With an
    800x600 canvas at zoom 1 they land at canvas (300,300) and (500,300), so a
    trimmed edge runs 320 -> 480 and every expectation below is a round number. */
-function scene(directed, edges, { radius = 20, nodeCfg, edgeCfg } = {}) {
+function scene(directed, edges, { radius = 20, nodeCfg, edgeCfg, opts } = {}) {
   const canvas = makeCanvas();
   const g = new Graph({ directed });
   g.addNode({ id: "a", group: 0 });
@@ -21,7 +21,7 @@ function scene(directed, edges, { radius = 20, nodeCfg, edgeCfg } = {}) {
   const A = sim.nodes.get("a"), B = sim.nodes.get("b");
   A.x = -100; A.y = 0; B.x = 100; B.y = 0;
 
-  const r = new Renderer(sim, { canvas, nodeConfig: nodeCfg, edgeConfig: edgeCfg });
+  const r = new Renderer(sim, { canvas, nodeConfig: nodeCfg, edgeConfig: edgeCfg, ...opts });
   r.sync();
   canvas.ctx.ops.length = 0;
   return { g, sim, r, ctx: canvas.ctx, canvas };
@@ -525,6 +525,63 @@ describe("Renderer: options", () => {
     const r = new Renderer(sim(), { canvas, background: "#123456" });
     r.render();
     assert.equal(canvas.ctx.fillStyle, "#123456");
+  });
+});
+
+describe("Renderer: renderEdges", () => {
+  // Every edge shape in one scene: a bowed reciprocal pair with arrowheads,
+  // plus a self-loop. Nodes contribute exactly one arc each.
+  const ALL_EDGES = [["a", "b"], ["b", "a"], ["a", "a"]];
+  const EDGE_OPS = ["moveTo", "lineTo", "quadraticCurveTo", "closePath"];
+
+  function edgeOps(ctx) { return EDGE_OPS.flatMap(name => opsNamed(ctx, name)); }
+
+  test("defaults to true, including for a forwarded undefined", () => {
+    assert.equal(scene(false, []).r.opts.renderEdges, true);
+    assert.equal(scene(false, [], { opts: { renderEdges: undefined } }).r.opts.renderEdges, true);
+  });
+
+  test("edges are drawn by default", () => {
+    const { r, ctx } = scene(true, ALL_EDGES);
+    r.render();
+    assert.ok(edgeOps(ctx).length > 0);
+    assert.equal(opsNamed(ctx, "arc").length, 3, "two nodes plus the self-loop");
+  });
+
+  test("false skips every edge shape but still draws the nodes", () => {
+    const { r, ctx } = scene(true, ALL_EDGES, { opts: { renderEdges: false } });
+    r.render();
+    assert.deepEqual(edgeOps(ctx), [], "lines, curves and arrowheads must all be skipped");
+    assert.equal(opsNamed(ctx, "arc").length, 2, "only the node circles remain; no self-loop");
+    assert.equal(opsNamed(ctx, "fillRect").length, 1, "the background is still painted");
+  });
+
+  test("setOpts toggles edges on a live renderer", () => {
+    const { r, ctx } = scene(false, [["a", "b"]]);
+
+    r.setOpts({ renderEdges: false });
+    r.render();
+    assert.deepEqual(edgeOps(ctx), []);
+
+    ctx.ops.length = 0;
+    r.setOpts({ renderEdges: true });
+    r.render();
+    assert.deepEqual(opsNamed(ctx, "moveTo")[0].slice(1).map(r2), [320, 300]);
+    assert.deepEqual(opsNamed(ctx, "lineTo")[0].slice(1).map(r2), [480, 300]);
+  });
+
+  test("hidden edges keep their styles in sync with the graph", () => {
+    const { g, sim, r, ctx } = scene(false, [["a", "b"]], { opts: { renderEdges: false } });
+    g.addNode({ id: "c" });
+    g.addEdge("b", "c");
+    sim.sync();
+    r.render();
+    assert.equal(r.edgeStyles.length, 2, "caches must stay aligned while edges are hidden");
+
+    ctx.ops.length = 0;
+    r.setOpts({ renderEdges: true });
+    r.render();
+    assert.ok(opsNamed(ctx, "lineTo").length >= 1, "re-enabling draws from the up-to-date cache");
   });
 });
 

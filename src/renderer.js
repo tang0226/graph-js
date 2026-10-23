@@ -28,10 +28,11 @@ import { asFn, circleRectCollision } from "./utils.js";
 
 /**
  * @typedef {object} RendererOptsInput
- * @property {string} [background] - background color
  * @property {Canvas} [canvas] - canvas to render to
+ * @property {string} [background] - background color
  * @property {NodeStyleConfig} [nodeConfig] - default node config
  * @property {EdgeStyleConfig} [edgeConfig] - default edge config
+ * @property {boolean} [renderEdges] - whether to render edges
  * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
  *    for image requests.
  * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
@@ -41,6 +42,7 @@ import { asFn, circleRectCollision } from "./utils.js";
 /**
  * @typedef {object} RendererOpts
  * @property {string} background - background color
+ * @property {boolean} renderEdges - whether to render edges
  * @property {ReferrerPolicy} imageReferrerPolicy - referrer policy for image requests
  * @property {"anonymous" | "use-credentials" | null} crossOrigin - default
  *    cross-origin parameter for image requests
@@ -153,6 +155,7 @@ import { asFn, circleRectCollision } from "./utils.js";
 /** @type {RendererOpts} */
 const RENDERER_DEFAULTS = {
   background: "#ffffff",
+  renderEdges: true,
   imageReferrerPolicy: "no-referrer",
   crossOrigin: "anonymous",
 };
@@ -421,6 +424,7 @@ export class Renderer {
 
     this._opts = {
       background: opts.background ?? RENDERER_DEFAULTS.background,
+      renderEdges: opts.renderEdges ?? RENDERER_DEFAULTS.renderEdges,
       imageReferrerPolicy:
         opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
       
@@ -845,10 +849,12 @@ export class Renderer {
     }
 
     const edgesI = [];
-    const ep = sim.edgePairs;
-    for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
-      if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
-        edgesI.push(i);
+    if (this._opts.renderEdges) {
+      const ep = sim.edgePairs;
+      for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
+        if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
+          edgesI.push(i);
+      }
     }
 
     return { nodesI, edgesI };
@@ -870,14 +876,16 @@ export class Renderer {
     this._ctx.fillRect(0, 0, this._size.w, this._size.h);
 
     // Render edges
-    for (const i of toRender.edgesI) {
-      const iDbl = 2 * i;
-      this._drawEdge(
-        sim.nodeList[sim.edgePairs[iDbl]],
-        sim.nodeList[sim.edgePairs[iDbl + 1]],
-        this._edgeStyles[i],
-        this._edgeBow[i],
-      );
+    if (this._opts.renderEdges) {
+      for (const i of toRender.edgesI) {
+        const iDbl = 2 * i;
+        this._drawEdge(
+          sim.nodeList[sim.edgePairs[iDbl]],
+          sim.nodeList[sim.edgePairs[iDbl + 1]],
+          this._edgeStyles[i],
+          this._edgeBow[i],
+        );
+      }
     }
 
     // Render nodes
