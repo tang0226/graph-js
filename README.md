@@ -45,16 +45,34 @@ const gjs = new GraphJS({
     springLength: 50,               // resting length of edges
     springStiffness: 0.15,          // how strongly edges hold their resting length
     gravity: 0.002,                 // pull toward the center
+    minDistSq: 100,                 // squared distance below which repulsion stops growing
+    maxSpeed: 100,                  // speed limit per tick
+    cooling: 0.98,                  // fraction of temperature kept each tick (see "Settling")
+    freezePoint: 0.01,              // temperature at which the layout stops moving
     nodeConfig: { radius: 20 },     // default physical settings for nodes
   },
 
-  renderer: {
+  renderer: {                       // the following are the same as the default values
     background: "#ffffff",
-    nodeConfig: { color: "#61afef" },
-    edgeConfig: { color: "#999999", width: 2 },
+    renderEdges: true,              // set false to draw nodes only
+    crossOrigin: "anonymous",       // crossOrigin for node image requests
+    imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
+    nodeConfig: { color: "#ffffff" },
+    edgeConfig: { color: "#000000", width: 1 },
   },
 });
 ```
+
+### Changing options
+
+Both layers have `setOpts()`, which apply new values for specific options:
+
+```js
+gjs.simulation.setOpts({ repulsion: 2000, gravity: 0.005 });  // also wakes the layout
+gjs.renderer.setOpts({ background: "#15171c", renderEdges: false });
+```
+
+`setOpts()` also accepts `nodeConfig` (and `edgeConfig` on the renderer), which are passed on to `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. The `opts` objects themselves are read-only: assigning to `gjs.simulation.opts.repulsion` directly won't wake a settled layout.
 
 ### Attaching a canvas
 
@@ -117,6 +135,23 @@ gjs.renderer.setDefaultEdgeConfig({
 });
 ```
 
+All the available settings:
+
+| Layer | Setting | Default | |
+|---|---|---|---|
+| Simulation (nodes) | `radius` | `20` | physical and drawn radius |
+| | `mass` | `1` | heavier nodes are pushed around less |
+| | `fixed` | `false` | `true` holds the node in place |
+| Renderer (nodes) | `color` | `"#ffffff"` | fill color |
+| | `outlineColor` | `"#000000"` | |
+| | `outlineWidth` | `1` | `0` for no outline |
+| | `image` | `null` | image URL drawn inside the node (see below) |
+| Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
+| | `width` | `1` | |
+| | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
+| | `arrowSize` | `10` | |
+| | `bow` | `14` | how far a pair of opposite directed edges curve apart |
+
 A function receives the node or edge object with custom data stored in `.data`. Whenever the graph changes, the function is re-run and the results are cached. That keeps the `radius` above in step as connections are added.
 
 To change a node's data, use `gjs.graph.setNodeData(id, data)` rather than editing `node.data` directly. Direct edits will not trigger a cache refresh, so the functions won't re-run. Same applies to `gjs.graph.setEdgeData(srcId, destId, data)`.
@@ -133,6 +168,22 @@ gjs.renderer.clearNodeConfig("alice");   // reset to defaults
 ```
 
 Setting config properties merges them with previously set config. `setEdgeConfig` throws when the edge doesn't exist (in a directed graph, node id order matters).
+
+### Node images
+
+```js
+gjs.renderer.setDefaultNodeConfig({ image: node => node.data.avatar ?? null });
+```
+
+The image is scaled to cover the node and clipped to its circle. Until it loads, or if it fails to load, the node is filled with its `color` instead. Images are fetched with the renderer's `crossOrigin` and `imageReferrerPolicy` options.
+
+To avoid nodes appearing before their images do, start the requests early:
+
+```js
+gjs.renderer.loadImage("https://example.com/alice.png");
+```
+
+Unused images are cleaned up periodically as nodes are removed, so preload shortly before the nodes that use them are added.
 
 ## Dragging nodes
 
@@ -172,6 +223,29 @@ gjs.canvasToSim(100, 50);    // converts the coordinates (100, 50) on the canvas
 
 These helpers, and `nodeAt()` and `pin()` above, require an attached canvas and throw without one.
 
+## Panning and zooming
+
+The renderer's `view` holds the simulation coordinates at the center of the canvas, and a zoom factor (canvas pixels per simulation unit):
+
+```js
+gjs.renderer.view.zoom = 2;                     // change one field
+gjs.renderer.view = { x: 0, y: 0, zoom: 1 };    // or several at once
+```
+
+Zooming toward the cursor means keeping the point under it fixed:
+
+```js
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const [x, y] = toCanvas(e);
+  const [bx, by] = gjs.canvasToSim(x, y);
+  gjs.renderer.view.zoom *= e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const [ax, ay] = gjs.canvasToSim(x, y);
+  gjs.renderer.view.x += bx - ax;
+  gjs.renderer.view.y += by - ay;
+}, { passive: false });
+```
+
 ## Running the animation
 
 ```js
@@ -191,6 +265,50 @@ new ResizeObserver(() => gjs.resize()).observe(canvas);
 ```
 
 `resize()` is safe to call even when no canvas is attached.
+
+### Settling
+
+The layout cools as it runs. Each tick, the simulation's temperature is multiplied by `cooling`, and forces are scaled by it. Once it drops below `freezePoint`, the nodes stop and the simulation does no more work until something wakes it. The canvas is still redrawn every frame, so panning and zooming keep working.
+
+The layout wakes on its own when:
+
+- nodes or edges are added or removed
+- a config or data change alters a node's `radius`, `mass` or `fixed`
+- options are changed with `setOpts()`
+- a node is pinned somewhere new
+
+Changes the library can't see need a manual `heat()`:
+
+```js
+const node = gjs.simulation.nodes.get("alice");
+node.vx += 20;                  // a direct change to a node's position or velocity
+gjs.simulation.heat();          // full temperature: the layout moves again
+
+gjs.simulation.heat(0.3);       // a gentler nudge
+gjs.simulation.temp;            // current temperature; 0 means frozen
+```
+
+## Reading graph and simulation state
+
+The layers expose their internal state as read-only properties, for custom drawing, statistics, or hit-testing:
+
+```js
+gjs.graph.nodes;             // Map: id -> { id, data }
+gjs.graph.edges;             // Set of { src, dest, data }
+gjs.graph.directed;
+
+gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, fixed, ... }
+gjs.simulation.nodeList;     // the same nodes as an array
+```
+
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+
+## Upgrading from 0.4
+
+- **The layout now settles and stops.** It wakes automatically after the changes listed under [Settling](#settling). If you move nodes or change their velocities directly, call `gjs.simulation.heat()` afterwards.
+- **Layer properties are read-only.** `opts`, `canvas`, `ctx`, `size`, `graph`, `simulation`, `renderer`, `nodes` and similar properties can no longer be reassigned; doing so throws a `TypeError` in modules and strict mode, and is silently ignored elsewhere. Use `setOpts()`, `attach()` and the config methods instead. `renderer.view` is the exception: it can still be assigned, and the given fields are merged in.
+- **Former internal properties have public names.** For example, `simulation._nodeList` is now `simulation.nodeList`, `_edgePairs` is `edgePairs`, `renderer._nodeStyles` is `nodeStyles`, and `renderer._loadImage()` is `loadImage()`.
+- **`JSON.stringify(graph)` no longer includes `directed`.** Read `graph.directed` instead.
 
 ## Upgrading from 0.2
 
