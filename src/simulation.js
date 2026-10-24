@@ -501,7 +501,7 @@ export class Simulation {
    * Uses Coulomb's law, without any charge parameters.
    * @returns {void}
    */
-  _apply_repulsion() {
+  _applyRepulsion() {
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -528,7 +528,7 @@ export class Simulation {
    * Applies spring forces between nodes connected by edges.
    * @returns {void}
    */
-  _apply_springs() {
+  _applySprings() {
     const list = this._nodeList;
     const springs = this._springs;
     for (let i = 0; i < springs.length; i += 2) {
@@ -546,7 +546,7 @@ export class Simulation {
    * Applies graviational acceleration towards the origin
    * @returns {void}
    */
-  _apply_gravity() {
+  _applyGravity() {
     const list = this._nodeList;
     const g = this._opts.gravity;
     for (let i = 0; i < list.length; i++) {
@@ -560,7 +560,7 @@ export class Simulation {
    * Pushes intersecting nodes apart.
    * @returns {void}
    */
-  _enforce_radius() {
+  _enforceRadius() {
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -604,9 +604,9 @@ export class Simulation {
 
     if (!this._temp) return this;
 
-    this._apply_repulsion();
-    this._apply_springs();
-    this._apply_gravity();
+    this._applyRepulsion();
+    this._applySprings();
+    this._applyGravity();
 
     const maxV = this._opts.maxSpeed;
     for (let i = 0; i < list.length; i++) {
@@ -631,7 +631,7 @@ export class Simulation {
     }
 
     // Enforce radius
-    this._enforce_radius();
+    this._enforceRadius();
     return this;
   }
 

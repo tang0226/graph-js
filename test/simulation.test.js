@@ -242,7 +242,7 @@ describe("Simulation: springs and edge pairs", () => {
       const A = sim.nodes.get("a"), B = sim.nodes.get("b");
       A.x = 0; A.y = 0; B.x = 200; B.y = 0;
       A.fx = 0; A.fy = 0; B.fx = 0; B.fy = 0;
-      sim._apply_springs();
+      sim._applySprings();
       return A.fx;
     }
     assert.equal(force(pairSim(true, [["a", "b"], ["b", "a"]])),
@@ -347,7 +347,7 @@ describe("Simulation: integration", () => {
     sim.sync();
     const A = sim.nodes.get("a"), B = sim.nodes.get("b");
     A.x = 0; A.y = 0; B.x = 5; B.y = 0;
-    sim._enforce_radius();
+    sim._enforceRadius();
     assert.ok(Math.hypot(A.x - B.x, A.y - B.y) >= 39.99);
   });
 });
