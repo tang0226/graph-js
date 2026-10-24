@@ -862,7 +862,6 @@ export class Renderer {
 
 
   /**
-   * 
    * @returns {boolean} whether the `sync()` and render took place
    */
   render() {
@@ -890,32 +889,43 @@ export class Renderer {
 
     // Render nodes
     for (const i of toRender.nodesI) {
-      const nodeStyle = this._nodeStyles[i];
-      const sNode = sim.nodeList[i];
-      const [cx, cy] = this.simToCanvas(sNode.x, sNode.y);
-      const r = sNode.radius * this._view.zoom;
-      this._ctx.beginPath();
-      this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-      const img = nodeStyle.image && this._images.get(nodeStyle.image);
-      if (img && typeof img !== "string") {
-        const scale = r * 2 / Math.min(img.width, img.height);
-        const dw = img.width * scale, dh = img.height * scale;
-        this._ctx.save();
-        this._ctx.clip();
-        this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
-        this._ctx.restore();
-      } else {
-        this._ctx.fillStyle = nodeStyle.color;
-        this._ctx.fill();
-      }
-      if (nodeStyle.outlineWidth) {
-        this._ctx.strokeStyle = nodeStyle.outlineColor;
-        this._ctx.lineWidth = nodeStyle.outlineWidth;
-        this._ctx.stroke();
-      }
+      this._drawNode(sim.nodeList[i], this._nodeStyles[i])
     }
 
     return true;
+  }
+
+
+  /**
+   * Draws a node on the canvas, positioned and sized according to a `SimNode`
+   * object and styled according to a `NodeStyle` object.
+   * @param {SimNode} sNode - simulation's node body object
+   * @param {NodeStyle} nodeStyle - node style
+   * @returns {void}
+   */
+  _drawNode(sNode, nodeStyle) {
+    if (!this._ctx) return;
+    const [cx, cy] = this.simToCanvas(sNode.x, sNode.y);
+    const r = sNode.radius * this._view.zoom;
+    this._ctx.beginPath();
+    this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+    const img = nodeStyle.image && this._images.get(nodeStyle.image);
+    if (img && typeof img !== "string") {
+      const scale = r * 2 / Math.min(img.width, img.height);
+      const dw = img.width * scale, dh = img.height * scale;
+      this._ctx.save();
+      this._ctx.clip();
+      this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+      this._ctx.restore();
+    } else {
+      this._ctx.fillStyle = nodeStyle.color;
+      this._ctx.fill();
+    }
+    if (nodeStyle.outlineWidth) {
+      this._ctx.strokeStyle = nodeStyle.outlineColor;
+      this._ctx.lineWidth = nodeStyle.outlineWidth;
+      this._ctx.stroke();
+    }
   }
 
 
