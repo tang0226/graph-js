@@ -1,21 +1,16 @@
+/**
+ * @import {
+ *  NodeData,
+ *  Canvas,
+ *  GraphJSOpts
+ * } from './typedefs.js'
+ */
+
+
 import { Graph } from "./graph.js";
 import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
 
-/** @typedef {import("./types.js").Canvas} Canvas */
-/** @typedef {import("./graph.js").NodeData} NodeData */
-
-/** @typedef {import("./graph.js").GraphOpts} GraphOpts */
-/** @typedef {import("./simulation.js").SimOptsInput} SimOptsInput */
-/** @typedef {import("./renderer.js").RendererOptsInput} RendererOptsInput */
-
-/**
- * @typedef {object} GraphJSOpts
- * @property {GraphOpts} [graph] - options for the `Graph`
- * @property {SimOptsInput} [simulation] - options for the `Simulation`
- * @property {RendererOptsInput} [renderer] - options for the `Renderer`
- * @property {Canvas} [canvas] - canvas to render to
- */
 
 /**
  * Unified interface over the `Graph`, `Simulation`, and `Renderer` layers.

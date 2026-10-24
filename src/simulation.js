@@ -1,83 +1,16 @@
+/**
+ * @import { Graph } from './graph.js'
+ */
+/**
+ * @import {
+ *  GraphNode, GraphEdge,
+ *  SimNode, SimNodeConfig, SimNodeAccessors,
+ *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
+ *  SimOpts, SimOptsInput
+ * } from './typedefs.js'
+ */
+
 import { asFn } from "./utils.js";
-
-/** @typedef {import("./graph.js").Graph} Graph */
-/** @typedef {import("./graph.js").GraphNode} GraphNode */
-/** @typedef {import("./graph.js").GraphEdge} GraphEdge */
-/**
- * @template T
- * @typedef {import("./types.js").NodeAccessor<T>} NodeAccessor
- */
-/**
- * @template T
- * @typedef {import("./types.js").NodeOption<T>} NodeOption
- */
-
-
-/**
- * @typedef {object} SimOpts
- * @property {number} friction - friction coefficient to apply to all node
- *    velocities each tick
- * @property {number} gravity - strength of pull toward (0, 0), applied as a
- *    force proportional to distance
- * @property {number} repulsion - coefficient for inverse-square repulsion
- *    calculations
- * @property {number} springStiffness - coefficient for spring forces
- * @property {number} springLength - target length of edges/springs between nodes
- * @property {number} minDistSq - minimum distance to clamp to before applying
- *    repulsive force between two nodes (to avoid extreme velocities from the
- *    inverse-square law)
- * @property {number} maxSpeed - maximum speed of each node (clamped to at the
- *    end of each tick)
- * @property {number} cooling - coefficient to decay temperature by each tick
- * @property {number} freezePoint - temperature value below which temp is set
- *    to 0
- */
-/** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig }} SimOptsInput */
-
-/**
- * Full simulation node object. Position and velocity props can be set directly,
- * but `mass`, `radius`, and `fixed` must be set using `setNodeConfig()`.
- * @typedef {object} SimNode
- * @property {any} id - node id (matches corresponding `GraphNode`)
- * @property {number} mass - physical mass of the node
- * @property {number} radius - physical (and rendered) radius of the node
- * @property {boolean} fixed - whether the node is immovable
- * @property {number} x - x coordinate
- * @property {number} y - y coordinate
- * @property {number} vx - x velocity
- * @property {number} vy - y velocity
- * @property {number} fx - [temp] x force total, reset and populated every tick
- * @property {number} fy - [temp] y force total, reset and populated every tick
- */
-
-/**
- * Partial config specifier
- * @typedef {object} SimNodeConfig
- * @property {NodeOption<number>} [mass] - physical mass of the node
- * @property {NodeOption<number>} [radius] - physical (and rendered) radius of the node
- * @property {NodeOption<boolean>} [fixed] - whether the node is immovable
- */
-
-/**
- * Fully populated config after merging with defaults.
- * @typedef {Required<SimNodeConfig>} ResolvedSimNodeConfig
- */
-
-/**
- * Sim-node options collapsed into functions
- * @typedef {object} SimNodeAccessors
- * @property {NodeAccessor<number>} [mass] - function returning the physical
- *    mass of a node
- * @property {NodeAccessor<number>} [radius] - function returning the radius of
- *    a node
- * @property {NodeAccessor<boolean>} [fixed] - function returning whether a node
- *    is immovable
- */
-
-/**
- * Fully populated config accessors
- * @typedef {Required<SimNodeAccessors>} ResolvedSimNodeAccessors
- */
 
 
 /** @type {{ mass: number, radius: number, fixed: boolean }} */

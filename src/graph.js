@@ -1,26 +1,4 @@
-/**
- * Custom data for a node. Any fields are allowed; `id`, if present, becomes
- * the node's id when no explicit `id` argument is passed.
- * @typedef {{ id?: any, [key: string]: any }} NodeData
- */
-
-/**
- * @typedef {object} GraphNode
- * @property {any} id - id of the node
- * @property {any} data - custom data associated with the node
- */
-
-/**
- * @typedef {object} GraphEdge
- * @property {GraphNode} src - source node (order does not matter in an undirected graph)
- * @property {GraphNode} dest - destination node (order does not matter in an undirected graph)
- * @property {any} data - custom data associated with the edge
-*/
-
-/**
- * @typedef {object} GraphOpts
- * @property {boolean} [directed=false] - whether the graph is directed; fixed at instantiation
- */
+/** @import {NodeData, GraphNode, GraphEdge} from './typedefs.js' */
 
 /**
  * Represents the shape of a directed or undirected graph and stores custom data for nodes and edges.
