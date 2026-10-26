@@ -1,15 +1,15 @@
-/** @import {NodeData, GraphNode, GraphEdge} from './typedefs.js' */
+/** @import {NodeId, NodeData, GraphNode, GraphEdge} from './typedefs.js' */
 
 /**
  * Represents the shape of a directed or undirected graph and stores custom data for nodes and edges.
  */
 export class Graph {
-  /** @type {Map<any, GraphNode>} */
+  /** @type {Map<NodeId, GraphNode>} */
   _nodes = new Map();
   /**
    * [read-only]
    * Map of nodes, keyed by id.
-   * @returns {ReadonlyMap<any, GraphNode>}
+   * @returns {ReadonlyMap<NodeId, GraphNode>}
    */
   get nodes() { return this._nodes; }
 
@@ -25,13 +25,13 @@ export class Graph {
   get edges() { return this._edges; }
 
 
-  /** @type {Map<any, Map<any, GraphEdge>>} */
+  /** @type {Map<NodeId, Map<NodeId, GraphEdge>>} */
   _adjacency = new Map();
   /**
    * [read-only]
    * Nested lookup map (`srcId -> destId -> Edge`).
    * Symmetric in an undirected graph: both directions reference the *same* Edge object.
-   * @returns {ReadonlyMap<any, ReadonlyMap<any, GraphEdge>>}
+   * @returns {ReadonlyMap<NodeId, ReadonlyMap<NodeId, GraphEdge>>}
    */
   get adjacency() { return this._adjacency; }
 
@@ -87,7 +87,7 @@ export class Graph {
 
   /**
    * Returns the degree (out-degree in a digraph) of a node based on node id, or 0 if the node is not found.
-   * @param {any} id - id of the node
+   * @param {NodeId} id - id of the node
    * @returns {number} degree (out-degree in a digraph) of the corresponding node, or 0 if the node was not found
    */
   degree(id) { return this._adjacency.get(id)?.size ?? 0; }
@@ -98,8 +98,8 @@ export class Graph {
    * If an id is not specified in the data object or id field, addNode will generate an id automatically using crypto.randomUUID().
    * If the id is already in use, no node is added and the existing id is returned.
    * @param {NodeData} [data] - custom data to associate with the node
-   * @param {any} [id] - id of the new node; defaults to `data.id`, then a random UUID
-   * @returns {any} id of the node
+   * @param {NodeId} [id] - id of the new node; defaults to `data.id`, then a random UUID
+   * @returns {NodeId} id of the node
    */
   addNode(data = {}, id = data.id ?? crypto.randomUUID()) {
     if (this._nodes.has(id)) return id;
@@ -112,7 +112,7 @@ export class Graph {
 
   /**
    * Removes a node from the graph by id and deletes all connected edges. Returns false if the node does not exist.
-   * @param {any} id - id of target node
+   * @param {NodeId} id - id of target node
    * @returns {boolean} success of the removal
    */
   removeNode(id) {
@@ -131,7 +131,7 @@ export class Graph {
 
   /**
    * Sets the custom data of a node by id.
-   * @param {any} id - id of target node
+   * @param {NodeId} id - id of target node
    * @param {any} data - data to set
    * @returns {this} self reference
    * @throws {ReferenceError} thrown if given id matches no existing node
@@ -147,8 +147,8 @@ export class Graph {
 
   /**
    * Adds an edge to the graph based on two node ids (order does not matter in an undirected graph).
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @param {any} [data={}] - custom data to associate with the edge
    * @returns {boolean} whether the edge was successfully added
    * @throws {ReferenceError} thrown if either id matches no existing node
@@ -171,8 +171,8 @@ export class Graph {
   /**
    * Removes an edge from the graph based on two node ids (order does not matter in an undirected graph).
    * Unknown node ids are treated as "no such edge" and return false (no throws).
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {boolean} whether the edge was successfully removed
    */
   removeEdge(srcId, destId) {
@@ -188,8 +188,8 @@ export class Graph {
 
   /**
    * Get an edge based on two node ids (order does not matter in an undirected graph).
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {GraphEdge|undefined} corresponding edge, or undefined if not found
    */
   getEdge(srcId, destId) { return this._adjacency.get(srcId)?.get(destId); }
@@ -197,8 +197,8 @@ export class Graph {
 
   /**
    * Checks if the graph contains an edge with particular source and destination ids (order does not matter in an undirected graph).
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {boolean} whether the graph contains the edge
    */
   hasEdge(srcId, destId) { return this._adjacency.get(srcId)?.has(destId) ?? false; }
@@ -206,8 +206,8 @@ export class Graph {
 
   /**
    * Sets the custom data field of an edge, selected by node ids.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @param {any} data - custom data to set
    * @returns {this} self reference
    * @throws {ReferenceError} thrown if no edge exists between the given nodes

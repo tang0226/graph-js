@@ -1,20 +1,20 @@
 /** @import { Graph } from './graph.js' */
 /**
  * @import {
- *  GraphNode, GraphEdge, SimNode,
+ *  NodeId, GraphNode, GraphEdge, SimNode,
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
  *  NodeStyleAccessors, EdgeStyleAccessors,
  *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
- *  RendererOpts, RendererOptsInput,
- *  Canvas, CanvasContext, Size, View
+ *  RendererOpts, RendererOptsInput, HighlightMode,
+ *  Canvas, CanvasContext, Size, View,
  * } from './typedefs.js'
  */
 
 
 import { Simulation } from "./simulation.js";
-import { asFn, circleRectCollision } from "./utils.js";
+import { asFn, clamp, circleRectCollision } from "./utils.js";
 
 
 /** @type {RendererOpts} */
@@ -23,6 +23,8 @@ const RENDERER_DEFAULTS = {
   renderEdges: true,
   imageReferrerPolicy: "no-referrer",
   crossOrigin: "anonymous",
+  highlightMode: "dim",
+  highlightAlpha: 0.15,
 };
 
 /** @type {NodeStyle} */
@@ -67,13 +69,14 @@ const toEdgeAccessors = config => ({
   bow: asFn(config.bow),
 });
 
+
+
 /**
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
  */
 export class Renderer {
   static IMAGE_LOADING = "loading";
   static IMAGE_FAILED = "failed";
-
 
   /** @type {Graph} */
   _graph;
@@ -138,12 +141,12 @@ export class Renderer {
   set view(v) { Object.assign(this._view, v); }
 
 
-  /** @type {Map<any, NodeStyle>} */
+  /** @type {Map<NodeId, NodeStyle>} */
   _nodes = new Map();
   /**
    * [read-only] Cached map of resolved node styles, keyed by node id from the underlying
    * `Graph`. Recreated in effective `sync()` calls.
-   * @returns {ReadonlyMap<any, NodeStyle>}
+   * @returns {ReadonlyMap<NodeId, NodeStyle>}
    */
   get nodes() { return this._nodes; }
 
@@ -185,7 +188,7 @@ export class Renderer {
    * Node-specific style config overrides. Node style config here takes
    * precedence over global defaults and the `Renderer`'s current
    * `_defaultNodeConfig`
-   * @type {Map<any, NodeStyleAccessors>}
+   * @type {Map<NodeId, NodeStyleAccessors>}
    */
   _nodeOverrides = new Map();
 
@@ -241,6 +244,39 @@ export class Renderer {
   _edgeBow = new Int8Array(0);
 
 
+  /** @type {Set<NodeId>}*/
+  _highlightedNodes = new Set();
+  /**
+   * Ids of highlighted nodes. Modified via `highlight()`.
+   * @returns {ReadonlySet<NodeId>}
+   */
+  get highlightedNodes() { return this._highlightedNodes; }
+
+
+  /**
+   * Array of highlight state flags parallel to `Simulation.nodeList`
+   * @type {Uint8Array}
+   */
+  _nodeHighlightState = new Uint8Array(0);
+
+
+  /** @type {Set<GraphEdge>}*/
+  _highlightedEdges = new Set();
+  /**
+   * Highlighted edge objects. Modified via `highlight()`.
+   * @returns {ReadonlySet<GraphEdge>}
+   */
+  get highlightedEdges() { return this._highlightedEdges; }
+
+
+  /**
+   * Array of highlight state flags parallel to `Simulation.edgeList`
+   * @type {Uint8Array}
+   */
+  _edgeHighlightState = new Uint8Array(0);
+
+
+
   /** @type {Map<string, HTMLImageElement | string>} */
   _images = new Map();
   /**
@@ -290,9 +326,10 @@ export class Renderer {
     this._opts = {
       background: opts.background ?? RENDERER_DEFAULTS.background,
       renderEdges: opts.renderEdges ?? RENDERER_DEFAULTS.renderEdges,
+      highlightMode: opts.highlightMode ?? RENDERER_DEFAULTS.highlightMode,
+      highlightAlpha: clamp(opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha, 0, 1),
       imageReferrerPolicy:
         opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
-      
       crossOrigin: opts.crossOrigin === undefined ?
         RENDERER_DEFAULTS.crossOrigin : opts.crossOrigin,
     };
@@ -311,8 +348,11 @@ export class Renderer {
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
    */
-  setOpts({canvas, nodeConfig, edgeConfig, ...opts} = {}) {
+  setOpts({canvas, nodeConfig, edgeConfig, highlightAlpha, ...opts} = {}) {
     Object.assign(this._opts, opts);
+    if (highlightAlpha !== undefined) {
+      this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
+    }
     if (canvas) this.attach(canvas);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
@@ -392,7 +432,7 @@ export class Renderer {
 
   /**
    * Merges new config data into a node's current style overrides.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {NodeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
    */
@@ -412,7 +452,7 @@ export class Renderer {
 
   /**
    * Clears all of a node's style overrides
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
@@ -437,8 +477,8 @@ export class Renderer {
 
   /**
    * Merges new config data into an edge's current style overrides.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @param {EdgeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
    * @throws {Error} throws if edge not found
@@ -461,8 +501,8 @@ export class Renderer {
 
   /**
    * Clears all of an edge's style overrides.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {this} self reference
    */
   clearEdgeConfig(srcId, destId) {
@@ -503,6 +543,105 @@ export class Renderer {
     // unset (null/undefined) means "whatever the graph is"
     const arrow = o?.arrow?.(gEdge, g) ?? acc.arrow(gEdge, g);
     rEdge.arrow = arrow === null || arrow === undefined ? g.directed : arrow === true;
+  }
+
+
+  /**
+   * Overwrites highlighted elements and highlight options.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes=[]] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges=[]] - list of edges as node id pairs
+   * @param {HighlightMode} [params.mode] - highlight mode
+   * @param {number} [params.alpha] - dim alpha
+   * @returns {this} self reference
+   */
+  setHighlight({ nodes = [], edges = [], mode, alpha} = { nodes: [], edges: [] }) {
+    const optsToSet = {};
+    if (mode !== undefined) optsToSet.highlightMode = mode;
+    if (alpha !== undefined) optsToSet.highlightAlpha = alpha;
+    this.setOpts(optsToSet);
+    this.clearHighlight();
+    this.addHighlight({ nodes, edges });
+    return this;
+  }
+
+
+  /**
+   * Highlights selected elements.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
+   * @returns {this} self reference
+   */
+  addHighlight({ nodes = [], edges = [] } = {}) {
+    // Sync graph structure first
+    this.sync();
+    
+    for (const id of nodes) {
+      const i = this.simulation.nodeIndex.get(id);
+      if (i === undefined) continue;
+      this._nodeHighlightState[i] = 1;
+      this._highlightedNodes.add(id);
+    }
+    for (const idPair of edges) {
+      const edge = this.graph.getEdge(...idPair);
+      if (!edge) continue;
+      const i = this.simulation.edgeIndex.get(edge);
+      if (i === undefined) continue;
+      this._edgeHighlightState[i] = 1;
+      this._highlightedEdges.add(edge);
+    }
+    return this;
+  }
+
+
+  /**
+   * Clears highlights from selected elements, or all highlights if no inputs
+   * are defined.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
+   * @returns {this} self reference
+   */
+  clearHighlight({ nodes, edges } = {}) {
+    // Sync graph structure first
+    this.sync();
+
+    // Clear all if no elements are defined
+    if (!nodes && !edges) {
+      this._highlightedNodes.clear();
+      this._nodeHighlightState.fill(0);
+      this._highlightedEdges.clear();
+      this._edgeHighlightState.fill(0);
+      return this;
+    }
+    if (nodes) {
+      for (const id of nodes) {
+        this._highlightedNodes.delete(id);
+        const i = this.simulation.nodeIndex.get(id);
+        if (i === undefined) continue;
+        this._nodeHighlightState[i] = 0;
+      }
+    }
+    if (edges) {
+      for (const idPair of edges) {
+        const edge = this.graph.getEdge(...idPair);
+        if (!edge) continue;
+        this._highlightedEdges.delete(edge);
+        const i = this.simulation.edgeIndex.get(edge);
+        if (i === undefined) continue;
+        this._edgeHighlightState[i] = 0;
+      }
+    }
+    return this;
+  }
+
+
+  /**
+   * @returns {boolean} whether the renderer has any highlighted elements
+   */
+  hasHighlight() {
+    return this._highlightedNodes.size > 0 || this._highlightedEdges.size > 0;
   }
 
 
@@ -572,6 +711,8 @@ export class Renderer {
    * @returns {boolean} whether cached node and edge render configs were modified
    */
   sync() {
+    this._simulation.sync();
+
     if (this._syncedDataVersion !== this._graph.dataVersion) {
       this._stylesDirty = true;
       this._syncedDataVersion = this._graph.dataVersion;
@@ -612,6 +753,7 @@ export class Renderer {
         if (this._nodes.get(id)?.image) this._imageDebt++;
         this._nodes.delete(id);
         this._nodeOverrides.delete(id);
+        this._highlightedNodes.delete(id);
       }
     }
     if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
@@ -621,10 +763,12 @@ export class Renderer {
       if (!this._graph.edges.has(gEdge)) {
         this._edges.delete(gEdge);
         this._edgeOverrides.delete(gEdge);
+        this._highlightedEdges.delete(gEdge);
       }
     }
 
-    // Refresh style caches
+    // Refresh caches
+
     // Node styles
     this._nodeStyles = [];
     for (const sNode of this._simulation.nodeList) {
@@ -635,7 +779,7 @@ export class Renderer {
     const sim = this._simulation;
 
     // Edge pairs
-    const refs = sim.edgeRefs;
+    const refs = sim.edgeList;
     this._edgeStyles = [];
     for (let k = 0; k < refs.length; k++) {
       const edge = this._edges.get(refs[k]);
@@ -654,6 +798,18 @@ export class Renderer {
       if (a === b || !this._graph.directed) { this._edgeBow[k] = 0; continue; }
       this._edgeBow[k] = this._graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
     }
+
+    // Highlight state
+    this._nodeHighlightState = new Uint8Array(sim.nodeList.length);
+    for (const [i, node] of sim.nodeList.entries()) {
+      this._nodeHighlightState[i] = this._highlightedNodes.has(node.id) ? 1 : 0;
+    }
+
+    this._edgeHighlightState = new Uint8Array(sim.edgeList.length);
+    for (const [i, edge] of sim.edgeList.entries()) {
+      this._edgeHighlightState[i] = this._highlightedEdges.has(edge) ? 1 : 0;
+    }
+
 
     this._syncedSimulation = this._simulation.version;
     this._version++;
@@ -688,76 +844,6 @@ export class Renderer {
     if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
     const v = this._view;
     return [(x - this._size.w / 2) / v.zoom + v.x, (y - this._size.h / 2) / v.zoom + v.y];
-  }
-
-
-  /**
-   * Culls all nodes and edges fully outside the current view.
-   * Only keeps on-screen nodes and edges connected to at least
-   * one on-screen node.
-   * @returns {{nodesI: number[], edgesI: number[]}}
-   */
-  _cull() {
-    if (!this._size) return { nodesI: [], edgesI: [] };
-    const [xMin, yMin] = this.canvasToSim(0, 0);
-    const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
-
-    const nodesI = [];
-    const shouldRender = new Set();
-    const sim = this._simulation;
-    for (let i = 0; i < sim.nodeList.length; i++) {
-      const sNode = sim.nodeList[i];
-      if (circleRectCollision(sNode.x, sNode.y, sNode.radius, xMin, xMax, yMin, yMax)) {
-        nodesI.push(i);
-        shouldRender.add(i);
-      }
-    }
-
-    const edgesI = [];
-    if (this._opts.renderEdges) {
-      const ep = sim.edgePairs;
-      for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
-        if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
-          edgesI.push(i);
-      }
-    }
-
-    return { nodesI, edgesI };
-  }
-
-
-  /**
-   * @returns {boolean} whether the `sync()` and render took place
-   */
-  render() {
-    if (!this._ctx || !this._size) return false;
-    this.sync();
-
-    const toRender = this._cull();
-    const sim = this._simulation;
-
-    this._ctx.fillStyle = this._opts.background;
-    this._ctx.fillRect(0, 0, this._size.w, this._size.h);
-
-    // Render edges
-    if (this._opts.renderEdges) {
-      for (const i of toRender.edgesI) {
-        const iDbl = 2 * i;
-        this._drawEdge(
-          sim.nodeList[sim.edgePairs[iDbl]],
-          sim.nodeList[sim.edgePairs[iDbl + 1]],
-          this._edgeStyles[i],
-          this._edgeBow[i],
-        );
-      }
-    }
-
-    // Render nodes
-    for (const i of toRender.nodesI) {
-      this._drawNode(sim.nodeList[i], this._nodeStyles[i])
-    }
-
-    return true;
   }
 
 
@@ -925,12 +1011,121 @@ export class Renderer {
     }
   }
 
+  
+  /**
+   * Draws a node identified by cache index.
+   * @param {number} i - cache index of node
+   */
+  _renderNodeByIndex(i) {
+    this._drawNode(this.simulation.nodeList[i], this._nodeStyles[i]);
+  }
+
+
+  /**
+   * Draws an edge identified by cache index.
+   * @param {number} i - cache index of edge
+   */
+  _renderEdgeByIndex(i) {
+    const sim = this.simulation;
+    const iDbl = 2 * i;
+    this._drawEdge(
+      sim.nodeList[sim.edgePairs[iDbl]],
+      sim.nodeList[sim.edgePairs[iDbl + 1]],
+      this._edgeStyles[i],
+      this._edgeBow[i],
+    );
+  }
+
+
+  /**
+   * Culls all nodes and edges fully outside the current view.
+   * Only keeps on-screen nodes and edges connected to at least
+   * one on-screen node.
+   * @returns {{nodesI: number[], edgesI: number[]}}
+   */
+  _cull() {
+    if (!this._size) return { nodesI: [], edgesI: [] };
+    const [xMin, yMin] = this.canvasToSim(0, 0);
+    const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
+
+    const nodesI = [];
+    const shouldRender = new Set();
+    const sim = this._simulation;
+    for (let i = 0; i < sim.nodeList.length; i++) {
+      const sNode = sim.nodeList[i];
+      if (circleRectCollision(sNode.x, sNode.y, sNode.radius, xMin, xMax, yMin, yMax)) {
+        nodesI.push(i);
+        shouldRender.add(i);
+      }
+    }
+
+    const edgesI = [];
+    if (this._opts.renderEdges) {
+      const ep = sim.edgePairs;
+      for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
+        if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
+          edgesI.push(i);
+      }
+    }
+
+    return { nodesI, edgesI };
+  }
+
+
+  /**
+   * Renders the current view of the graph according to current styles and
+   * highlight state.
+   * @returns {boolean} whether the `sync()` and render took place
+   */
+  render() {
+    if (!this._ctx || !this._size) return false;
+    this.sync();
+
+    const inFrame = this._cull();
+    const renderEdges = this._opts.renderEdges;
+
+    this._ctx.fillStyle = this._opts.background;
+    this._ctx.fillRect(0, 0, this._size.w, this._size.h);
+
+    if (this.hasHighlight()) {
+      if (this.opts.highlightMode === "hide") {
+        for (const i of inFrame.edgesI) {
+          if (this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
+        }
+        for (const i of inFrame.nodesI) {
+          if (this._nodeHighlightState[i]) this._renderNodeByIndex(i);
+        }
+      } else {
+        this._ctx.globalAlpha = this._opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha;
+        for (const i of inFrame.edgesI) {
+          if (!this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
+        }
+        for (const i of inFrame.nodesI) {
+          if (!this._nodeHighlightState[i]) this._renderNodeByIndex(i);
+        }
+
+        this._ctx.globalAlpha = 1;
+        for (const i of inFrame.edgesI) {
+          if (this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
+        }
+        for (const i of inFrame.nodesI) {
+          if (this._nodeHighlightState[i]) this._renderNodeByIndex(i);
+        }
+      }
+    } else {
+      for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
+      for (const i of inFrame.nodesI) this._renderNodeByIndex(i);
+    }
+
+    return true;
+  }
+
 
   /**
    * Returns the id of a node at a specific point on the canvas
    * @param {number} cx - canvas x coordinate
    * @param {number} cy - canvas y coordinate
-   * @returns {any | null} node id
+   * @returns {NodeId | null} node id
    * @throws {Error} throws when no canvas is attached
    */
   nodeAt(cx, cy) {
@@ -949,7 +1144,7 @@ export class Renderer {
   /**
    * Returns the canvas coordinates of the node with the specified id, or null
    * if the node does not exist
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {[number, number] | null}
    * @throws {Error} throws when no canvas is attached
    */
@@ -962,7 +1157,7 @@ export class Renderer {
 
   /**
    * Finds a node by id and pins it to specified coordinates in canvas space
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {number} cx - canvas x coordinate to pin to
    * @param {number} cy - canvas y coordinate to pin to
    * @returns {boolean} whether the node was pinned (`false` if node not found)
@@ -976,7 +1171,7 @@ export class Renderer {
 
   /**
    * Unpins a node by id by reverting `fixed` to its default.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   unpin(id) { this._simulation.unpin(id); return this; }

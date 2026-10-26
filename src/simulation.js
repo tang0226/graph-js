@@ -3,7 +3,7 @@
  */
 /**
  * @import {
- *  GraphNode, GraphEdge,
+ *  NodeId, GraphNode, GraphEdge,
  *  SimNode, SimNodeConfig, SimNodeAccessors,
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
  *  SimOpts, SimOptsInput
@@ -46,12 +46,12 @@ export class Simulation {
   get opts() { return this._opts; }
 
 
-  /** @type {Map<any, SimNode>} */
+  /** @type {Map<NodeId, SimNode>} */
   _nodes = new Map();
   /**
    * Map of mutable physical node objects, keyed by keys used in the
    * underlying `graph` (mirrors Map shape of `Graph.nodes`).
-   * @returns {ReadonlyMap<any, SimNode>}
+   * @returns {ReadonlyMap<NodeId, SimNode>}
    */
   get nodes() { return this._nodes; }
 
@@ -79,13 +79,13 @@ export class Simulation {
 
 
   /**
-   * @type {Map<any, number>}
+   * @type {Map<NodeId, number>}
    */
   _nodeIndex = new Map();
   /**
    * Cached map connecting node ids to indices in `nodeList`.
    * Recreated in effective `sync()` calls.
-   * @returns {ReadonlyMap<any, number>}
+   * @returns {ReadonlyMap<NodeId, number>}
    */
   get nodeIndex() { return this._nodeIndex; }
 
@@ -113,22 +113,30 @@ export class Simulation {
   get edgePairs() { return this._edgePairs; }
 
 
+  /** @type {GraphEdge[]} */
+  _edgeList = [];
   /**
    * Cached edge objects, parallel to index pairs in `edgePairs`.
-   * @type {GraphEdge[]}
-   */
-  _edgeRefs = [];
-  /**
    * @returns {ReadonlyArray<GraphEdge>}
    */
-  get edgeRefs() { return this._edgeRefs; }
+  get edgeList() { return this._edgeList; }
+
+
+  /** @type {Map<GraphEdge, number>} */
+  _edgeIndex = new Map();
+  /**
+   * Cached map connecting edge objects to indices in `edgeList`.
+   * Recreated in effective `sync()` calls.
+   * @returns {ReadonlyMap<GraphEdge, number>}
+   */
+  get edgeIndex() { return this._edgeIndex; }
 
 
   /**
    * Node-specific config overrides.
    * Node props specified here get first priority over the simulation's current
    * default config and the global default config.
-   * @type {Map<any, SimNodeAccessors>}
+   * @type {Map<NodeId, SimNodeAccessors>}
    */
   _overrides = new Map();
 
@@ -255,7 +263,7 @@ export class Simulation {
 
   /**
    * Merges new config data into the current overrides of a specific node
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {SimNodeConfig} [config] - sim-node config
    * @returns {this} self reference
    */
@@ -275,7 +283,7 @@ export class Simulation {
 
   /**
    * Clears all config overrides for a specific node
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
@@ -398,7 +406,8 @@ export class Simulation {
       this._nodeList.push(sNode);
     }
 
-    const pairs = [], springs = [], refs = [], n = this._nodes.size;
+    const pairs = [], springs = [], n = this._nodes.size;
+    this._edgeList = [], this._edgeIndex = new Map();
     const seen = this._graph.directed ? new Set() : null;
 
     for (const edge of this._graph.edges) {
@@ -406,7 +415,9 @@ export class Simulation {
       const j = this._nodeIndex.get(edge.dest.id);
       if (i === undefined || j === undefined) continue;
       pairs.push(i, j);
-      refs.push(edge);
+      this._edgeIndex.set(edge, this._edgeList.length);
+      this._edgeList.push(edge);
+
       if (i === j) continue;
       if (seen) {
         const key = i < j ? i * n + j : j * n + i;
@@ -416,7 +427,6 @@ export class Simulation {
       springs.push(i, j);
     }
 
-    this._edgeRefs = refs;
     this._edgePairs = Int32Array.from(pairs);
     this._springs   = this._graph.directed ?
       Int32Array.from(springs) :
@@ -571,7 +581,7 @@ export class Simulation {
 
   /**
    * Gets the simulation coordinates of a node by id.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {[number, number] | null} the node's simulation coordinates, or
    *    `null` if it was not found
    */
@@ -584,7 +594,7 @@ export class Simulation {
 
   /**
    * Finds a node by id and pins it to specified coordinates in simulation space.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {number} x - simulation x coordinate to pin to
    * @param {number} y - simulation y coordinate
    * @returns {boolean} whether the node was pinned (`false` if node not found)
@@ -601,7 +611,7 @@ export class Simulation {
 
   /**
    * Unpins a node by id by reverting `fixed` to its default.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   unpin(id) { this.setNodeConfig(id, { fixed: undefined }); return this; }

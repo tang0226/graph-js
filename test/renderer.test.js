@@ -585,6 +585,217 @@ describe("Renderer: renderEdges", () => {
   });
 });
 
+describe("Renderer: highlighting", () => {
+  /* The stub context doesn't record state, so log globalAlpha writes into the
+     op stream. `draws()` then pairs each node circle (by its x: a=300, b=500)
+     and edge line with the alpha it was drawn at, in draw order. */
+  function trackAlpha(ctx) {
+    let alpha = 1;
+    Object.defineProperty(ctx, "globalAlpha", {
+      get: () => alpha,
+      set: v => { alpha = v; ctx.ops.push(["globalAlpha", v]); },
+      configurable: true,
+    });
+  }
+
+  function draws(ctx) {
+    const out = [];
+    let alpha = 1;
+    for (const [name, ...args] of ctx.ops) {
+      if (name === "globalAlpha") alpha = args[0];
+      else if (name === "arc") out.push([args[0] === 300 ? "a" : args[0] === 500 ? "b" : "?", alpha]);
+      else if (name === "lineTo") out.push(["edge", alpha]);
+    }
+    return out;
+  }
+
+  function hscene(opts) {
+    const s = scene(false, [["a", "b"]], { opts });
+    trackAlpha(s.ctx);
+    return s;
+  }
+
+  function render(r, ctx) { ctx.ops.length = 0; r.render(); return draws(ctx); }
+
+  describe("drawing", () => {
+    test("with nothing highlighted, everything is drawn at full alpha", () => {
+      const { r, ctx } = hscene();
+      assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 1]]);
+      assert.equal(opsNamed(ctx, "globalAlpha").length, 0, "the plain path must not touch alpha");
+    });
+
+    test("dim: the rest is drawn first at highlightAlpha, highlighted items on top", () => {
+      const { r, ctx } = hscene();
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual(render(r, ctx), [["edge", 0.15], ["b", 0.15], ["a", 1]]);
+      assert.equal(ctx.globalAlpha, 1, "alpha must be restored after the frame");
+    });
+
+    test("dim: a highlighted edge is drawn over dimmed nodes", () => {
+      const { r, ctx } = hscene();
+      r.setHighlight({ edges: [["a", "b"]] });
+      assert.deepEqual(render(r, ctx), [["a", 0.15], ["b", 0.15], ["edge", 1]]);
+    });
+
+    test("dim uses the configured alpha", () => {
+      const { r, ctx } = hscene({ highlightAlpha: 0.4 });
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual(render(r, ctx), [["edge", 0.4], ["b", 0.4], ["a", 1]]);
+    });
+
+    test("hide: only highlighted items are drawn", () => {
+      const { r, ctx } = hscene({ highlightMode: "hide" });
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual(render(r, ctx), [["a", 1]]);
+
+      r.setHighlight({ nodes: ["a", "b"], edges: [["a", "b"]] });
+      assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 1]]);
+    });
+
+    test("renderEdges: false still hides highlighted edges", () => {
+      const { r, ctx } = hscene({ renderEdges: false });
+      r.setHighlight({ edges: [["a", "b"]] });
+      assert.deepEqual(render(r, ctx), [["a", 0.15], ["b", 0.15]]);
+    });
+
+    test("an undirected edge can be highlighted from either end", () => {
+      const { r, ctx } = hscene();
+      r.setHighlight({ edges: [["b", "a"]] });
+      assert.deepEqual(render(r, ctx).find(([k]) => k === "edge"), ["edge", 1]);
+    });
+  });
+
+  describe("state", () => {
+    test("hasHighlight follows the highlighted sets", () => {
+      const { r } = hscene();
+      assert.equal(r.hasHighlight(), false);
+      r.setHighlight({ nodes: ["a"] });
+      assert.equal(r.hasHighlight(), true);
+      r.clearHighlight({ nodes: ["a"] });
+      assert.equal(r.hasHighlight(), false, "removing the last element ends highlighting");
+    });
+
+    test("setHighlight replaces the selection; addHighlight extends it", () => {
+      const { r } = hscene();
+      r.setHighlight({ nodes: ["a"] });
+      r.setHighlight({ nodes: ["b"] });
+      assert.deepEqual([...r.highlightedNodes], ["b"]);
+      r.addHighlight({ nodes: ["a"], edges: [["a", "b"]] });
+      assert.deepEqual([...r.highlightedNodes].sort(), ["a", "b"]);
+      assert.equal(r.highlightedEdges.size, 1);
+    });
+
+    test("clearHighlight() with no argument clears everything", () => {
+      const { r } = hscene();
+      r.setHighlight({ nodes: ["a", "b"], edges: [["a", "b"]] });
+      r.clearHighlight();
+      assert.equal(r.highlightedNodes.size, 0);
+      assert.equal(r.highlightedEdges.size, 0);
+      assert.equal(r.hasHighlight(), false);
+    });
+
+    test("partial clears remove only what is listed; an empty list removes nothing", () => {
+      const { r } = hscene();
+      r.setHighlight({ nodes: ["a", "b"], edges: [["a", "b"]] });
+      r.clearHighlight({ nodes: [] });
+      assert.equal(r.highlightedNodes.size, 2, "an empty list must not mean 'clear all'");
+      r.clearHighlight({ nodes: ["a"] });
+      assert.deepEqual([...r.highlightedNodes], ["b"]);
+      assert.equal(r.highlightedEdges.size, 1, "edges were not listed, so they stay");
+      r.clearHighlight({ edges: [["b", "a"]] });
+      assert.equal(r.highlightedEdges.size, 0);
+    });
+
+    test("clearing everything keeps the same Set instances", () => {
+      const { r } = hscene();
+      const nodes = r.highlightedNodes, edges = r.highlightedEdges;
+      r.setHighlight({ nodes: ["a"], edges: [["a", "b"]] });
+      r.clearHighlight();
+      assert.equal(r.highlightedNodes, nodes, "a held reference must not go stale");
+      assert.equal(r.highlightedEdges, edges);
+    });
+
+    test("unknown nodes and edges are ignored", () => {
+      const { r } = hscene();
+      assert.doesNotThrow(() => r.setHighlight({ nodes: ["nope"], edges: [["a", "nope"], ["b", "b"]] }));
+      assert.equal(r.hasHighlight(), false);
+      assert.doesNotThrow(() => r.clearHighlight({ nodes: ["nope"], edges: [["a", "nope"]] }));
+    });
+
+    test("the highlight methods chain", () => {
+      const { r } = hscene();
+      assert.equal(r.setHighlight({}).addHighlight({}).clearHighlight({}), r);
+    });
+  });
+
+  describe("syncing with the graph", () => {
+    test("a node added to the graph can be highlighted before any tick", () => {
+      const { g, r } = hscene();
+      g.addNode({ id: "c" });
+      r.setHighlight({ nodes: ["c"] });
+      assert.deepEqual([...r.highlightedNodes], ["c"]);
+    });
+
+    test("highlights stay on the right nodes when slots shift", () => {
+      const { g, sim, r } = hscene();
+      r.setHighlight({ nodes: ["b"] });
+      g.removeNode("a");                 // b moves from slot 1 to slot 0
+      g.addNode({ id: "c" });
+      r.render();
+      const flags = r._nodeHighlightState;
+      assert.equal(flags.length, sim.nodeList.length);
+      assert.equal(flags[sim.nodeIndex.get("b")], 1);
+      assert.equal(flags[sim.nodeIndex.get("c")], 0);
+    });
+
+    test("removed nodes and edges are pruned from the highlight", () => {
+      const { g, r } = hscene();
+      r.setHighlight({ nodes: ["a"], edges: [["a", "b"]] });
+      g.removeNode("a");                 // also removes the a-b edge
+      r.render();
+      assert.equal(r.highlightedNodes.size, 0);
+      assert.equal(r.highlightedEdges.size, 0);
+      assert.equal(r.hasHighlight(), false);
+
+      g.addNode({ id: "a" });
+      r.render();
+      assert.equal(r.highlightedNodes.size, 0, "a re-added id must not come back highlighted");
+    });
+  });
+
+  describe("options", () => {
+    test("defaults to dim at 0.15", () => {
+      const { r } = hscene();
+      assert.equal(r.opts.highlightMode, "dim");
+      assert.equal(r.opts.highlightAlpha, 0.15);
+    });
+
+    test("highlightAlpha is clamped to [0, 1] on every path", () => {
+      assert.equal(hscene({ highlightAlpha: 5 }).r.opts.highlightAlpha, 1);
+      const { r } = hscene();
+      r.setOpts({ highlightAlpha: -1 });
+      assert.equal(r.opts.highlightAlpha, 0);
+      r.setHighlight({ nodes: ["a"], alpha: 2 });
+      assert.equal(r.opts.highlightAlpha, 1);
+    });
+
+    test("setHighlight's mode and alpha are kept; omitting them leaves the options alone", () => {
+      const { r } = hscene();
+      r.setHighlight({ nodes: ["a"], mode: "hide", alpha: 0.5 });
+      r.setHighlight({ nodes: ["b"] });
+      assert.equal(r.opts.highlightMode, "hide", "an omitted mode must not reset or erase the option");
+      assert.equal(r.opts.highlightAlpha, 0.5);
+    });
+
+    test("clearing the highlight leaves the options alone", () => {
+      const { r } = hscene({ highlightMode: "hide", highlightAlpha: 0.3 });
+      r.setHighlight({ nodes: ["a"] }).clearHighlight();
+      assert.equal(r.opts.highlightMode, "hide");
+      assert.equal(r.opts.highlightAlpha, 0.3);
+    });
+  });
+});
+
 describe("Renderer: image request options", () => {
   /* A renderer with one image node per source. `requests` records each load
      as it was sent; see installImage. */

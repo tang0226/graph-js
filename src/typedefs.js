@@ -2,6 +2,10 @@
 /** @typedef {import("./graph").Graph} Graph */
 
 /**
+ * @typedef {any} NodeId
+ */
+
+/**
  * Custom data for a node. Any fields are allowed; `id`, if present, becomes
  * the node's id when no explicit `id` argument is passed.
  * @typedef {{ id?: any, [key: string]: any }} NodeData
@@ -130,6 +134,8 @@
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
 
+/** @typedef {"dim" | "hide"} HighlightMode */
+
 /**
  * @typedef {object} RendererOptsInput
  * @property {Canvas} [canvas] - canvas to render to
@@ -137,20 +143,15 @@
  * @property {NodeStyleConfig} [nodeConfig] - default node config
  * @property {EdgeStyleConfig} [edgeConfig] - default edge config
  * @property {boolean} [renderEdges] - whether to render edges
+ * @property {HighlightMode} [highlightMode] - highlight mode
+ * @property {number} [highlightAlpha] - highlight alpha
  * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
  *    for image requests.
  * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
  *    cross-origin parameter for image requests.
  */
 
-/**
- * @typedef {object} RendererOpts
- * @property {string} background - background color
- * @property {boolean} renderEdges - whether to render edges
- * @property {ReferrerPolicy} imageReferrerPolicy - referrer policy for image requests
- * @property {"anonymous" | "use-credentials" | null} crossOrigin - default
- *    cross-origin parameter for image requests
- */
+/** @typedef {Required<Omit<RendererOptsInput, "canvas" | "nodeConfig" | "edgeConfig">>} RendererOpts */
 
 /**
  * @typedef {object} Size

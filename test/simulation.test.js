@@ -224,11 +224,17 @@ describe("Simulation: springs and edge pairs", () => {
     assert.deepEqual([...sim.springs], [0, 1]);
   });
 
-  test("edgeRefs is parallel to edgePairs", () => {
+  test("edgeList is parallel to edgePairs", () => {
     const sim = pairSim(false, [["a", "b"]]);
-    assert.equal(sim.edgeRefs.length, sim.edgePairs.length / 2);
-    assert.equal(sim.edgeRefs[0].src.id, "a");
-    assert.equal(sim.edgeRefs[0].dest.id, "b");
+    assert.equal(sim.edgeList.length, sim.edgePairs.length / 2);
+    assert.equal(sim.edgeList[0].src.id, "a");
+    assert.equal(sim.edgeList[0].dest.id, "b");
+  });
+
+  test("edgeIndex maps edge objects to their slot in edgeList", () => {
+    const sim = pairSim(true, [["a", "b"], ["b", "a"], ["a", "a"]]);
+    assert.equal(sim.edgeIndex.size, sim.edgeList.length);
+    for (const [edge, i] of sim.edgeIndex) assert.equal(sim.edgeList[i], edge);
   });
 
   test("directed: reciprocal edges draw twice but pull once", () => {
@@ -497,7 +503,7 @@ describe("Simulation: temperature", () => {
 
     test("re-pinning a fixed node in place stays frozen", () => {
       const sim = frozen();
-      const [x, y] = sim.getPosition("n0");
+      const [x, y] = /** @type {[number, number]} */ (sim.getPosition("n0"));
       sim.pin("n0", x, y);
       sim.sync();
       assert.equal(sim.temp, 1, "fixed went false -> true, which is a physical change");

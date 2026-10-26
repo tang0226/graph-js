@@ -57,6 +57,8 @@ const gjs = new GraphJS({
     renderEdges: true,              // set false to draw nodes only
     crossOrigin: "anonymous",       // crossOrigin for node image requests
     imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
+    highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
+    highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     nodeConfig: { color: "#ffffff" },
     edgeConfig: { color: "#000000", width: 1 },
   },
@@ -244,6 +246,47 @@ canvas.addEventListener("wheel", e => {
   gjs.renderer.view.x += bx - ax;
   gjs.renderer.view.y += by - ay;
 }, { passive: false });
+```
+
+## Highlighting
+
+Highlighting draws selected nodes and edges normally, and everything else dimmed (or hidden). Edges are given as `[srcId, destId]` pairs.
+
+```js
+gjs.renderer.setHighlight({ nodes: ["alice", "bob"], edges: [["alice", "bob"]] });  // replaces the selection
+gjs.renderer.addHighlight({ nodes: ["carol"] });                                    // adds to it
+
+gjs.renderer.clearHighlight({ nodes: ["bob"] });   // removes only what's listed
+gjs.renderer.clearHighlight();                     // removes everything: normal drawing again
+
+gjs.renderer.hasHighlight();                       // true while anything is highlighted
+gjs.renderer.highlightedNodes;                     // read-only Set of ids
+```
+
+How the rest is drawn comes from the renderer's `highlightMode` and `highlightAlpha` options. `setHighlight()` can also set them, and they stay set for later highlights:
+
+```js
+gjs.renderer.setHighlight({ nodes: results, mode: "hide" });
+gjs.renderer.setOpts({ highlightMode: "dim", highlightAlpha: 0.3 });
+```
+
+Highlights follow the graph: they survive other nodes and edges being added or removed, and a highlighted node or edge that is removed drops out of the highlight.
+
+Edges aren't highlighted along with their nodes, so list them explicitly. For example, to highlight a node with its neighbours:
+
+```js
+function neighborhood(id) {
+  const nodes = new Set([id]), edges = [];
+  for (const e of gjs.graph.edges) {
+    if (e.src.id !== id && e.dest.id !== id) continue;
+    nodes.add(e.src.id);
+    nodes.add(e.dest.id);
+    edges.push([e.src.id, e.dest.id]);
+  }
+  return { nodes: [...nodes], edges };
+}
+
+gjs.renderer.setHighlight(neighborhood("alice"));
 ```
 
 ## Running the animation

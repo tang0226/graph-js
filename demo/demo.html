@@ -269,6 +269,10 @@
       <label for="zoom">Zoom</label><output id="zoomOut">1.00</output>
       <input type="range" id="zoom" min="0.01" max="4" step="0.01" value="1">
     </div>
+    <div class="row inline">
+      <label for="hoverHighlight">Highlight on hover</label>
+      <input type="checkbox" id="hoverHighlight">
+    </div>
     <div class="btns">
       <button id="recenter">Recenter</button>
     </div>
@@ -315,6 +319,7 @@ function buildGraph() {
   if (gjs) gjs.stop();
 
   gjs = new GraphJS({ canvas, graph: { directed: ui.directed } });
+  hovered = null;                          // the new renderer starts unhighlighted
 
   const n = ui.nodeCount;
   for (let i = 0; i < n; i++) {
@@ -411,6 +416,37 @@ function pointerToCanvas(e) {
 
 let drag = null;
 
+/* ---------- hover highlighting ---------- */
+
+let hovered = null, hoveredVersion = -1;
+
+/* The node plus every node and edge touching it. Scans all edges rather than
+   graph.adjacency, which only lists outgoing edges in a directed graph.     */
+function neighbourhood(id) {
+  const nodes = new Set([id]), edges = [];
+  for (const e of gjs.graph.edges) {
+    if (e.src.id !== id && e.dest.id !== id) continue;
+    nodes.add(e.src.id);
+    nodes.add(e.dest.id);
+    edges.push([e.src.id, e.dest.id]);
+  }
+  return { nodes: [...nodes], edges };
+}
+
+/* Recomputes only when the hovered node or the graph's shape changes, not on
+   every pointer move.                                                       */
+function updateHover(id) {
+  if (!ui.hoverHighlight) id = null;
+  if (id === hovered && gjs.graph.version === hoveredVersion) return;
+  hovered = id;
+  hoveredVersion = gjs.graph.version;
+  if (id === null) gjs.renderer.clearHighlight();
+  else gjs.renderer.setHighlight(neighbourhood(id));
+  if (!running) gjs.renderer.render();
+}
+
+canvas.addEventListener("pointerleave", () => { if (!drag) updateHover(null); });
+
 canvas.addEventListener("pointerdown", e => {
   canvas.setPointerCapture(e.pointerId);
   const [cx, cy] = pointerToCanvas(e);
@@ -428,9 +464,12 @@ canvas.addEventListener("pointerdown", e => {
 });
 
 canvas.addEventListener("pointermove", e => {
+  const [cx, cy] = pointerToCanvas(e);
+  // a dragged node stays lit even if the pointer outruns it; panning keeps the current highlight
+  updateHover(drag?.kind === "node" ? drag.id : drag ? hovered : gjs.nodeAt(cx, cy));
+
   if (!drag) return;
   if (drag.kind === "node") {
-    const [cx, cy] = pointerToCanvas(e);
     gjs.pin(drag.id, cx + drag.dx, cy + drag.dy);
   } else {
     const v = gjs.renderer.view;
@@ -473,6 +512,7 @@ for (const el of document.querySelectorAll("input, select")) {
   el.addEventListener("input", () => {
     readUI();
     if (el.id === "directed") { buildGraph(); return; }
+    if (el.id === "hoverHighlight") updateHover(null);
     if (SIM_IDS.includes(el.id))  applySimConfig();
     if (NODE_IDS.includes(el.id)) applyNodeConfig();
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
