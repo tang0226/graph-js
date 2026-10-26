@@ -93,12 +93,13 @@ export function installRaf() {
   return {
     pending,
     /* Runs every queued callback once. Callbacks that re-queue land in the
-       next flush rather than looping forever. */
-    flushFrame(times = 1) {
+       next flush rather than looping forever. Frame i is passed the timestamp
+       `t0 + i * dt`, like the ms timestamp a browser hands to rAF callbacks. */
+    flushFrame(times = 1, { t0 = 0, dt = 1 } = {}) {
       for (let i = 0; i < times; i++) {
         const due = [...pending.entries()];
         pending.clear();
-        for (const [, cb] of due) cb(i);
+        for (const [, cb] of due) cb(t0 + i * dt);
       }
     },
     restore() { [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame] = prev; },

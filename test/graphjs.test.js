@@ -219,6 +219,19 @@ describe("GraphJS: loop control", () => {
     } finally { gjs.stop(); restoreWindow(); raf.restore(); }
   });
 
+  test("the loop passes each frame's timestamp to render", () => {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      const seen = [];
+      const render = gjs.renderer.render.bind(gjs.renderer);
+      gjs.renderer.render = t => { seen.push(t); return render(t); };
+      gjs.start();
+      raf.flushFrame(3, { t0: 1000, dt: 16 });
+      assert.deepEqual(seen, [1000, 1016, 1032], "highlight fades are timed from these");
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
   test("stop is safe before start", () => {
     const raf = installRaf();
     const { gjs, restoreWindow } = build();

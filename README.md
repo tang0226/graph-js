@@ -59,6 +59,7 @@ const gjs = new GraphJS({
     imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
+    highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
     nodeConfig: { color: "#ffffff" },
     edgeConfig: { color: "#000000", width: 1 },
   },
@@ -268,6 +269,17 @@ How the rest is drawn comes from the renderer's `highlightMode` and `highlightAl
 ```js
 gjs.renderer.setHighlight({ nodes: results, mode: "hide" });
 gjs.renderer.setOpts({ highlightMode: "dim", highlightAlpha: 0.3 });
+```
+
+Changes fade rather than switching instantly, so a quickly moving hover highlight doesn't flash the whole canvas. Each item takes up to `highlightFadeDuration` milliseconds to reach its new opacity; in `"hide"` mode, items fade out until they're invisible. Set the option to `0` to switch instantly.
+
+`gjs.start()` keeps rendering, so fades finish on their own. If you render only on demand instead, keep calling `render()` while a fade is in progress:
+
+```js
+function redraw() {
+  gjs.renderer.render();
+  if (gjs.renderer.isFading()) requestAnimationFrame(redraw);
+}
 ```
 
 Highlights follow the graph: they survive other nodes and edges being added or removed, and a highlighted node or edge that is removed drops out of the highlight.

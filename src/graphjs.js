@@ -144,10 +144,10 @@ export class GraphJS {
    */
   start() {
     if (this._raf !== null || !this.canvas) return this;
-    const frame = () => {
+    const frame = (/** @type {number} */ time) => {
       if (!this.canvas) { this._raf = null; return; }
       this._simulation.tick();
-      this._renderer.render();
+      this._renderer.render(time);
       this._raf = requestAnimationFrame(frame);
     };
     this._raf = requestAnimationFrame(frame);

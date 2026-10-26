@@ -609,13 +609,15 @@ describe("Renderer: highlighting", () => {
     return out;
   }
 
+  // Fading is off by default here so drawing tests see the settled result;
+  // the "fading" suite turns it on.
   function hscene(opts) {
-    const s = scene(false, [["a", "b"]], { opts });
+    const s = scene(false, [["a", "b"]], { opts: { highlightFadeDuration: 0, ...opts } });
     trackAlpha(s.ctx);
     return s;
   }
 
-  function render(r, ctx) { ctx.ops.length = 0; r.render(); return draws(ctx); }
+  function render(r, ctx, time) { ctx.ops.length = 0; r.render(time); return draws(ctx); }
 
   describe("drawing", () => {
     test("with nothing highlighted, everything is drawn at full alpha", () => {
@@ -763,11 +765,114 @@ describe("Renderer: highlighting", () => {
     });
   });
 
+  describe("fading", () => {
+    /* 100 ms per full 0 <-> 1 change, so alpha moves 0.01 per ms. Alphas are
+       rounded to 2 places to keep the expectations readable. */
+    function fscene(opts) { return hscene({ highlightFadeDuration: 100, ...opts }); }
+    function frame(r, ctx, time) { return render(r, ctx, time).map(([k, a]) => [k, r2(a)]); }
+
+    test("dims gradually and settles at highlightAlpha", () => {
+      const { r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual(frame(r, ctx, 1000), [["edge", 1], ["b", 1], ["a", 1]], "a fade starts from where it was");
+      assert.equal(r.isFading(), true);
+      assert.deepEqual(frame(r, ctx, 1050), [["edge", 0.5], ["b", 0.5], ["a", 1]]);
+      assert.deepEqual(frame(r, ctx, 1085), [["edge", 0.15], ["b", 0.15], ["a", 1]]);
+      assert.equal(r.isFading(), false, "settled exactly at the target");
+    });
+
+    test("time spent idle before a fade starts isn't applied to it", () => {
+      const { r, ctx } = fscene();
+      r.render(0);
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual(frame(r, ctx, 60000), [["edge", 1], ["b", 1], ["a", 1]]);
+      assert.deepEqual(frame(r, ctx, 60050), [["edge", 0.5], ["b", 0.5], ["a", 1]]);
+    });
+
+    test("hide fades out, then stops drawing", () => {
+      const { r, ctx } = fscene({ highlightMode: "hide" });
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      assert.deepEqual(frame(r, ctx, 50), [["edge", 0.5], ["b", 0.5], ["a", 1]]);
+      assert.deepEqual(frame(r, ctx, 100), [["a", 1]], "alpha 0 must not be drawn at all");
+    });
+
+    test("clearing fades back up, then returns to the plain path", () => {
+      const { r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      frame(r, ctx, 100);
+      r.clearHighlight();                        // nothing is highlighted, so plain draw order
+      assert.deepEqual(frame(r, ctx, 200), [["edge", 0.15], ["a", 1], ["b", 0.15]]);
+      assert.deepEqual(frame(r, ctx, 250), [["edge", 0.65], ["a", 1], ["b", 0.65]]);
+      assert.deepEqual(frame(r, ctx, 300), [["edge", 1], ["a", 1], ["b", 1]]);
+      assert.equal(r.isFading(), false);
+      assert.equal(opsNamed(ctx, "globalAlpha").length, 0, "a settled, cleared frame must not touch alpha");
+    });
+
+    test("switching highlight mid-fade continues from the current alphas", () => {
+      const { r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      frame(r, ctx, 50);                         // b and the edge at 0.5
+      r.setHighlight({ nodes: ["b"] });
+      assert.deepEqual(frame(r, ctx, 60), [["edge", 0.4], ["a", 0.9], ["b", 0.6]],
+        "a leaving the highlight fades down rather than snapping");
+    });
+
+    test("changing highlightAlpha mid-highlight fades to the new value", () => {
+      const { r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      frame(r, ctx, 100);
+      r.setOpts({ highlightAlpha: 0.55 });
+      frame(r, ctx, 500);
+      assert.deepEqual(frame(r, ctx, 520), [["edge", 0.35], ["b", 0.35], ["a", 1]]);
+    });
+
+    test("a structural change mid-fade keeps each element's alpha", () => {
+      const { g, r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      frame(r, ctx, 50);
+      g.addNode({ id: "c" });                    // re-slots every cache
+      const drawn = frame(r, ctx, 50);
+      assert.deepEqual(drawn.filter(([k]) => k === "b"), [["b", 0.5]], "b must not restart its fade");
+      assert.deepEqual(drawn.filter(([k]) => k === "?"), [["?", 0.15]], "a new node starts at its target");
+    });
+
+    test("removing the last highlighted node fades the rest back up", () => {
+      const { g, r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      frame(r, ctx, 100);
+      g.removeNode("a");
+      assert.deepEqual(frame(r, ctx, 100), [["b", 0.15]], "no snap back to full");
+      assert.deepEqual(frame(r, ctx, 150), [["b", 0.65]]);
+    });
+
+    test("a long gap between frames completes the fade", () => {
+      const { r, ctx } = fscene();
+      r.setHighlight({ nodes: ["a"] });
+      frame(r, ctx, 0);
+      assert.deepEqual(frame(r, ctx, 1e6), [["edge", 0.15], ["b", 0.15], ["a", 1]]);
+      assert.equal(r.isFading(), false);
+    });
+  });
+
   describe("options", () => {
-    test("defaults to dim at 0.15", () => {
-      const { r } = hscene();
+    test("defaults to dim at 0.15, fading over 150 ms", () => {
+      const { r } = scene(false, []);
       assert.equal(r.opts.highlightMode, "dim");
       assert.equal(r.opts.highlightAlpha, 0.15);
+      assert.equal(r.opts.highlightFadeDuration, 150);
+    });
+
+    test("a negative highlightFadeDuration is clamped to 0", () => {
+      assert.equal(hscene({ highlightFadeDuration: -5 }).r.opts.highlightFadeDuration, 0);
+      const { r } = hscene();
+      r.setOpts({ highlightFadeDuration: -1 });
+      assert.equal(r.opts.highlightFadeDuration, 0);
     });
 
     test("highlightAlpha is clamped to [0, 1] on every path", () => {

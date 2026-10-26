@@ -145,6 +145,9 @@
  * @property {boolean} [renderEdges] - whether to render edges
  * @property {HighlightMode} [highlightMode] - highlight mode
  * @property {number} [highlightAlpha] - highlight alpha
+ * @property {number} [highlightFadeDuration] - milliseconds for an element to
+ *    fade fully between opacity 0 and 1 when highlighting changes; 0 disables
+ *    fading
  * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
  *    for image requests.
  * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default

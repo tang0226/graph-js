@@ -25,6 +25,29 @@ const RENDERER_DEFAULTS = {
   crossOrigin: "anonymous",
   highlightMode: "dim",
   highlightAlpha: 0.15,
+  highlightFadeDuration: 150,
+};
+
+/**
+ * Moves each alpha toward its target (1 when highlighted, `dim` otherwise) by
+ * at most `step`.
+ * @param {Float64Array} alphas - current alphas, updated in place
+ * @param {Uint8Array} flags - highlight flags parallel to `alphas`
+ * @param {number} dim - target alpha for non-highlighted elements
+ * @param {number} step - largest alpha change allowed
+ * @returns {boolean} whether every alpha has reached its target
+ */
+const stepAlphas = (alphas, flags, dim, step) => {
+  let settled = true;
+  for (let i = 0; i < alphas.length; i++) {
+    const target = flags[i] ? 1 : dim, a = alphas[i];
+    if (a === target) continue;
+    let next = a < target ? Math.min(a + step, target) : Math.max(a - step, target);
+    if (Math.abs(next - target) < 1e-9) next = target;   // absorb float drift
+    alphas[i] = next;
+    if (next !== target) settled = false;
+  }
+  return settled;
 };
 
 /** @type {NodeStyle} */
@@ -276,6 +299,43 @@ export class Renderer {
   _edgeHighlightState = new Uint8Array(0);
 
 
+  /**
+   * Current drawing alpha of each node, parallel to `Simulation.nodeList`.
+   * Eased toward its highlight target over `highlightFadeDuration`.
+   * @type {Float64Array}
+   */
+  _nodeAlpha = new Float64Array(0);
+
+
+  /**
+   * Current drawing alpha of each edge, parallel to `Simulation.edgeList`.
+   * @type {Float64Array}
+   */
+  _edgeAlpha = new Float64Array(0);
+
+
+  /**
+   * Whether any element's alpha may still differ from its target. Set by
+   * anything that changes targets; cleared once a step finds all settled.
+   * @type {boolean}
+   */
+  _fadeActive = false;
+
+
+  /**
+   * Timestamp of the previous `render()`, or `null` when a fade has just
+   * started.
+   * @type {number | null}
+   */
+  _lastFrameTime = null;
+
+
+  /**
+   * The canvas context's `globalAlpha` during the current faded draw.
+   * @type {number}
+   */
+  _frameAlpha = 1;
+
 
   /** @type {Map<string, HTMLImageElement | string>} */
   _images = new Map();
@@ -328,6 +388,8 @@ export class Renderer {
       renderEdges: opts.renderEdges ?? RENDERER_DEFAULTS.renderEdges,
       highlightMode: opts.highlightMode ?? RENDERER_DEFAULTS.highlightMode,
       highlightAlpha: clamp(opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha, 0, 1),
+      highlightFadeDuration: Math.max(
+        opts.highlightFadeDuration ?? RENDERER_DEFAULTS.highlightFadeDuration, 0),
       imageReferrerPolicy:
         opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
       crossOrigin: opts.crossOrigin === undefined ?
@@ -348,11 +410,16 @@ export class Renderer {
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
    */
-  setOpts({canvas, nodeConfig, edgeConfig, highlightAlpha, ...opts} = {}) {
+  setOpts({canvas, nodeConfig, edgeConfig, highlightAlpha, highlightFadeDuration, ...opts} = {}) {
     Object.assign(this._opts, opts);
     if (highlightAlpha !== undefined) {
       this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
     }
+    if (highlightFadeDuration !== undefined) {
+      this._opts.highlightFadeDuration = Math.max(highlightFadeDuration, 0);
+    }
+    // Mode and alpha set the dimmed target, so ease toward the new value
+    if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._startFade();
     if (canvas) this.attach(canvas);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
@@ -591,6 +658,7 @@ export class Renderer {
       this._edgeHighlightState[i] = 1;
       this._highlightedEdges.add(edge);
     }
+    this._startFade();
     return this;
   }
 
@@ -606,6 +674,8 @@ export class Renderer {
   clearHighlight({ nodes, edges } = {}) {
     // Sync graph structure first
     this.sync();
+
+    this._startFade();
 
     // Clear all if no elements are defined
     if (!nodes && !edges) {
@@ -642,6 +712,37 @@ export class Renderer {
    */
   hasHighlight() {
     return this._highlightedNodes.size > 0 || this._highlightedEdges.size > 0;
+  }
+
+
+  /**
+   * Whether highlight opacities are still changing. Loops that only render on
+   * demand should keep calling `render()` while this is `true`.
+   * @returns {boolean} whether a highlight fade is in progress
+   */
+  isFading() { return this._fadeActive; }
+
+
+  /**
+   * Marks alpha targets as changed. Restarts the frame clock if no fade was
+   * running, so time spent idle isn't applied to the first step.
+   * @returns {void}
+   */
+  _startFade() {
+    if (this._fadeActive) return;
+    this._fadeActive = true;
+    this._lastFrameTime = null;
+  }
+
+
+  /**
+   * Target alpha for non-highlighted elements: 1 with no highlight, 0 when
+   * hiding, otherwise `highlightAlpha`.
+   * @returns {number} target alpha
+   */
+  _dimmedAlpha() {
+    if (!this.hasHighlight()) return 1;
+    return this._opts.highlightMode === "hide" ? 0 : this._opts.highlightAlpha;
   }
 
 
@@ -746,7 +847,17 @@ export class Renderer {
     this._stylesDirty = false;
 
     if (this._syncedSimulation === this._simulation.version) return true;
-    
+
+    /* Alphas are about to be re-slotted. While a highlight is shown or a fade
+       is running, carry each surviving element's alpha across by its style
+       object, which persists through syncs. Pruning below can also end the
+       highlight, so this is decided first. */
+    const carryAlpha = this._fadeActive || this.hasHighlight();
+    const oldNodeAlpha = carryAlpha ?
+      new Map(this._nodeStyles.map((s, i) => [s, this._nodeAlpha[i]])) : null;
+    const oldEdgeAlpha = carryAlpha ?
+      new Map(this._edgeStyles.map((s, i) => [s, this._edgeAlpha[i]])) : null;
+
     // Delete old node styles
     for (const id of this._nodes.keys()) {
       if (!this._graph.nodes.has(id)) {
@@ -810,6 +921,19 @@ export class Renderer {
       this._edgeHighlightState[i] = this._highlightedEdges.has(edge) ? 1 : 0;
     }
 
+    // Highlight alphas: survivors keep theirs, new elements start at target
+    const dim = this._dimmedAlpha();
+    this._nodeAlpha = new Float64Array(this._nodeStyles.length);
+    for (const [i, style] of this._nodeStyles.entries()) {
+      this._nodeAlpha[i] = oldNodeAlpha?.get(style) ??
+        (this._nodeHighlightState[i] ? 1 : dim);
+    }
+    this._edgeAlpha = new Float64Array(this._edgeStyles.length);
+    for (const [i, style] of this._edgeStyles.entries()) {
+      this._edgeAlpha[i] = oldEdgeAlpha?.get(style) ??
+        (this._edgeHighlightState[i] ? 1 : dim);
+    }
+    if (carryAlpha) this._startFade();
 
     this._syncedSimulation = this._simulation.version;
     this._version++;
@@ -1073,45 +1197,73 @@ export class Renderer {
 
 
   /**
+   * Eases every element's alpha toward its target by the time elapsed since
+   * the previous frame. Covers off-screen elements too, so they don't come
+   * back into view mid-fade.
+   * @param {number} time - current timestamp in milliseconds
+   * @returns {void}
+   */
+  _stepFade(time) {
+    const dt = this._lastFrameTime === null ? 0 : time - this._lastFrameTime;
+    this._lastFrameTime = time;
+    if (!this._fadeActive) return;
+
+    const duration = this._opts.highlightFadeDuration;
+    const step = duration > 0 ? Math.max(dt, 0) / duration : Infinity;
+    const dim = this._dimmedAlpha();
+    const nodesSettled = stepAlphas(this._nodeAlpha, this._nodeHighlightState, dim, step);
+    const edgesSettled = stepAlphas(this._edgeAlpha, this._edgeHighlightState, dim, step);
+    if (nodesSettled && edgesSettled) this._fadeActive = false;
+  }
+
+
+  /**
+   * Sets the context alpha for the next element, writing it only when it
+   * changes.
+   * @param {number} alpha - element alpha
+   * @returns {boolean} `false` when the element is invisible and can be skipped
+   */
+  _useAlpha(alpha) {
+    if (alpha === 0) return false;
+    if (alpha !== this._frameAlpha) {
+      /** @type {CanvasContext} */ (this._ctx).globalAlpha = alpha;
+      this._frameAlpha = alpha;
+    }
+    return true;
+  }
+
+
+  /**
    * Renders the current view of the graph according to current styles and
    * highlight state.
+   * @param {number} [time] - frame timestamp in milliseconds, used to advance
+   *    highlight fades. Defaults to `performance.now()`; pass the
+   *    `requestAnimationFrame` timestamp when rendering from a loop.
    * @returns {boolean} whether the `sync()` and render took place
    */
-  render() {
+  render(time = globalThis.performance?.now() ?? Date.now()) {
     if (!this._ctx || !this._size) return false;
     this.sync();
+    this._stepFade(time);
 
     const inFrame = this._cull();
-    const renderEdges = this._opts.renderEdges;
 
     this._ctx.fillStyle = this._opts.background;
     this._ctx.fillRect(0, 0, this._size.w, this._size.h);
 
-    if (this.hasHighlight()) {
-      if (this.opts.highlightMode === "hide") {
+    if (this.hasHighlight() || this._fadeActive) {
+      this._frameAlpha = 1;
+      for (const flag of [0, 1]) {
         for (const i of inFrame.edgesI) {
-          if (this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
+          if (this._edgeHighlightState[i] === flag && this._useAlpha(this._edgeAlpha[i]))
+            this._renderEdgeByIndex(i);
         }
         for (const i of inFrame.nodesI) {
-          if (this._nodeHighlightState[i]) this._renderNodeByIndex(i);
-        }
-      } else {
-        this._ctx.globalAlpha = this._opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha;
-        for (const i of inFrame.edgesI) {
-          if (!this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
-        }
-        for (const i of inFrame.nodesI) {
-          if (!this._nodeHighlightState[i]) this._renderNodeByIndex(i);
-        }
-
-        this._ctx.globalAlpha = 1;
-        for (const i of inFrame.edgesI) {
-          if (this._edgeHighlightState[i]) this._renderEdgeByIndex(i);
-        }
-        for (const i of inFrame.nodesI) {
-          if (this._nodeHighlightState[i]) this._renderNodeByIndex(i);
+          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+            this._renderNodeByIndex(i);
         }
       }
+      if (this._frameAlpha !== 1) this._ctx.globalAlpha = 1;
     } else {
       for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
       for (const i of inFrame.nodesI) this._renderNodeByIndex(i);

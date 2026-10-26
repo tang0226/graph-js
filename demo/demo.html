@@ -273,6 +273,14 @@
       <label for="hoverHighlight">Highlight on hover</label>
       <input type="checkbox" id="hoverHighlight">
     </div>
+    <div class="row">
+      <label for="highlightFade">Highlight fade (ms)</label><output id="highlightFadeOut">150</output>
+      <input type="range" id="highlightFade" min="0" max="1000" step="10" value="150">
+    </div>
+    <div class="row">
+      <label for="highlightAlpha">Highlight alpha</label><output id="highlightAlphaOut">0.15</output>
+      <input type="range" id="highlightAlpha" min="0" max="1" step="0.01" value="0.15">
+    </div>
     <div class="btns">
       <button id="recenter">Recenter</button>
     </div>
@@ -396,7 +404,11 @@ function applyEdgeConfig() {
 }
 
 function applyViewConfig() {
-  gjs.renderer.setOpts({ background: ui.background });
+  gjs.renderer.setOpts({
+    background: ui.background,
+    highlightFadeDuration: ui.highlightFade,
+    highlightAlpha: ui.highlightAlpha,
+  });
   gjs.renderer.view.zoom = ui.zoom;
 }
 
@@ -506,7 +518,7 @@ canvas.addEventListener("wheel", e => {
 const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "minDistSq"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
 const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode"];
-const VIEW_IDS = ["background", "zoom"];
+const VIEW_IDS = ["background", "zoom", "highlightFade", "highlightAlpha"];
 
 for (const el of document.querySelectorAll("input, select")) {
   el.addEventListener("input", () => {
