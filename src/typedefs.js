@@ -99,11 +99,14 @@
  */
 
 /**
+ * @typedef { "mass" | "radius" | "fixed" } ConfigurableSimNodeProps
+ */
+
+/**
  * Partial config specifier
- * @typedef {object} SimNodeConfig
- * @property {NodeOption<number>} [mass] - physical mass of the node
- * @property {NodeOption<number>} [radius] - physical (and rendered) radius of the node
- * @property {NodeOption<boolean>} [fixed] - whether the node is immovable
+ * @typedef {{
+ *    [K in keyof Pick<SimNode, ConfigurableSimNodeProps>]?: NodeOption<SimNode[K]>
+ * }} SimNodeConfig
  */
 
 /**
@@ -113,13 +116,9 @@
 
 /**
  * Sim-node options collapsed into functions
- * @typedef {object} SimNodeAccessors
- * @property {NodeAccessor<number>} [mass] - function returning the physical
- *    mass of a node
- * @property {NodeAccessor<number>} [radius] - function returning the radius of
- *    a node
- * @property {NodeAccessor<boolean>} [fixed] - function returning whether a node
- *    is immovable
+ * @typedef {{
+ *    [K in keyof Pick<SimNode, ConfigurableSimNodeProps>]?: NodeAccessor<SimNode[K]>
+ * }} SimNodeAccessors
  */
 
 /**
@@ -193,71 +192,42 @@
  */
 
 /**
- * Partial config specifier
- * @typedef {object} NodeStyleConfig
- * @property {NodeOption<string>} [color] - node fill color
- * @property {NodeOption<string>} [outlineColor] - node outline color
- * @property {NodeOption<number>} [outlineWidth] - node outline width
- * @property {NodeOption<string|null>} [image] - node image source
+ * Partial node config specifier
+ * @typedef {{ [K in keyof NodeStyle]?: NodeOption<NodeStyle[K]> }} NodeStyleConfig
  */
 
 /**
- * Partial config specifier
- * @typedef {object} EdgeStyleConfig
- * @property {EdgeOption<string>} [color] - edge color
- * @property {EdgeOption<number>} [width] - edge width/thickness
- * @property {EdgeOption<boolean|null>} [arrow] - whether to draw an arrow
- *    (`null` follows from an undirected graph)
- * @property {EdgeOption<number>} [arrowSize] - size of arrow, if drawn
- * @property {EdgeOption<number>} [bow] - world px of perpendicular bow for
- *    reciprocal directed pairs
+ * Partial edge config specifier
+ * @typedef {{ [K in keyof EdgeStyle]?: EdgeOption<EdgeStyle[K]> }} EdgeStyleConfig
  */
 
 /**
- * Fully resolved config specifier
+ * Fully resolved node config specifier
  * @typedef {Required<NodeStyleConfig>} ResolvedNodeStyleConfig
  */
 
 /**
- * Fully resolved config specifier
+ * Fully resolved edge config specifier
  * @typedef {Required<EdgeStyleConfig>} ResolvedEdgeStyleConfig
  */
 
 /**
- * Partial config accessor functions
- * @typedef {object} NodeStyleAccessors
- * @property {NodeAccessor<string>} [color] - function returning the fill color
- *    of a node
- * @property {NodeAccessor<string>} [outlineColor] - function returning the
- *    outline color of a node
- * @property {NodeAccessor<number>} [outlineWidth] - function returning the
- *    outline width of a node
- * @property {NodeAccessor<string|null>} [image] - function returning the image
- *    source of a node
+ * Partial node config accessor functions
+ * @typedef {{ [K in keyof NodeStyle]?: NodeAccessor<NodeStyle[K]> }} NodeStyleAccessors
  */
 
 /**
- * Partial config accessor functions
- * @typedef {object} EdgeStyleAccessors
- * @property {EdgeAccessor<string>} [color] - function returning the color of
- *    an edge
- * @property {EdgeAccessor<number>} [width] - function returning the width of
- *    an edge
- * @property {EdgeAccessor<boolean|null>} [arrow] - function returning whether
- *    the edge should render an arrow
- * @property {EdgeAccessor<number>} [arrowSize] - function returning the arrow
- *    size of an edge
- * @property {EdgeAccessor<number>} [bow] - function returning the bow amount of
- *    an edge
+ * Partial edge config accessor functions
+ * @typedef {{ [K in keyof EdgeStyle]?: EdgeAccessor<EdgeStyle[K]> }} EdgeStyleAccessors
  */
 
 /**
- * Fully resolved config accessor functions
+ * Fully resolved node config accessor functions
  * @typedef {Required<NodeStyleAccessors>} ResolvedNodeStyleAccessors
  */
 
 /**
- * Fully resolved config accessor functions
+ * Fully resolved edge config accessor functions
  * @typedef {Required<EdgeStyleAccessors>} ResolvedEdgeStyleAccessors
  */
 
