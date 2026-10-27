@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
 import { Simulation } from "../src/simulation.js";
 import { Renderer } from "../src/renderer.js";
-import { makeCanvas, installImage, installWindow, opsNamed, flush, r2 } from "./helpers/stubs.js";
+import {
+  makeCanvas, installImage, installOffscreenCanvas, installWindow, opsNamed, flush, r2,
+} from "./helpers/stubs.js";
 
 /* Two nodes of radius 20, placed 200 world units apart on the x axis. With an
    800x600 canvas at zoom 1 they land at canvas (300,300) and (500,300), so a
@@ -355,6 +357,265 @@ describe("Renderer: images", () => {
       assert.equal(r._images.has("late.png"), false,
         "an in-flight load must not re-add an entry for a node that is gone");
     } finally { restore(); }
+  });
+});
+
+describe("Renderer: sprites", () => {
+  /* Image nodes of radius 20 at the canvas centre (400, 300), so each is 40 px
+     across at zoom 1, with a stubbed OffscreenCanvas so sprites can be built.
+     Node `id` uses the image `${id}.png`. */
+  async function spriteScene({ ids = ["a"], size = 256, width, height, dpr, oc, opts, color } = {}) {
+    const restores = [];
+    if (dpr !== undefined) restores.push(installWindow(dpr));
+    restores.push(installImage({ size, width, height }));
+    const restoreCanvas = installOffscreenCanvas(oc);
+    restores.push(restoreCanvas);
+
+    const canvas = makeCanvas();
+    const g = new Graph();
+    for (const id of ids) g.addNode({ id, img: id + ".png" });
+    const sim = new Simulation(g, {});
+    sim.setDefaultNodeConfig({ radius: 20 });
+    sim.sync();
+    for (const n of sim.nodeList) { n.x = 0; n.y = 0; }
+    const nodeConfig = { image: n => n.data.img, ...(color && { color }) };
+    const r = new Renderer(sim, { canvas, nodeConfig, ...opts });
+    await flush();                                     // images load
+    return {
+      g, sim, r, ctx: canvas.ctx, created: restoreCanvas.created, bitmaps: restoreCanvas.bitmaps,
+      restore: () => restores.reverse().forEach(f => f()),
+    };
+  }
+
+  // Sprite bitmaps drawn onto the main canvas, in draw order
+  const drawnSprites = ctx =>
+    opsNamed(ctx, "drawImage").map(([, src]) => src).filter(s => "close" in s);
+
+  describe("choosing a sprite", () => {
+    test("draws the smallest sprite covering the on-screen size, with no clip", async () => {
+      const s = await spriteScene();
+      try {
+        s.r.render();
+        const [[, sprite, ...box]] = opsNamed(s.ctx, "drawImage");
+        assert.equal(sprite.width, 64, "40 px on screen picks the 64 sprite");
+        assert.deepEqual(box, [380, 280, 40, 40]);
+        for (const op of ["clip", "save", "restore"])
+          assert.equal(opsNamed(s.ctx, op).length, 0, `a cached sprite needs no ${op}()`);
+      } finally { s.restore(); }
+    });
+
+    test("zooming in picks a larger sprite", async () => {
+      const s = await spriteScene();
+      try {
+        s.r.view.zoom = 2;
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx)[0].width, 128);
+      } finally { s.restore(); }
+    });
+
+    test("the device pixel ratio counts toward the size", async () => {
+      const s = await spriteScene({ dpr: 2 });
+      try {
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx)[0].width, 128, "40 CSS px at 2x is 80 device px");
+      } finally { s.restore(); }
+    });
+
+    test("sprites are never larger than the source", async () => {
+      const s = await spriteScene({ size: 64 });
+      try {
+        s.r.view.zoom = 4;
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx)[0].width, 64);
+        assert.ok(s.created.every(c => c.width <= 64), "no sprite above the source size is built");
+      } finally { s.restore(); }
+    });
+
+    test("below 6 device px a node is a dot in the image's average colour", async () => {
+      const s = await spriteScene();
+      try {
+        s.r.view.zoom = 0.1;                             // 4 px across
+        s.r.render();
+        assert.equal(opsNamed(s.ctx, "drawImage").length, 0);
+        assert.equal(s.ctx.fillStyle, "rgb(10, 20, 30)");
+      } finally { s.restore(); }
+    });
+
+    test("a dot falls back to the node colour when pixels can't be read", async () => {
+      const s = await spriteScene({ oc: { tainted: true }, color: "#ff0000" });
+      try {
+        s.r.view.zoom = 0.1;
+        s.r.render();
+        assert.equal(s.ctx.fillStyle, "#ff0000", "a cross-origin image taints the canvas");
+      } finally { s.restore(); }
+    });
+  });
+
+  describe("building sprites", () => {
+    test("sprites are bitmaps, built in one reused canvas per size", async () => {
+      const s = await spriteScene({ ids: ["a", "b", "c"] });
+      try {
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx).length, 3, "every node draws an ImageBitmap");
+        assert.equal(s.bitmaps.length, 3);
+        assert.equal(s.created.filter(c => c.width === 64).length, 1,
+          "the build canvas is handed off and reused, not one canvas per sprite");
+      } finally { s.restore(); }
+    });
+
+    test("a sprite is masked to a circle before it is handed off", async () => {
+      const s = await spriteScene();
+      try {
+        s.r.render();
+        const { ctx } = drawnSprites(s.ctx)[0].source;
+        const ops = ctx.ops.map(([n, v]) => n === "globalCompositeOperation" ? v : n);
+        assert.deepEqual(ops.slice(ops.indexOf("drawImage")),
+          ["drawImage", "destination-in", "beginPath", "arc", "fill", "source-over"]);
+        assert.deepEqual(opsNamed(ctx, "arc")[0].slice(1, 4), [32, 32, 32]);
+      } finally { s.restore(); }
+    });
+
+    test("large sources shrink in steps of at most 2x", async () => {
+      const s = await spriteScene({ size: 2048 });
+      try {
+        s.r.render();
+        const steps = s.created.flatMap(c => opsNamed(c.ctx, "drawImage"))
+          .map(([, , , , sw, , , , dw]) => [sw, dw]);
+        for (const [sw, dw] of steps) assert.ok(sw / dw <= 2, `a ${sw} -> ${dw} step aliases`);
+        assert.deepEqual(steps.map(([, dw]) => dw).sort((a, b) => b - a), [1024, 512, 256, 128, 64]);
+      } finally { s.restore(); }
+    });
+
+    test("a smaller sprite is shrunk from a cached larger one, not the source", async () => {
+      const s = await spriteScene({ size: 2048 });
+      try {
+        s.r.view.zoom = 3;                               // 120 px: the 128 sprite
+        s.r.render();
+        const before = s.created.length;
+        s.r.view.zoom = 1;                               // 40 px: the 64 sprite
+        s.r.render();
+        const fresh = s.created.slice(before).flatMap(c => opsNamed(c.ctx, "drawImage"));
+        assert.equal(fresh.length, 1, "128 -> 64 is a single step");
+        assert.equal(fresh[0][1].width, 128);
+      } finally { s.restore(); }
+    });
+
+    test("non-square sources are centre-cropped", async () => {
+      const s = await spriteScene({ width: 200, height: 100 });
+      try {
+        s.r.render();
+        const [draw] = opsNamed(drawnSprites(s.ctx)[0].source.ctx, "drawImage");
+        assert.deepEqual(draw.slice(2), [50, 0, 100, 100, 0, 0, 64, 64]);
+      } finally { s.restore(); }
+    });
+
+    test("sprites are reused across frames", async () => {
+      const s = await spriteScene();
+      try {
+        s.r.render();
+        const canvases = s.created.length, bitmaps = s.bitmaps.length;
+        s.r.render();
+        assert.equal(s.created.length, canvases);
+        assert.equal(s.bitmaps.length, bitmaps, "nothing is rebuilt");
+      } finally { s.restore(); }
+    });
+
+    test("at most 16 sprites are built per frame; the rest use the uncached path", async () => {
+      const ids = Array.from({ length: 40 }, (_, i) => "n" + i);
+      const s = await spriteScene({ ids, size: 64 });
+      try {
+        for (const [built, clipped] of [[16, 24], [32, 8], [40, 0]]) {
+          s.ctx.ops.length = 0;
+          s.r.render();
+          assert.equal(s.bitmaps.length, built);
+          assert.equal(opsNamed(s.ctx, "clip").length, clipped);
+        }
+      } finally { s.restore(); }
+    });
+
+    test("over the build limit, a nearby cached sprite is used", async () => {
+      const ids = Array.from({ length: 17 }, (_, i) => "n" + i);
+      const s = await spriteScene({ ids });
+      try {
+        s.r.render();
+        s.r.render();                                    // every node has its 64 sprite
+        s.r.view.zoom = 2;                               // all want 128; 16 can be built
+        s.ctx.ops.length = 0;
+        s.r.render();
+        assert.equal(opsNamed(s.ctx, "clip").length, 0, "the 17th node reuses its 64 sprite");
+        assert.deepEqual(drawnSprites(s.ctx).map(t => t.width).sort((a, b) => a - b)[0], 64);
+      } finally { s.restore(); }
+    });
+  });
+
+  describe("cache", () => {
+    const SPRITE_64 = 64 * 64 * 4;
+
+    test("defaults to 64 MB; negative budgets are clamped to 0", async () => {
+      const s = await spriteScene({ opts: { imageCacheMB: -1 } });
+      try {
+        assert.equal(s.r.opts.imageCacheMB, 0);
+        s.r.setOpts({ imageCacheMB: 64 });
+        assert.equal(scene(false, []).r.opts.imageCacheMB, 64);
+      } finally { s.restore(); }
+    });
+
+    test("sprites on screen are kept even over budget; unused ones are evicted and closed", async () => {
+      const s = await spriteScene({ opts: { imageCacheMB: 0.001 } });
+      try {
+        s.r.render();
+        assert.equal(s.r._spriteBytes, SPRITE_64, "the visible sprite stays despite the budget");
+        const [sprite64] = s.bitmaps;
+        s.r.view.zoom = 2;
+        s.r.render();
+        assert.deepEqual([...s.r._spriteCache.get("a.png").sprites.keys()], [128]);
+        assert.equal(s.r._spriteBytes, 128 * 128 * 4);
+        assert.equal(sprite64.closed, true, "eviction must free the pixels, not wait for GC");
+        assert.equal(s.bitmaps[1].closed, false);
+      } finally { s.restore(); }
+    });
+
+    test("the least recently drawn sprite is evicted first", async () => {
+      const s = await spriteScene({ ids: ["a", "b"] });
+      try {
+        s.r.render();                                    // a and b both cached
+        s.sim.nodes.get("b").x = 1e5;                    // b goes off screen
+        s.r.render();
+        s.r.setOpts({ imageCacheMB: SPRITE_64 / 1024 / 1024 });
+        s.r.render();
+        assert.equal(s.r._spriteCache.get("a.png").sprites.size, 1);
+        assert.equal(s.r._spriteCache.get("b.png").sprites.size, 0);
+        assert.equal(s.r._spriteBytes, SPRITE_64);
+      } finally { s.restore(); }
+    });
+
+    test("collecting an unused image drops and closes its sprites", async () => {
+      const ids = Array.from({ length: 17 }, (_, i) => "n" + i);
+      const s = await spriteScene({ ids, size: 64 });
+      try {
+        s.r.render();
+        s.r.render();
+        assert.equal(s.r._spriteBytes, 17 * SPRITE_64);
+        for (const id of ids) s.g.removeNode(id);        // 17 removals pass the GC threshold
+        s.r.sync();
+        assert.equal(s.r._spriteBytes, 0);
+        assert.equal(s.r._spriteLru.size, 0);
+        assert.equal(s.r._spriteCache.size, 0);
+        assert.ok(s.bitmaps.every(b => b.closed), "every dropped sprite is closed");
+      } finally { s.restore(); }
+    });
+
+    test("a dimmed image node draws its sprite at the dimmed alpha", async () => {
+      const s = await spriteScene({ ids: ["a", "b"], opts: { highlightFadeDuration: 0 } });
+      try {
+        const alphas = [];
+        const drawImage = s.ctx.drawImage;
+        s.ctx.drawImage = (...args) => { alphas.push(s.ctx.globalAlpha); return drawImage(...args); };
+        s.r.setHighlight({ nodes: ["b"] });
+        s.r.render();
+        assert.deepEqual(alphas, [0.15, 1]);
+      } finally { s.restore(); }
+    });
   });
 });
 

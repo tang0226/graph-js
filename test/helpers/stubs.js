@@ -23,6 +23,7 @@ export function makeCtx() {
     stroke: log("stroke"),
     fill: log("fill"),
     fillRect: log("fillRect"),
+    clearRect: log("clearRect"),
     clip: log("clip"),
     save: log("save"),
     restore: log("restore"),
@@ -53,11 +54,11 @@ export function makeCanvas({ w = 800, h = 600 } = {}) {
    `referrerPolicy` are read when `src` is assigned, because that is when a
    browser starts the request. Anything set afterwards doesn't affect it, so a
    test asserting on this list also catches options applied too late. */
-export function installImage({ fail = () => false, size = 64 } = {}) {
+export function installImage({ fail = () => false, size = 64, width = size, height = size } = {}) {
   const prev = globalThis.Image;
   const requests = [];
   globalThis.Image = class {
-    constructor() { this.width = size; this.height = size; this.onload = null; this.onerror = null; }
+    constructor() { this.width = width; this.height = height; this.onload = null; this.onerror = null; }
     set src(v) {
       this._src = v;
       requests.push({ src: v, crossOrigin: this.crossOrigin, referrerPolicy: this.referrerPolicy });
@@ -67,6 +68,56 @@ export function installImage({ fail = () => false, size = 64 } = {}) {
   };
   const restore = () => { globalThis.Image = prev; };
   restore.requests = requests;
+  return restore;
+}
+
+/* Installs a fake OffscreenCanvas, which Node lacks, so the renderer can build
+   sprites. Each canvas gets its own recording context; writes to
+   globalCompositeOperation are logged into its ops so tests can check the
+   pre-clip mask. getImageData returns one pixel of `avg` (enough for an
+   average), or throws like a cross-origin-tainted canvas when `tainted`.
+   `restore.created` lists every canvas in creation order.
+
+   transferToImageBitmap() returns a fake bitmap recording the canvas it came
+   from (`source`) and whether close() was called; `restore.bitmaps` lists
+   them in creation order. */
+export function installOffscreenCanvas({ avg = [10, 20, 30, 255], tainted = false } = {}) {
+  const had = "OffscreenCanvas" in globalThis, prev = globalThis.OffscreenCanvas;
+  const created = [], bitmaps = [];
+  globalThis.OffscreenCanvas = class {
+    constructor(width, height) {
+      this.width = width;
+      this.height = height;
+      const ctx = makeCtx();
+      let gco = "source-over";
+      Object.defineProperty(ctx, "globalCompositeOperation", {
+        get: () => gco,
+        set: v => { gco = v; ctx.ops.push(["globalCompositeOperation", v]); },
+      });
+      ctx.imageSmoothingQuality = "low";
+      ctx.getImageData = () => {
+        if (tainted) throw new DOMException("The canvas has been tainted", "SecurityError");
+        return { data: Uint8ClampedArray.from(avg) };
+      };
+      this.ctx = ctx;
+      created.push(this);
+    }
+    getContext() { return this.ctx; }
+    transferToImageBitmap() {
+      const bitmap = {
+        width: this.width, height: this.height, source: this, closed: false,
+        close() { this.closed = true; },
+      };
+      bitmaps.push(bitmap);
+      return bitmap;
+    }
+  };
+  const restore = () => {
+    if (had) globalThis.OffscreenCanvas = prev;
+    else delete globalThis.OffscreenCanvas;
+  };
+  restore.created = created;
+  restore.bitmaps = bitmaps;
   return restore;
 }
 

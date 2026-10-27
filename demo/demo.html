@@ -267,7 +267,7 @@
     </div>
     <div class="row">
       <label for="zoom">Zoom</label><output id="zoomOut">1.00</output>
-      <input type="range" id="zoom" min="0.01" max="4" step="0.01" value="1">
+      <input type="range" id="zoom" min="0.01" max="10" step="0.01" value="1">
     </div>
     <div class="row inline">
       <label for="hoverHighlight">Highlight on hover</label>
@@ -503,7 +503,7 @@ canvas.addEventListener("wheel", e => {
   e.preventDefault();
   const [cx, cy] = pointerToCanvas(e);
   const [bx, by] = gjs.canvasToSim(cx, cy);              // anchor under cursor
-  const next = Math.min(4, Math.max(0.01, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  const next = Math.min(10, Math.max(0.01, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
   $("zoom").value = next;
   readUI();
   gjs.renderer.view.zoom = next;

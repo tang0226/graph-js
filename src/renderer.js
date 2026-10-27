@@ -26,7 +26,57 @@ const RENDERER_DEFAULTS = {
   highlightMode: "dim",
   highlightAlpha: 0.15,
   highlightFadeDuration: 150,
+  imageCacheMB: 64,
 };
+
+/** Sizes (device px) that sprites of node images are made at. */
+const SPRITE_SIZES = [16, 32, 64, 128, 256, 512];
+
+/** Below this on-screen diameter (device px), an image node is drawn as a
+    circle in the image's average colour. */
+const IMAGE_DOT_THRESHOLD = 6;
+
+/** Most sprites built in one frame. Nodes past the limit reuse a nearby
+    sprite (or the uncached path) until a later frame builds theirs. */
+const MAX_SPRITE_BUILDS_PER_FRAME = 16;
+
+/**
+ * A sprite is one cached copy of a node image at one size from
+ * `SPRITE_SIZES`: square, centre-cropped and already clipped to a circle, so
+ * drawing it is a single `drawImage()`. Each image can have several sprites,
+ * one per size it has been drawn at. An `ImageBitmap` where `OffscreenCanvas`
+ * is available, otherwise a canvas.
+ * @typedef {ImageBitmap | Canvas} Sprite
+ */
+
+/**
+ * Cached sprites of one image source, keyed by size, and its average
+ * colour: `undefined` until computed, `null` if unreadable (e.g. a
+ * cross-origin image).
+ * @typedef {{ sprites: Map<number, Sprite>, avg: string | null | undefined }} SpriteEntry
+ */
+
+/**
+ * Picks the sprite size to draw an image at: the smallest size at least
+ * as large as the on-screen size, but never larger than the source.
+ * @param {number} needed - on-screen diameter in device px
+ * @param {number} side - shorter side of the source image
+ * @returns {number} sprite size in px
+ */
+const pickSpriteSize = (needed, side) => {
+  let max = side < SPRITE_SIZES[0] ? Math.max(1, Math.floor(side)) : SPRITE_SIZES[0];
+  for (const t of SPRITE_SIZES) if (t <= side) max = t;
+  for (const t of SPRITE_SIZES) if (t >= needed) return Math.min(t, max);
+  return max;
+};
+
+/**
+ * Gets a canvas's 2D context. Typed through a cast because `getContext` on a
+ * `HTMLCanvasElement | OffscreenCanvas` union resolves unreliably in tsc.
+ * @param {Canvas} canvas - canvas
+ * @returns {CanvasContext | null} 2D context
+ */
+const ctx2d = canvas => /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
 
 /**
  * Moves each alpha toward its target (1 when highlighted, `dim` otherwise) by
@@ -354,6 +404,57 @@ export class Renderer {
    */
   _imageDebt = 0;
 
+
+  /**
+   * Device pixel ratio applied by the last `resize()`. Sprites are chosen
+   * by on-screen size in device pixels.
+   * @type {number}
+   */
+  _dpr = 1;
+
+
+  /**
+   * Pre-clipped sprites and average colours, keyed by image source.
+   * @type {Map<string, SpriteEntry>}
+   */
+  _spriteCache = new Map();
+
+
+  /**
+   * Recency order of cached sprites, least recently used first, keyed
+   * `size:src`. `frame` is the last frame the sprite was drawn in.
+   * @type {Map<string, { src: string, size: number, bytes: number, frame: number }>}
+   */
+  _spriteLru = new Map();
+
+
+  /** Total bytes held by cached sprites. @type {number} */
+  _spriteBytes = 0;
+
+
+  /** Counter incremented once per `render()`. @type {number} */
+  _frameId = 0;
+
+
+  /** Sprites built during the current frame. @type {number} */
+  _spriteBuilds = 0;
+
+
+  /**
+   * Reusable canvases sprites are built in, one per size. Only used with
+   * `OffscreenCanvas`, whose builds are handed off as `ImageBitmap`s.
+   * @type {Map<number, OffscreenCanvas>}
+   */
+  _spriteCanvases = new Map();
+
+
+  /**
+   * Scratch canvases for shrinking images by halves. Dropped after a frame
+   * that used them, so large sources don't pin memory.
+   * @type {Canvas[]}
+   */
+  _imgScratch = [];
+
   /**
    * Stores the latest synced `Simulation` version. Used to gate node and edge
    * style cache updates.
@@ -390,6 +491,7 @@ export class Renderer {
       highlightAlpha: clamp(opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha, 0, 1),
       highlightFadeDuration: Math.max(
         opts.highlightFadeDuration ?? RENDERER_DEFAULTS.highlightFadeDuration, 0),
+      imageCacheMB: Math.max(opts.imageCacheMB ?? RENDERER_DEFAULTS.imageCacheMB, 0),
       imageReferrerPolicy:
         opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
       crossOrigin: opts.crossOrigin === undefined ?
@@ -410,13 +512,20 @@ export class Renderer {
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
    */
-  setOpts({canvas, nodeConfig, edgeConfig, highlightAlpha, highlightFadeDuration, ...opts} = {}) {
+  setOpts({
+    canvas, nodeConfig, edgeConfig,
+    highlightAlpha, highlightFadeDuration, imageCacheMB,
+    ...opts
+  } = {}) {
     Object.assign(this._opts, opts);
     if (highlightAlpha !== undefined) {
       this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
     }
     if (highlightFadeDuration !== undefined) {
       this._opts.highlightFadeDuration = Math.max(highlightFadeDuration, 0);
+    }
+    if (imageCacheMB !== undefined) {
+      this._opts.imageCacheMB = Math.max(imageCacheMB, 0);
     }
     // Mode and alpha set the dimmed target, so ease toward the new value
     if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._startFade();
@@ -479,6 +588,7 @@ export class Renderer {
       dpr = 1;
     }
     this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._dpr = dpr;
     this._size = { w, h };
     return this;
   }
@@ -801,7 +911,257 @@ export class Renderer {
   _garbageCollectImages() {
     const live = new Set();
     for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
-    for (const src of this._images.keys()) if (!live.has(src)) this._images.delete(src);
+    for (const src of this._images.keys()) {
+      if (live.has(src)) continue;
+      this._images.delete(src);
+      this._dropSprites(src);
+    }
+  }
+
+
+  /**
+   * Creates a canvas for building sprites, or returns `null` where no
+   * canvas can be made (e.g. Node), in which case images are drawn uncached.
+   * @param {number} w - width
+   * @param {number} h - height
+   * @returns {Canvas | null} new canvas
+   */
+  _createCanvas(w, h) {
+    if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
+    const doc = globalThis.document;
+    if (typeof doc?.createElement !== "function") return null;
+    const canvas = doc.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    return canvas;
+  }
+
+
+  /**
+   * Returns scratch canvas `i`, grown to at least `size` square.
+   * @param {number} i - scratch slot (0 or 1)
+   * @param {number} size - minimum side
+   * @returns {Canvas | null} scratch canvas
+   */
+  _scratchCanvas(i, size) {
+    const s = this._imgScratch[i];
+    if (s && s.width >= size && s.height >= size) return s;
+    const c = this._createCanvas(size, size);
+    if (c) this._imgScratch[i] = c;
+    return c;
+  }
+
+
+  /**
+   * Returns the canvas to build a sprite of `size` in. With
+   * `OffscreenCanvas`, one canvas per size is reused: each build is handed
+   * off with `transferToImageBitmap()`, which also leaves the canvas blank.
+   * Otherwise each sprite needs its own canvas.
+   * @param {number} size - sprite size
+   * @returns {Canvas | null} build canvas
+   */
+  _spriteCanvas(size) {
+    if (typeof OffscreenCanvas === "undefined") return this._createCanvas(size, size);
+    let canvas = this._spriteCanvases.get(size);
+    if (!canvas) {
+      canvas = new OffscreenCanvas(size, size);
+      this._spriteCanvases.set(size, canvas);
+    }
+    return canvas;
+  }
+
+
+  /**
+   * Builds a pre-clipped square sprite: centre-cropped, shrunk by halves
+   * (each step at most 2x, to avoid aliasing), then masked to a circle.
+   * Starts from the smallest cached sprite larger than `size` when there
+   * is one, rather than the full source. Also fills in the entry's average
+   * colour from the first sprite of 64 px or less.
+   * @param {HTMLImageElement} img - loaded source image
+   * @param {SpriteEntry} entry - cache entry for `img`
+   * @param {number} size - sprite size in px
+   * @returns {Sprite | null} the sprite, or `null` if no canvas could be made
+   */
+  _buildSprite(img, entry, size) {
+    const out = this._spriteCanvas(size);
+    const outCtx = out && ctx2d(out);
+    if (!out || !outCtx) return null;
+
+    /** @type {CanvasImageSource} */
+    let src = img;
+    let cur = Math.min(img.width, img.height);
+    let sx = (img.width - cur) / 2, sy = (img.height - cur) / 2;
+    for (const [t, sprite] of entry.sprites) {
+      if (t > size && t < cur) { src = sprite; cur = t; sx = sy = 0; }
+    }
+
+    for (let k = 0; cur > 2 * size; k ^= 1) {
+      const half = Math.ceil(cur / 2);
+      const scratch = this._scratchCanvas(k, half);
+      const sCtx = scratch && ctx2d(scratch);
+      if (!sCtx) return null;
+      sCtx.clearRect(0, 0, half, half);
+      sCtx.imageSmoothingQuality = "high";
+      sCtx.drawImage(src, sx, sy, cur, cur, 0, 0, half, half);
+      src = /** @type {Canvas} */ (scratch);
+      sx = sy = 0;
+      cur = half;
+    }
+
+    outCtx.clearRect(0, 0, size, size);
+    outCtx.imageSmoothingQuality = "high";
+    outCtx.drawImage(src, sx, sy, cur, cur, 0, 0, size, size);
+
+    // Pre-clip: keep only the pixels inside the circle
+    outCtx.globalCompositeOperation = "destination-in";
+    outCtx.beginPath();
+    outCtx.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
+    outCtx.fill();
+    outCtx.globalCompositeOperation = "source-over";
+
+    // Pixels can only be read before the hand-off below
+    if (size <= 64 && entry.avg === undefined) entry.avg = this._averageColor(out);
+
+    return "transferToImageBitmap" in out ? out.transferToImageBitmap() : out;
+  }
+
+
+  /**
+   * Alpha-weighted average colour of a small canvas, or `null` when its
+   * pixels can't be read (a canvas tainted by a cross-origin image throws).
+   * @param {Canvas} canvas - canvas (at most 64 px)
+   * @returns {string | null} CSS colour
+   */
+  _averageColor(canvas) {
+    try {
+      const ctx = ctx2d(canvas);
+      if (!ctx) return null;
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const w = data[i + 3];
+        r += data[i] * w; g += data[i + 1] * w; b += data[i + 2] * w; a += w;
+      }
+      if (!a) return null;
+      return `rgb(${Math.round(r / a)}, ${Math.round(g / a)}, ${Math.round(b / a)})`;
+    } catch {
+      return null;
+    }
+  }
+
+
+  /**
+   * Returns a sprite of `src` to draw at `size`, building it if this
+   * frame's build limit allows, otherwise the nearest cached sprite
+   * (larger first). Marks the returned sprite as used this frame.
+   * @param {string} src - image source
+   * @param {HTMLImageElement} img - loaded source image
+   * @param {number} size - wanted sprite size
+   * @returns {Sprite | null} sprite, or `null` if none is available
+   */
+  _getSprite(src, img, size) {
+    let entry = this._spriteCache.get(src);
+    if (!entry) {
+      entry = { sprites: new Map(), avg: undefined };
+      this._spriteCache.set(src, entry);
+    }
+
+    let sprite = entry.sprites.get(size);
+    if (!sprite && this._spriteBuilds < MAX_SPRITE_BUILDS_PER_FRAME) {
+      const built = this._buildSprite(img, entry, size);
+      if (built) {
+        this._spriteBuilds++;
+        sprite = built;
+        entry.sprites.set(size, built);
+        const bytes = size * size * 4;
+        this._spriteLru.set(`${size}:${src}`, { src, size, bytes, frame: this._frameId });
+        this._spriteBytes += bytes;
+      }
+    }
+
+    // Over the build limit: the nearest cached sprite, preferring larger
+    if (!sprite) {
+      let best = 0;
+      for (const t of entry.sprites.keys()) {
+        const better = !best
+          || (t >= size && (best < size || t < best))   // smallest larger
+          || (t < size && best < size && t > best);     // else largest smaller
+        if (better) best = t;
+      }
+      if (!best) return null;
+      size = best;
+      sprite = entry.sprites.get(best);
+    }
+
+    const key = `${size}:${src}`;
+    const rec = this._spriteLru.get(key);
+    if (rec) {
+      this._spriteLru.delete(key);
+      rec.frame = this._frameId;
+      this._spriteLru.set(key, rec);
+    }
+    return sprite ?? null;
+  }
+
+
+  /**
+   * Average colour of an image for drawing it as a dot, building its
+   * smallest sprite first if needed. `null` if unavailable.
+   * @param {string} src - image source
+   * @param {HTMLImageElement} img - loaded source image
+   * @returns {string | null} CSS colour
+   */
+  _imageAverage(src, img) {
+    const avg = this._spriteCache.get(src)?.avg;
+    if (avg !== undefined) return avg;
+    this._getSprite(src, img, pickSpriteSize(0, Math.min(img.width, img.height)));
+    return this._spriteCache.get(src)?.avg ?? null;
+  }
+
+
+  /**
+   * Removes one sprite from the cache and frees its pixels.
+   * @param {string} src - image source
+   * @param {number} size - sprite size
+   * @returns {void}
+   */
+  _deleteSprite(src, size) {
+    const entry = this._spriteCache.get(src);
+    const sprite = entry?.sprites.get(size);
+    if (sprite && "close" in sprite) sprite.close();   // frees now, not at GC
+    entry?.sprites.delete(size);
+    const key = `${size}:${src}`;
+    const rec = this._spriteLru.get(key);
+    if (rec) this._spriteBytes -= rec.bytes;
+    this._spriteLru.delete(key);
+  }
+
+
+  /**
+   * Evicts least recently used sprites until within `imageCacheMB`,
+   * stopping at the first one drawn this frame: what is on screen always
+   * stays cached.
+   * @returns {void}
+   */
+  _evictSprites() {
+    const budget = this._opts.imageCacheMB * 1024 * 1024;
+    for (const rec of this._spriteLru.values()) {
+      if (this._spriteBytes <= budget || rec.frame === this._frameId) break;
+      this._deleteSprite(rec.src, rec.size);
+    }
+  }
+
+
+  /**
+   * Drops every cached sprite of an image source.
+   * @param {string} src - image source
+   * @returns {void}
+   */
+  _dropSprites(src) {
+    const entry = this._spriteCache.get(src);
+    if (!entry) return;
+    for (const size of [...entry.sprites.keys()]) this._deleteSprite(src, size);
+    this._spriteCache.delete(src);
   }
 
 
@@ -984,14 +1344,29 @@ export class Renderer {
     const r = sNode.radius * this._view.zoom;
     this._ctx.beginPath();
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-    const img = nodeStyle.image && this._images.get(nodeStyle.image);
-    if (img && typeof img !== "string") {
-      const scale = r * 2 / Math.min(img.width, img.height);
-      const dw = img.width * scale, dh = img.height * scale;
-      this._ctx.save();
-      this._ctx.clip();
-      this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
-      this._ctx.restore();
+    const src = nodeStyle.image;
+    const img = src && this._images.get(src);
+    if (src && img && typeof img !== "string") {
+      const needed = 2 * r * this._dpr;     // on-screen diameter, device px
+      if (needed < IMAGE_DOT_THRESHOLD) {
+        // Too small to show detail: a dot in the image's average colour
+        this._ctx.fillStyle = this._imageAverage(src, img) ?? nodeStyle.color;
+        this._ctx.fill();
+      } else {
+        const size = pickSpriteSize(needed, Math.min(img.width, img.height));
+        const sprite = this._getSprite(src, img, size);
+        if (sprite) {
+          this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
+        } else {
+          // No sprite available (no canvas support, or over this frame's build limit)
+          const scale = r * 2 / Math.min(img.width, img.height);
+          const dw = img.width * scale, dh = img.height * scale;
+          this._ctx.save();
+          this._ctx.clip();
+          this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+          this._ctx.restore();
+        }
+      }
     } else {
       this._ctx.fillStyle = nodeStyle.color;
       this._ctx.fill();
@@ -1245,6 +1620,8 @@ export class Renderer {
     if (!this._ctx || !this._size) return false;
     this.sync();
     this._stepFade(time);
+    this._frameId++;
+    this._spriteBuilds = 0;
 
     const inFrame = this._cull();
 
@@ -1268,6 +1645,9 @@ export class Renderer {
       for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
       for (const i of inFrame.nodesI) this._renderNodeByIndex(i);
     }
+
+    this._evictSprites();
+    if (this._spriteBuilds) this._imgScratch = [];
 
     return true;
   }

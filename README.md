@@ -60,6 +60,7 @@ const gjs = new GraphJS({
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
+    imageCacheMB: 64,               // soft memory budget for cached node image sizes
     nodeConfig: { color: "#ffffff" },
     edgeConfig: { color: "#000000", width: 1 },
   },
@@ -187,6 +188,8 @@ gjs.renderer.loadImage("https://example.com/alice.png");
 ```
 
 Unused images are cleaned up periodically as nodes are removed, so preload shortly before the nodes that use them are added.
+
+For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 512 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
 
 ## Dragging nodes
 

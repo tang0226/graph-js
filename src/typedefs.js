@@ -150,6 +150,8 @@
  *    fading
  * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
  *    for image requests.
+ * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
+ *    cached node image sizes; images on screen are always kept
  * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
  *    cross-origin parameter for image requests.
  */
