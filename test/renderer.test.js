@@ -846,6 +846,301 @@ describe("Renderer: renderEdges", () => {
   });
 });
 
+describe("Renderer: labels", () => {
+  /* The two-node scene, labelled with node ids. At zoom 1 with the default
+     15px labels and 2px margin, a label starts 22px from its node's centre:
+     a sits at canvas (300,300), so its bottom label is drawn at (300,322).
+     The stub measures each glyph at half the font size. */
+  function lscene({ nodeCfg, opts } = {}) {
+    return scene(false, [], { nodeCfg: { label: n => n.id, ...nodeCfg }, opts });
+  }
+
+  const texts = ctx => opsNamed(ctx, "fillText").map(([, t, x, y]) => [t, r2(x), r2(y)]);
+  // Text state per label, with the on-screen size rounded (it comes from a scale factor)
+  const textState = ctx => opsNamed(ctx, "fillText").map(op => ({ ...op[4], size: r2(op[4].size) }));
+  const measures = ctx => opsNamed(ctx, "measureText").map(([, t, font]) => [t, font]);
+
+  describe("options", () => {
+    test("defaults", () => {
+      const { r } = scene(false, []);
+      assert.equal(r.opts.renderLabels, true);
+      assert.equal(r.opts.labelFont, "Arial");
+      assert.equal(r.opts.labelPosition, "bottom");
+      assert.equal(r.opts.labelMargin, 2);
+      assert.equal(r.opts.minLabelSize, 6);
+      assert.equal(r.opts.maxLabelSize, Infinity);
+      const style = r.nodeStyles[0];
+      assert.equal(style.label, null);
+      assert.equal(style.renderLabel, true);
+      assert.equal(style.labelScale, 15);
+    });
+
+    test("negative label sizes are clamped to 0, in the constructor and setOpts", () => {
+      const { r } = scene(false, [], { opts: { minLabelSize: -1, maxLabelSize: -1 } });
+      assert.equal(r.opts.minLabelSize, 0);
+      assert.equal(r.opts.maxLabelSize, 0);
+      r.setOpts({ minLabelSize: -5, maxLabelSize: -5 });
+      assert.equal(r.opts.minLabelSize, 0);
+      assert.equal(r.opts.maxLabelSize, 0);
+    });
+  });
+
+  describe("drawing", () => {
+    test("nodes without labels draw no text and measure nothing", () => {
+      const { r, ctx } = scene(false, []);
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "fillText"), []);
+      assert.deepEqual(opsNamed(ctx, "measureText"), []);
+    });
+
+    test("a label is drawn below its node in the label font and color", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelTextColor: "red" } });
+      r.render();
+      assert.deepEqual(texts(ctx), [["a", 300, 322], ["b", 500, 322]]);
+      assert.deepEqual(textState(ctx)[0],
+        { font: "100px Arial", size: 15, fillStyle: "red", textAlign: "center", textBaseline: "top" });
+    });
+
+    test("labels are drawn after every node, so no node covers a label", () => {
+      const { r, ctx } = lscene();
+      r.render();
+      const names = ctx.ops.map(op => op[0]);
+      assert.ok(names.indexOf("fillText") > names.lastIndexOf("arc"));
+    });
+
+    for (const [position, at, textAlign, textBaseline] of [
+      ["top", [300, 278], "center", "bottom"],
+      ["right", [322, 300], "left", "middle"],
+      ["left", [278, 300], "right", "middle"],
+      ["bottom", [300, 322], "center", "top"],
+      ["sideways", [300, 322], "center", "top"],
+    ]) {
+      test(`position "${position}" anchors the label at ${at}`, () => {
+        const { r, ctx } = lscene({ opts: { labelPosition: position } });
+        r.render();
+        assert.deepEqual(texts(ctx)[0], ["a", ...at]);
+        assert.equal(textState(ctx)[0].textAlign, textAlign);
+        assert.equal(textState(ctx)[0].textBaseline, textBaseline);
+      });
+    }
+
+    test("position and margin can be changed with setOpts", () => {
+      const { r, ctx } = lscene();
+      r.setOpts({ labelPosition: "top", labelMargin: 10 });
+      r.render();
+      assert.deepEqual(texts(ctx)[0], ["a", 300, 270]);
+    });
+
+    test("a label of 0 is drawn; null and the empty string are not", () => {
+      const { r, ctx } = lscene({ nodeCfg: { label: n => (n.id === "a" ? 0 : "") } });
+      r.render();
+      assert.deepEqual(texts(ctx), [["0", 300, 322]]);
+    });
+
+    test("labels follow changes to graph data", () => {
+      const { g, r, ctx } = lscene({ nodeCfg: { label: n => n.data.name ?? null } });
+      r.render();
+      assert.deepEqual(texts(ctx), []);
+
+      g.setNodeData("a", { name: "Alice" });
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(texts(ctx), [["Alice", 300, 322]]);
+    });
+  });
+
+  describe("toggling", () => {
+    test("renderLabel: false hides only that node's label", () => {
+      const { r, ctx } = lscene({ nodeCfg: { renderLabel: n => n.id !== "b" } });
+      r.render();
+      assert.deepEqual(texts(ctx).map(([t]) => t), ["a"]);
+    });
+
+    test("renderLabels: false hides every label and skips measuring", () => {
+      const { r, ctx } = lscene({ opts: { renderLabels: false } });
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "fillText"), []);
+      assert.deepEqual(opsNamed(ctx, "measureText"), []);
+      assert.equal(opsNamed(ctx, "arc").length, 2, "nodes are still drawn");
+    });
+
+    test("setOpts toggles labels on a live renderer", () => {
+      const { r, ctx } = lscene({ opts: { renderLabels: false } });
+      r.render();
+      r.setOpts({ renderLabels: true });
+      r.render();
+      assert.deepEqual(texts(ctx).map(([t]) => t), ["a", "b"]);
+    });
+
+    test("renderLabels overrides a node's renderLabel: true", () => {
+      const { r, ctx } = lscene({ nodeCfg: { renderLabel: true }, opts: { renderLabels: false } });
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "fillText"), []);
+    });
+  });
+
+  describe("sizing", () => {
+    test("label size scales with zoom", () => {
+      const { r, ctx } = lscene();
+      r.view.zoom = 0.5;
+      r.render();
+      assert.equal(textState(ctx)[0].size, 7.5);
+    });
+
+    test("labels smaller than minLabelSize on screen are hidden, not enlarged", () => {
+      const { r, ctx } = lscene();
+      r.view.zoom = 0.3;                              // 15 * 0.3 = 4.5px < 6px
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "fillText"), []);
+      assert.equal(opsNamed(ctx, "arc").length, 2, "nodes are still drawn");
+    });
+
+    test("minLabelSize is compared to each node's own scaled size", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelScale: n => (n.id === "a" ? 30 : 5) } });
+      r.view.zoom = 0.5;                              // a: 15px, b: 2.5px
+      r.render();
+      assert.deepEqual(texts(ctx).map(([t]) => t), ["a"]);
+    });
+
+    test("labels larger than maxLabelSize on screen are capped, not hidden", () => {
+      const { r, ctx } = lscene({ opts: { maxLabelSize: 20 } });
+      r.view.x = -100;                                // centre on a
+      r.view.zoom = 4;                                // 15 * 4 = 60px > 20px
+      r.render();
+      assert.equal(textState(ctx)[0].size, 20);
+    });
+  });
+
+  describe("culling", () => {
+    /* At zoom 1 the view spans x in [-400, 400] and y in [-300, 300]. */
+    test("a label stays drawn while its node is just off screen", () => {
+      const { sim, r, ctx } = lscene();
+      sim.nodes.get("a").y = -325;                    // circle -345..-305; label -303..-288
+      r.render();
+      assert.equal(opsNamed(ctx, "arc").length, 1, "a's circle is culled");
+      assert.deepEqual(texts(ctx), [["a", 300, -3], ["b", 500, 322]]);
+    });
+
+    test("a label fully off screen is culled", () => {
+      const { sim, r, ctx } = lscene();
+      sim.nodes.get("a").y = -345;                    // label -323..-308
+      r.render();
+      assert.deepEqual(texts(ctx).map(([t]) => t), ["b"]);
+    });
+
+    test("culling uses the label's measured width", () => {
+      // a's circle spans x -450..-410; a right label starts at -408
+      const run = label => {
+        const { sim, r, ctx } = lscene({
+          nodeCfg: { label: n => (n.id === "a" ? label : n.id) }, opts: { labelPosition: "right" },
+        });
+        sim.nodes.get("a").x = -430;
+        r.render();
+        return texts(ctx).map(([t]) => t);
+      };
+      assert.deepEqual(run("a"), ["b"], "7.5 wide: ends at -400.5, off screen");
+      assert.deepEqual(run("abcdefgh"), ["abcdefgh", "b"], "60 wide: reaches into view");
+    });
+  });
+
+  describe("scaling by transform", () => {
+    /* Logs writes to ctx.font into the op stream, so tests can count them. */
+    function trackFont(ctx) {
+      let font = ctx.font;
+      Object.defineProperty(ctx, "font", {
+        get: () => font,
+        set: v => { font = v; ctx.ops.push(["font", v]); },
+        configurable: true,
+      });
+    }
+
+    test("labels of different sizes share one font write per frame", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelScale: n => (n.id === "a" ? 30 : 10) } });
+      r.render();                                     // first frame also measures
+      trackFont(ctx);
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "font"), [["font", "100px Arial"]]);
+      assert.deepEqual(textState(ctx).map(s => s.size), [30, 10]);
+    });
+
+    test("no text state or transform is touched when no label is on screen", () => {
+      const { r, ctx } = scene(false, []);
+      trackFont(ctx);
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "font"), []);
+      assert.deepEqual(opsNamed(ctx, "setTransform"), []);
+    });
+
+    test("the base transform is restored after the label pass", () => {
+      const { r, ctx } = lscene();
+      r.render();
+      assert.deepEqual(ctx.transform, [1, 0, 0, 1, 0, 0]);
+    });
+
+    test("labels are placed and sized in device px under a DPR transform", () => {
+      const restore = installWindow(2);
+      try {
+        const { r, ctx } = lscene();
+        r.render();
+        assert.deepEqual(texts(ctx)[0], ["a", 600, 644], "canvas (300,322) at DPR 2");
+        assert.equal(textState(ctx)[0].size, 30, "15 CSS px at DPR 2");
+        assert.deepEqual(ctx.transform, [2, 0, 0, 2, 0, 0], "the DPR transform is restored");
+      } finally { restore(); }
+    });
+  });
+
+  describe("measuring", () => {
+    test("each distinct label is measured once, at the reference size", () => {
+      const { r, ctx } = lscene({ nodeCfg: { label: "same" } });
+      r.render();
+      assert.deepEqual(measures(ctx), [["same", "100px Arial"]]);
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(measures(ctx), [], "nothing changed, so nothing is remeasured");
+    });
+
+    test("a restyle reuses cached widths and measures only new text", () => {
+      const { r, ctx } = lscene();
+      r.render();
+      ctx.ops.length = 0;
+      r.setDefaultNodeConfig({ labelTextColor: "red" });
+      r.render();
+      assert.deepEqual(measures(ctx), []);
+      assert.equal(textState(ctx)[0].fillStyle, "red");
+
+      ctx.ops.length = 0;
+      r.setNodeConfig("a", { label: "new" });
+      r.render();
+      assert.deepEqual(measures(ctx), [["new", "100px Arial"]]);
+    });
+
+    test("changing labelFont remeasures in the new font", () => {
+      const { r, ctx } = lscene();
+      r.render();
+      ctx.ops.length = 0;
+      r.setOpts({ labelFont: "serif" });
+      r.render();
+      assert.deepEqual(measures(ctx), [["a", "100px serif"], ["b", "100px serif"]]);
+      assert.deepEqual([textState(ctx)[0].font, textState(ctx)[0].size], ["100px serif", 15]);
+    });
+
+    test("labels added while renderLabels is off are measured once it is turned on", () => {
+      const { g, sim, r, ctx } = lscene({ opts: { renderLabels: false } });
+      r.render();
+      g.addNode({ id: "c" });
+      sim.sync();
+      sim.nodes.get("c").x = 0;
+      sim.nodes.get("c").y = 0;
+      r.render();
+      r.setOpts({ renderLabels: true });
+      r.render();
+      assert.deepEqual(measures(ctx).map(([t]) => t), ["a", "b", "c"]);
+      assert.deepEqual(texts(ctx).map(([t]) => t).sort(), ["a", "b", "c"]);
+    });
+  });
+});
+
 describe("Renderer: highlighting", () => {
   /* The stub context doesn't record state, so log globalAlpha writes into the
      op stream. `draws()` then pairs each node circle (by its x: a=300, b=500)
@@ -925,6 +1220,45 @@ describe("Renderer: highlighting", () => {
       const { r, ctx } = hscene();
       r.setHighlight({ edges: [["b", "a"]] });
       assert.deepEqual(render(r, ctx).find(([k]) => k === "edge"), ["edge", 1]);
+    });
+
+    /* Node circles and labels in draw order, each with the alpha it was
+       drawn at: ["a", alpha] for a circle, ["label a", alpha] for a label. */
+    function nodeAndLabelDraws(ctx) {
+      const out = [];
+      let alpha = 1;
+      for (const [name, ...args] of ctx.ops) {
+        if (name === "globalAlpha") alpha = args[0];
+        else if (name === "arc") out.push([args[0] === 300 ? "a" : "b", alpha]);
+        else if (name === "fillText") out.push(["label " + args[0], alpha]);
+      }
+      return out;
+    }
+
+    test("labels take their node's alpha and sit under highlighted nodes", () => {
+      const s = scene(false, [["a", "b"]], {
+        nodeCfg: { label: n => n.id }, opts: { highlightFadeDuration: 0 },
+      });
+      trackAlpha(s.ctx);
+      s.r.setHighlight({ nodes: ["a"] });
+      s.r.render();
+      assert.deepEqual(nodeAndLabelDraws(s.ctx),
+        [["b", 0.15], ["label b", 0.15], ["a", 1], ["label a", 1]]);
+
+      // b's label leaves a scaled transform; a must be drawn back in canvas space
+      const ops = s.ctx.ops, arcA = ops.findIndex(([n, x]) => n === "arc" && x === 300);
+      const lastTransform = ops.slice(0, arcA).findLast(([n]) => n === "setTransform");
+      assert.deepEqual(lastTransform.slice(1), [1, 0, 0, 1, 0, 0]);
+    });
+
+    test("hide: labels of hidden nodes are skipped", () => {
+      const s = scene(false, [["a", "b"]], {
+        nodeCfg: { label: n => n.id }, opts: { highlightFadeDuration: 0, highlightMode: "hide" },
+      });
+      trackAlpha(s.ctx);
+      s.r.setHighlight({ nodes: ["a"] });
+      s.r.render();
+      assert.deepEqual(nodeAndLabelDraws(s.ctx), [["a", 1], ["label a", 1]]);
     });
   });
 

@@ -21,13 +21,78 @@ import { asFn, clamp, circleRectCollision } from "./utils.js";
 const RENDERER_DEFAULTS = {
   background: "#ffffff",
   renderEdges: true,
-  imageReferrerPolicy: "no-referrer",
-  crossOrigin: "anonymous",
+  renderLabels: true,
+  labelFont: "Arial",
+  labelPosition: "bottom",
+  labelMargin: 2,
+  minLabelSize: 6,
+  maxLabelSize: Infinity,
   highlightMode: "dim",
   highlightAlpha: 0.15,
   highlightFadeDuration: 150,
+  imageReferrerPolicy: "no-referrer",
+  crossOrigin: "anonymous",
   imageCacheMB: 64,
 };
+
+/** @type {NodeStyle} */
+const NODE_STYLE_DEFAULTS = {
+  color: "#ffffff",
+  outlineColor: "#000000",
+  outlineWidth: 1,
+  image: null,
+  label: null,
+  renderLabel: true,
+  labelScale: 15,
+  labelTextColor: "#000000",
+};
+
+/** @type {EdgeStyle} */
+const EDGE_STYLE_DEFAULTS = {
+  color: "#000000",
+  width: 1,
+  arrow: null,
+  arrowSize: 10,
+  bow: 14,
+};
+
+/**
+ * Converts a full node config object to accessor functions
+ * @param {ResolvedNodeStyleConfig} config - config to convert
+ * @returns {ResolvedNodeStyleAccessors} accessors
+ */
+const toNodeAccessors = config => ({
+  color: asFn(config.color),
+  outlineColor: asFn(config.outlineColor),
+  outlineWidth: asFn(config.outlineWidth),
+  image: asFn(config.image),
+  label: asFn(config.label),
+  renderLabel: asFn(config.renderLabel),
+  labelScale: asFn(config.labelScale),
+  labelTextColor: asFn(config.labelTextColor),
+});
+
+/**
+ * Converts a full edge config object to accessor functions
+ * @param {ResolvedEdgeStyleConfig} config - config to convert
+ * @returns {ResolvedEdgeStyleAccessors} accessors
+ */
+const toEdgeAccessors = config => ({
+  color: asFn(config.color),
+  width: asFn(config.width),
+  arrow: asFn(config.arrow),
+  arrowSize: asFn(config.arrowSize),
+  bow: asFn(config.bow),
+});
+
+
+/**
+ * Font size (px) labels are measured and drawn at. Each label is scaled to its
+ * own size by transform, so the font only has to be set once per frame.
+ * Widths are stored per px of font size, since text width scales roughly
+ * linearly with it.
+ */
+const LABEL_REF_SIZE = 100;
 
 /** Sizes (device px) that sprites of node images are made at. */
 const SPRITE_SIZES = [16, 32, 64, 128, 256, 512];
@@ -99,49 +164,6 @@ const stepAlphas = (alphas, flags, dim, step) => {
   }
   return settled;
 };
-
-/** @type {NodeStyle} */
-const NODE_STYLE_DEFAULTS = {
-  color: "#ffffff",
-  outlineColor: "#000000",
-  outlineWidth: 1,
-  image: null,
-};
-
-/** @type {EdgeStyle} */
-const EDGE_STYLE_DEFAULTS = {
-  color: "#000000",
-  width: 1,
-  arrow: null,
-  arrowSize: 10,
-  bow: 14,
-};
-
-/**
- * Converts a full node config object to accessor functions
- * @param {ResolvedNodeStyleConfig} config - config to convert
- * @returns {ResolvedNodeStyleAccessors} accessors
- */
-const toNodeAccessors = config => ({
-  color: asFn(config.color),
-  outlineColor: asFn(config.outlineColor),
-  outlineWidth: asFn(config.outlineWidth),
-  image: asFn(config.image),
-});
-
-/**
- * Converts a full edge config object to accessor functions
- * @param {ResolvedEdgeStyleConfig} config - config to convert
- * @returns {ResolvedEdgeStyleAccessors} accessors
- */
-const toEdgeAccessors = config => ({
-  color: asFn(config.color),
-  width: asFn(config.width),
-  arrow: asFn(config.arrow),
-  arrowSize: asFn(config.arrowSize),
-  bow: asFn(config.bow),
-});
-
 
 
 /**
@@ -365,6 +387,31 @@ export class Renderer {
 
 
   /**
+   * Width of each node's label per px of font size, parallel to
+   * `Simulation.nodeList`. 0 for nodes without a label.
+   * @type {Float64Array}
+   */
+  _labelWidthRatio = new Float64Array(0);
+
+
+  /**
+   * Label width ratios keyed by label text, measured in the current
+   * `labelFont`. Holds only the labels present at the last measure
+   * (updated by `_measureLabels()`).
+   * @type {Map<string, number>}
+   */
+  _labelWidthCache = new Map();
+
+
+  /**
+   * Whether `_labelWidthRatio` must be remeasured before the next draw. Set
+   * when styles are resolved or `labelFont` changes.
+   * @type {boolean}
+   */
+  _labelsDirty = true;
+
+
+  /**
    * Whether any element's alpha may still differ from its target. Set by
    * anything that changes targets; cleared once a step finds all settled.
    * @type {boolean}
@@ -483,19 +530,32 @@ export class Renderer {
   constructor(simulation, opts = {}) {
     this._simulation = simulation;
     this._graph = simulation.graph;
-
+    const DF = RENDERER_DEFAULTS;
     this._opts = {
-      background: opts.background ?? RENDERER_DEFAULTS.background,
-      renderEdges: opts.renderEdges ?? RENDERER_DEFAULTS.renderEdges,
-      highlightMode: opts.highlightMode ?? RENDERER_DEFAULTS.highlightMode,
-      highlightAlpha: clamp(opts.highlightAlpha ?? RENDERER_DEFAULTS.highlightAlpha, 0, 1),
+      background: opts.background ?? DF.background,
+      renderEdges: opts.renderEdges ?? DF.renderEdges,
+
+      renderLabels: opts.renderLabels ?? DF.renderLabels,
+      labelFont: opts.labelFont ?? DF.labelFont,
+      labelPosition: opts.labelPosition ?? DF.labelPosition,
+      labelMargin: opts.labelMargin ?? DF.labelMargin,
+      minLabelSize: Math.max(opts.minLabelSize ?? DF.minLabelSize, 0),
+      maxLabelSize: Math.max(opts.maxLabelSize ?? DF.maxLabelSize, 0),
+      
+      highlightMode: opts.highlightMode ?? DF.highlightMode,
+
+      highlightAlpha: clamp(
+        opts.highlightAlpha ?? DF.highlightAlpha, 0, 1),
+      
       highlightFadeDuration: Math.max(
-        opts.highlightFadeDuration ?? RENDERER_DEFAULTS.highlightFadeDuration, 0),
-      imageCacheMB: Math.max(opts.imageCacheMB ?? RENDERER_DEFAULTS.imageCacheMB, 0),
-      imageReferrerPolicy:
-        opts.imageReferrerPolicy ?? RENDERER_DEFAULTS.imageReferrerPolicy,
+        opts.highlightFadeDuration ?? DF.highlightFadeDuration, 0),
+      
+      imageCacheMB: Math.max(opts.imageCacheMB ?? DF.imageCacheMB, 0),
+      
+      imageReferrerPolicy: opts.imageReferrerPolicy ?? DF.imageReferrerPolicy,
+      
       crossOrigin: opts.crossOrigin === undefined ?
-        RENDERER_DEFAULTS.crossOrigin : opts.crossOrigin,
+        DF.crossOrigin : opts.crossOrigin,
     };
 
     if (opts.canvas) this.attach(opts.canvas);
@@ -514,10 +574,17 @@ export class Renderer {
    */
   setOpts({
     canvas, nodeConfig, edgeConfig,
+    minLabelSize, maxLabelSize,
     highlightAlpha, highlightFadeDuration, imageCacheMB,
     ...opts
   } = {}) {
     Object.assign(this._opts, opts);
+    if (minLabelSize !== undefined) {
+      this._opts.minLabelSize = Math.max(minLabelSize, 0);
+    }
+    if (maxLabelSize !== undefined) {
+      this._opts.maxLabelSize = Math.max(maxLabelSize, 0);
+    }
     if (highlightAlpha !== undefined) {
       this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
     }
@@ -526,6 +593,11 @@ export class Renderer {
     }
     if (imageCacheMB !== undefined) {
       this._opts.imageCacheMB = Math.max(imageCacheMB, 0);
+    }
+    // Cached label widths were measured in the old font
+    if (opts.labelFont !== undefined) {
+      this._labelWidthCache.clear();
+      this._labelsDirty = true;
     }
     // Mode and alpha set the dimmed target, so ease toward the new value
     if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._startFade();
@@ -702,6 +774,10 @@ export class Renderer {
     rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
     rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
     rNode.image = o?.image?.(gNode, g) ?? acc.image(gNode, g);
+    rNode.label = o?.label?.(gNode, g) ?? acc.label(gNode, g);
+    rNode.renderLabel = o?.renderLabel?.(gNode, g) ?? acc.renderLabel(gNode, g);
+    rNode.labelScale = o?.labelScale?.(gNode, g) ?? acc.labelScale(gNode, g);
+    rNode.labelTextColor = o?.labelTextColor?.(gNode, g) ?? acc.labelTextColor(gNode, g);
   }
 
 
@@ -1205,6 +1281,7 @@ export class Renderer {
     }
 
     this._stylesDirty = false;
+    this._labelsDirty = true;
 
     if (this._syncedSimulation === this._simulation.version) return true;
 
@@ -1378,6 +1455,38 @@ export class Renderer {
     }
   }
 
+  
+  /**
+   * Draws a node's label. Whether it should be drawn (has a label, is
+   * enabled, large enough, on screen) is decided by `_cull()`.
+   *
+   * Expects the context to hold the label font at `LABEL_REF_SIZE` and the
+   * alignment for `labelPosition`, both set once per frame by `render()`. The
+   * label is sized and placed by transform, which is left set; `render()`
+   * restores the base transform after each label pass.
+   * @param {SimNode} sNode - simulation node body object
+   * @param {NodeStyle} nodeStyle - node style
+   * @returns {void}
+   */
+  _drawNodeLabel(sNode, nodeStyle) {
+    if (!this._ctx) return;
+    const zoom = this._view.zoom, dpr = this._dpr;
+    let [x, y] = this.simToCanvas(sNode.x, sNode.y);
+    const r = (sNode.radius + this._opts.labelMargin) * zoom;
+    switch (this._opts.labelPosition) {
+      case "top":   y -= r; break;
+      case "right": x += r; break;
+      case "left":  x -= r; break;
+      default:      y += r; break;   // "bottom"
+    }
+    // Scale the reference-size font to this label's size, anchored at (x, y)
+    const size = Math.min(nodeStyle.labelScale * zoom, this._opts.maxLabelSize);
+    const s = dpr * size / LABEL_REF_SIZE;
+    this._ctx.setTransform(s, 0, 0, s, dpr * x, dpr * y);
+    this._ctx.fillStyle = nodeStyle.labelTextColor;
+    this._ctx.fillText(String(nodeStyle.label), 0, 0);
+  }
+
 
   /**
    * Draws an edge between two nodes, trimmed to their radii, with an
@@ -1519,6 +1628,14 @@ export class Renderer {
     this._drawNode(this.simulation.nodeList[i], this._nodeStyles[i]);
   }
 
+  /**
+   * Draws a node's label, identified by cache index.
+   * @param {number} i - cache index of node
+   */
+  _renderNodeLabelByIndex(i) {
+    this._drawNodeLabel(this.simulation.nodeList[i], this._nodeStyles[i]);
+  }
+
 
   /**
    * Draws an edge identified by cache index.
@@ -1537,13 +1654,42 @@ export class Renderer {
 
 
   /**
-   * Culls all nodes and edges fully outside the current view.
-   * Only keeps on-screen nodes and edges connected to at least
-   * one on-screen node.
-   * @returns {{nodesI: number[], edgesI: number[]}}
+   * Measures each node's label width per px of font size into
+   * `_labelWidthRatio`, reusing cached widths of unchanged label text.
+   * @returns {void}
+   */
+  _measureLabels() {
+    if (!this._ctx) return;
+    const ctx = this._ctx;
+    const styles = this._nodeStyles;
+    const prev = this._labelWidthCache, next = new Map();
+    this._labelWidthRatio = new Float64Array(styles.length);
+    let fontSet = false;     // only set the font once something needs measuring
+    for (let i = 0; i < styles.length; i++) {
+      const label = styles[i].label;
+      if (label == null || label === "") continue;
+      const text = String(label);
+      let ratio = next.get(text) ?? prev.get(text);
+      if (ratio === undefined) {
+        if (!fontSet) { ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`; fontSet = true; }
+        ratio = ctx.measureText(text).width / LABEL_REF_SIZE;
+      }
+      next.set(text, ratio);
+      this._labelWidthRatio[i] = ratio;
+    }
+    this._labelWidthCache = next;
+    this._labelsDirty = false;
+  }
+
+
+  /**
+   * Culls all nodes, edges, and labels fully outside the current view.
+   * Only keeps on-screen nodes, edges connected to at least one on-screen
+   * node, and on-screen labels.
+   * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
    */
   _cull() {
-    if (!this._size) return { nodesI: [], edgesI: [] };
+    if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
     const [xMin, yMin] = this.canvasToSim(0, 0);
     const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
 
@@ -1567,7 +1713,32 @@ export class Renderer {
       }
     }
 
-    return { nodesI, edgesI };
+    const labelsI = [];
+    if (this._opts.renderLabels) {
+      const { labelMargin, labelPosition, minLabelSize, maxLabelSize } = this._opts;
+      const zoom = this._view.zoom, ratios = this._labelWidthRatio;
+      for (let i = 0; i < sim.nodeList.length; i++) {
+        const style = this._nodeStyles[i];
+        if (!ratios[i] || !style.renderLabel) continue;     // no label, or disabled
+        const px = style.labelScale * zoom;
+        if (px < minLabelSize) continue;                     // too small to read
+        // Label bounds in world units
+        const sNode = sim.nodeList[i];
+        const h = Math.min(px, maxLabelSize) / zoom;
+        const w = ratios[i] * h;
+        const d = sNode.radius + labelMargin;
+        let x0, y0;
+        switch (labelPosition) {
+          case "top":   x0 = sNode.x - w / 2; y0 = sNode.y - d - h; break;
+          case "right": x0 = sNode.x + d;     y0 = sNode.y - h / 2; break;
+          case "left":  x0 = sNode.x - d - w; y0 = sNode.y - h / 2; break;
+          default:      x0 = sNode.x - w / 2; y0 = sNode.y + d;     break;
+        }
+        if (x0 < xMax && x0 + w > xMin && y0 < yMax && y0 + h > yMin) labelsI.push(i);
+      }
+    }
+
+    return { nodesI, edgesI, labelsI };
   }
 
 
@@ -1622,11 +1793,38 @@ export class Renderer {
     this._stepFade(time);
     this._frameId++;
     this._spriteBuilds = 0;
+    if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
     const inFrame = this._cull();
 
     this._ctx.fillStyle = this._opts.background;
     this._ctx.fillRect(0, 0, this._size.w, this._size.h);
+
+    // Text state shared by every label this frame; each label scales the font
+    // to its own size by transform
+    const hasLabels = inFrame.labelsI.length > 0;
+    if (hasLabels) {
+      this._ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`;
+      switch (this._opts.labelPosition) {
+        case "top":
+          this._ctx.textAlign = "center";
+          this._ctx.textBaseline = "bottom";
+          break;
+        case "right":
+          this._ctx.textAlign = "left";
+          this._ctx.textBaseline = "middle";
+          break;
+        case "left":
+          this._ctx.textAlign = "right";
+          this._ctx.textBaseline = "middle";
+          break;
+        default: // "bottom"
+          this._ctx.textAlign = "center";
+          this._ctx.textBaseline = "top";
+          break;
+      }
+    }
+    const dpr = this._dpr;
 
     if (this.hasHighlight() || this._fadeActive) {
       this._frameAlpha = 1;
@@ -1639,11 +1837,19 @@ export class Renderer {
           if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
             this._renderNodeByIndex(i);
         }
+        for (const i of inFrame.labelsI) {
+          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+            this._renderNodeLabelByIndex(i);
+        }
+        // Highlighted nodes are drawn next, in canvas space
+        if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       if (this._frameAlpha !== 1) this._ctx.globalAlpha = 1;
     } else {
       for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
       for (const i of inFrame.nodesI) this._renderNodeByIndex(i);
+      for (const i of inFrame.labelsI) this._renderNodeLabelByIndex(i);
+      if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     this._evictSprites();

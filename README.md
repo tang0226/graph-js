@@ -55,6 +55,12 @@ const gjs = new GraphJS({
   renderer: {                       // the following are the same as the default values
     background: "#ffffff",
     renderEdges: true,              // set false to draw nodes only
+    renderLabels: true,             // set false to hide every node label (see "Node labels")
+    labelFont: "Arial",             // font family for labels
+    labelPosition: "bottom",        // where node labels sit: "bottom", "top", "left" or "right"
+    labelMargin: 2,                 // gap between a node and its label, in simulation units
+    minLabelSize: 6,                // labels smaller than this on screen (px) are hidden
+    maxLabelSize: Infinity,         // labels stop growing at this size on screen (px)
     crossOrigin: "anonymous",       // crossOrigin for node image requests
     imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
@@ -150,6 +156,10 @@ All the available settings:
 | | `outlineColor` | `"#000000"` | |
 | | `outlineWidth` | `1` | `0` for no outline |
 | | `image` | `null` | image URL drawn inside the node (see below) |
+| | `label` | `null` | text drawn beside the node; a string or number (see below) |
+| | `renderLabel` | `true` | `false` hides this node's label |
+| | `labelScale` | `15` | label font size, in simulation units |
+| | `labelTextColor` | `"#000000"` | |
 | Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
 | | `width` | `1` | |
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
@@ -190,6 +200,32 @@ gjs.renderer.loadImage("https://example.com/alice.png");
 Unused images are cleaned up periodically as nodes are removed, so preload shortly before the nodes that use them are added.
 
 For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 512 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
+
+### Node labels
+
+```js
+gjs.renderer.setDefaultNodeConfig({
+  label: node => node.data.name ?? node.id,
+  labelTextColor: "#333333",
+});
+gjs.renderer.setOpts({ labelPosition: "right", labelFont: "Georgia, serif" });
+```
+
+A node with a `label` of `null` or `""` has no label; `0` is drawn. `labelFont` is a font family name or list, as in CSS `font-family`.
+
+Labels scale with the view like the nodes do: `labelScale` is the font size in simulation units. Two renderer options keep them readable at the extremes:
+
+- `minLabelSize`: the renderer skips drawing labels at any font size below this threshold.
+- `maxLabelSize`: for large labels or high zoom levels, the renderer limits a label's canvas font size to this cap.
+
+To label only some nodes, set `renderLabel` per node. Setting `renderLabels: false` in renderer options hides all nodes, ignoring the `renderLabel` config of individual nodes.
+
+```js
+gjs.renderer.setDefaultNodeConfig({ renderLabel: node => gjs.graph.degree(node.id) >= 3 });  // only hubs
+gjs.renderer.setOpts({ renderLabels: false });                                             // none at all
+```
+
+Labels are drawn on top of the nodes. When highlighting, a label fades with its node, and highlighted nodes are drawn over dimmed labels. A label stays visible while its node is just off the edge of the canvas.
 
 ## Dragging nodes
 

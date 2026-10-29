@@ -7,13 +7,39 @@
 
    drawImage deliberately mimics the browser's strictness: passing a non-image
    or a non-finite coordinate throws, which is how a sentinel string leaking
-   into the draw path gets caught. */
+   into the draw path gets caught.
+
+   setTransform is logged and also kept in `transform` as [a, b, c, d, e, f].
+
+   Text is deterministic: every glyph is half the font's px size wide, so a
+   label's width is `text.length * size / 2`. fillText logs where the text
+   lands and how big it is after the current transform (device px), plus the
+   text state it was drawn with: [ "fillText", text, x, y, { font, size,
+   fillStyle, textAlign, textBaseline } ]. measureText logs the text and font,
+   so tests can count measurements. */
 export function makeCtx() {
   const ops = [];
   const log = name => (...args) => { ops.push([name, ...args]); };
   return {
     ops,
     fillStyle: "", strokeStyle: "", lineWidth: 0,
+    font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
+    transform: [1, 0, 0, 1, 0, 0],
+    setTransform(...m) {
+      ops.push(["setTransform", ...m]);
+      this.transform = m;
+    },
+    fillText(text, x, y) {
+      const [a, b, c, d, e, f] = this.transform;
+      ops.push(["fillText", text, a * x + c * y + e, b * x + d * y + f, {
+        font: this.font, size: parseFloat(this.font) * Math.hypot(a, b),
+        fillStyle: this.fillStyle, textAlign: this.textAlign, textBaseline: this.textBaseline,
+      }]);
+    },
+    measureText(text) {
+      ops.push(["measureText", text, this.font]);
+      return { width: text.length * parseFloat(this.font) / 2 };
+    },
     beginPath: log("beginPath"),
     closePath: log("closePath"),
     moveTo: log("moveTo"),
@@ -27,7 +53,6 @@ export function makeCtx() {
     clip: log("clip"),
     save: log("save"),
     restore: log("restore"),
-    setTransform: log("setTransform"),
     drawImage(src, ...rest) {
       ops.push(["drawImage", src, ...rest]);
       if (typeof src === "string" || src == null)

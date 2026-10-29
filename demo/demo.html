@@ -158,24 +158,24 @@
       <input type="range" id="friction" min="0.8" max="0.995" step="0.0025" value="0.9">
     </div>
     <div class="row">
-      <label for="repulsion">Repulsion</label><output id="repulsionOut">2000</output>
-      <input type="range" id="repulsion" min="0" max="10000" step="10" value="2000">
+      <label for="repulsion">Repulsion</label><output id="repulsionOut">6000</output>
+      <input type="range" id="repulsion" min="0" max="10000" step="10" value="6000">
     </div>
     <div class="row">
       <label for="springStiffness">Spring stiffness</label><output id="springStiffnessOut">0.020</output>
       <input type="range" id="springStiffness" min="0" max="0.25" step="0.001" value="0.02">
     </div>
     <div class="row">
-      <label for="springLength">Spring length</label><output id="springLengthOut">60</output>
-      <input type="range" id="springLength" min="0" max="400" step="5" value="60">
+      <label for="springLength">Spring length</label><output id="springLengthOut">50</output>
+      <input type="range" id="springLength" min="0" max="400" step="5" value="50">
     </div>
     <div class="row">
-      <label for="gravity">Gravity</label><output id="gravityOut">0.0020</output>
-      <input type="range" id="gravity" min="0" max="0.01" step="0.0001" value="0.002">
+      <label for="gravity">Gravity</label><output id="gravityOut">0.0003</output>
+      <input type="range" id="gravity" min="0" max="0.01" step="0.0001" value="0.0003">
     </div>
     <div class="row">
-      <label for="cooling">Cooling</label><output id="coolingOut">0.950</output>
-      <input type="range" id="cooling" min="0.95" max="1" step="0.001" value="0.98">
+      <label for="cooling">Cooling</label><output id="coolingOut">0.99</output>
+      <input type="range" id="cooling" min="0.95" max="1" step="0.001" value="0.99">
     </div>
     <div class="row">
       <label for="minDistSq">Min dist² clamp</label><output id="minDistSqOut">1</output>
@@ -260,6 +260,35 @@
   </fieldset>
 
   <fieldset>
+    <legend>Labels</legend>
+    <div class="row inline">
+      <label for="renderLabels">Render labels</label>
+      <input type="checkbox" id="renderLabels" checked>
+    </div>
+    <div class="row inline">
+      <label for="labelPosition">Position</label>
+      <select id="labelPosition">
+        <option value="bottom" selected>bottom</option>
+        <option value="top">top</option>
+        <option value="left">left</option>
+        <option value="right">right</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="labelMargin">Margin (world px)</label><output id="labelMarginOut">2</output>
+      <input type="range" id="labelMargin" min="0" max="30" step="1" value="2">
+    </div>
+    <div class="row">
+      <label for="labelScale">Size (world px)</label><output id="labelScaleOut">10</output>
+      <input type="range" id="labelScale" min="2" max="60" step="1" value="10">
+    </div>
+    <div class="row">
+      <label for="minLabelSize">Hide below (screen px)</label><output id="minLabelSizeOut">6.0</output>
+      <input type="range" id="minLabelSize" min="0" max="30" step="0.5" value="6">
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>View</legend>
     <div class="row inline">
       <label for="background">Background</label>
@@ -271,7 +300,7 @@
     </div>
     <div class="row inline">
       <label for="hoverHighlight">Highlight on hover</label>
-      <input type="checkbox" id="hoverHighlight">
+      <input type="checkbox" id="hoverHighlight" checked>
     </div>
     <div class="row">
       <label for="highlightFade">Highlight fade (ms)</label><output id="highlightFadeOut">150</output>
@@ -326,19 +355,25 @@ function readUI() {
 function buildGraph() {
   if (gjs) gjs.stop();
 
-  gjs = new GraphJS({ canvas, graph: { directed: ui.directed } });
+  gjs = new GraphJS({
+    canvas,
+    graph: { directed: ui.directed },
+  });
   hovered = null;                          // the new renderer starts unhighlighted
 
   const n = ui.nodeCount;
+  const nodes = [];
   for (let i = 0; i < n; i++) {
-    gjs.addNode({ id: "n" + i, group: i % GROUPS });
-    if (i > 0) gjs.addEdge("n" + ((Math.random() * i) | 0), "n" + i);  // random tree
+    const id = gjs.addNode({ id: `n${i}`, group: i % GROUPS });
+    if (i > 0) gjs.addEdge(nodes[Math.floor(Math.random() * nodes.length)].id, id);  // random tree
+    nodes.push(gjs.graph.nodes.get(id));
   }
   for (let k = 0; k < ui.extraEdges; k++) addRandomEdge();
 
   applySimConfig();
   applyNodeConfig();
   applyEdgeConfig();
+  applyLabelConfig();
   applyViewConfig();
   gjs.resize();
 }
@@ -389,6 +424,8 @@ function applyNodeConfig() {
       : ui.nodeColor,
     outlineColor: ui.outlineColor,
     outlineWidth: ui.outlineWidth,
+    label: node => node.id,
+    labelTextColor: node => GROUP_COLORS[(node.data.group ?? 0) % GROUPS],
   });
 }
 
@@ -401,6 +438,16 @@ function applyEdgeConfig() {
       ? edge => ui.edgeWidth * (0.5 + 0.25 * Math.min(6, Math.min(g.degree(edge.src.id), g.degree(edge.dest.id))))
       : ui.edgeWidth,
   });
+}
+
+function applyLabelConfig() {
+  gjs.renderer.setOpts({
+    renderLabels: ui.renderLabels,
+    labelPosition: ui.labelPosition,
+    labelMargin: ui.labelMargin,
+    minLabelSize: ui.minLabelSize,
+  });
+  gjs.renderer.setDefaultNodeConfig({ labelScale: ui.labelScale });
 }
 
 function applyViewConfig() {
@@ -518,6 +565,7 @@ canvas.addEventListener("wheel", e => {
 const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "minDistSq"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
 const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode"];
+const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize"];
 const VIEW_IDS = ["background", "zoom", "highlightFade", "highlightAlpha"];
 
 for (const el of document.querySelectorAll("input, select")) {
@@ -528,6 +576,7 @@ for (const el of document.querySelectorAll("input, select")) {
     if (SIM_IDS.includes(el.id))  applySimConfig();
     if (NODE_IDS.includes(el.id)) applyNodeConfig();
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
+    if (LABEL_IDS.includes(el.id)) applyLabelConfig();
     if (VIEW_IDS.includes(el.id)) applyViewConfig();
     if (!running) gjs.renderer.render();
   });
@@ -537,7 +586,7 @@ $("regen").addEventListener("click", buildGraph);
 
 $("addNode").addEventListener("click", () => {
   const ids = nodeIds();
-  const id = gjs.addNode({ group: (Math.random() * GROUPS) | 0 });
+  const id = gjs.addNode({ id: "n" + gjs.graph.nodes.size, group: (Math.random() * GROUPS) | 0 });
   if (ids.length) gjs.addEdge(ids[(Math.random() * ids.length) | 0], id);
   applyNodeConfig();                       // degree-derived radii changed
   applyEdgeConfig();

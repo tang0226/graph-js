@@ -133,6 +133,7 @@
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
 
+/** @typedef {"top" | "bottom" | "left" | "right"} LabelPosition */
 /** @typedef {"dim" | "hide"} HighlightMode */
 
 /**
@@ -142,6 +143,14 @@
  * @property {NodeStyleConfig} [nodeConfig] - default node config
  * @property {EdgeStyleConfig} [edgeConfig] - default edge config
  * @property {boolean} [renderEdges] - whether to render edges
+ * @property {boolean} [renderLabels] - whether to render node labels
+ * @property {string} [labelFont] - label font
+ * @property {LabelPosition} [labelPosition] - where to render labels
+ * @property {number} [labelMargin] - world px margin between a node and its label
+ * @property {number} [minLabelSize] - canvas px font size below which scaled
+ *    labels are hidden
+ * @property {number} [maxLabelSize] - canvas px font size that scaled labels
+ *    are capped at
  * @property {HighlightMode} [highlightMode] - highlight mode
  * @property {number} [highlightAlpha] - highlight alpha
  * @property {number} [highlightFadeDuration] - milliseconds for an element to
@@ -149,10 +158,10 @@
  *    fading
  * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
  *    for image requests.
- * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
- *    cached node image sizes; images on screen are always kept
  * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
  *    cross-origin parameter for image requests.
+ * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
+ *    cached node image sizes; images on screen are always kept
  */
 
 /** @typedef {Required<Omit<RendererOptsInput, "canvas" | "nodeConfig" | "edgeConfig">>} RendererOpts */
@@ -178,6 +187,10 @@
  * @property {string} outlineColor - node outline color
  * @property {number} outlineWidth - node outline width
  * @property {string | null} image - node image source
+ * @property {string | number | null} label - text label
+ * @property {boolean} renderLabel - whether to render the label, if it exists
+ * @property {number} labelScale - label font size, in world px
+ * @property {string} labelTextColor - label text color
  */
 
 /**
