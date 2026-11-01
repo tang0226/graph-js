@@ -6,11 +6,13 @@
  *  NodeId, GraphNode, GraphEdge,
  *  SimNode, SimNodeConfig, SimNodeAccessors,
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
- *  SimOpts, SimOptsInput
+ *  SimOpts, SimOptsInput,
+ NodeStyleConfig
  * } from './typedefs.js'
  */
 
 import { asFn } from "./utils.js";
+import { BarnesHutContext } from "./barnes-hut.js";
 
 
 /** @type {{ mass: number, radius: number, fixed: boolean }} */
@@ -56,18 +58,6 @@ export class Simulation {
   get nodes() { return this._nodes; }
 
 
-  /** @type {number} */
-  _temp = 0;
-  /**
-   * [read-only, reset with `heat()`]
-   * Temperature value that forces are multiplied by. Decays each tick
-   * according to the rate of `opts.cooling`. Once it is lower than
-   * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
-   * which is called after config or settings changes.
-   */
-  get temp() { return this._temp; }
-
-
   /** @type {SimNode[]} */
   _nodeList = [];
   /**
@@ -88,6 +78,54 @@ export class Simulation {
    * @returns {ReadonlyMap<NodeId, number>}
    */
   get nodeIndex() { return this._nodeIndex; }
+
+
+  /**
+   * Cached array of resolved node radius values.
+   * Updated in effective `sync()` calls.
+   * @type {Float64Array}
+   */
+  _nodeRadius = new Float64Array();
+
+  
+  /**
+   * Cached array of resolved node fixed flags.
+   * Updated in effective `sync()` calls.
+   * @type {Uint8Array}
+   */
+  _nodeFixed = new Uint8Array();
+
+
+  /**
+   * Cached array of resolved node x coordinates. Resized when `sync()`
+   * updates the node count. Updated by `_packPositions()`
+   * @type {Float64Array}
+   */
+  _nodeX = new Float64Array();
+
+
+  /**
+   * Cached array of resolved node y coordinates. Resized when `sync()`
+   * updates the node count. Updated by `_packPositions()`
+   * @type {Float64Array}
+   */
+  _nodeY = new Float64Array();
+
+
+  /**
+   * Scratch array for accumulating x force values in Barnes-Hut repulsion
+   * before applying them to SimNode objects.
+   * @type {Float64Array}
+   */
+  _nodeFx = new Float64Array();
+
+
+  /**
+   * Scratch array for accumulating x force values in Barnes-Hut repulsion
+   * before applying them to SimNode objects.
+   * @type {Float64Array}
+   */
+  _nodeFy = new Float64Array();
 
 
   /** @type {Int32Array} */
@@ -168,6 +206,25 @@ export class Simulation {
 
 
   /** @type {number} */
+  _temp = 0;
+  /**
+   * [read-only, reset with `heat()`]
+   * Temperature value that forces are multiplied by. Decays each tick
+   * according to the rate of `opts.cooling`. Once it is lower than
+   * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
+   * which is called after config or settings changes.
+   */
+  get temp() { return this._temp; }
+
+
+  /**
+   * Always initialized
+   * @type {BarnesHutContext}
+   */
+  _barnesHutCtx;
+
+
+  /** @type {number} */
   _version = 1;
   /**
    * Monotonic counter for *structural* changes to the node and edge tables.
@@ -208,23 +265,27 @@ export class Simulation {
       springLength:    opts.springLength ?? 50,
       minDistSq:       opts.minDistSq ?? 100,
       maxSpeed:        opts.maxSpeed ?? 100,
+      dt:              opts.dt ?? 1,
       cooling:         opts.cooling ?? 0.98,
       freezePoint:     opts.freezePoint ?? 0.01,
+      useBarnesHut:    opts.useBarnesHut ?? true,
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
+    this._barnesHutCtx = new BarnesHutContext(opts.barnesHut ?? {});
     this.sync();
   }
 
 
   /**
    * Sets properties of `opts` using a partial object.
-   * @param {SimOptsInput} optsInput - options to set
+   * @param {SimOptsInput} [optsInput={}] - options to set
    * @returns {this} self reference
    */
-  setOpts({nodeConfig, ...opts} = {}) {
+  setOpts({nodeConfig, barnesHut, ...opts} = {}) {
     Object.assign(this._opts, opts);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
+    if (barnesHut) this._barnesHutCtx.setOpts(barnesHut);
     this.heat();
     return this;
   }
@@ -387,7 +448,10 @@ export class Simulation {
     this._configDirty = false;
     if (changed) this.heat();
 
-    if (this._syncedGraphVersion === this._graph.version) return true;
+    if (this._syncedGraphVersion === this._graph.version) {
+      if (changed) this._packNodeConfig();
+      return true;
+    }
 
     this.heat(); // Structural change
 
@@ -399,12 +463,25 @@ export class Simulation {
       }
     }
 
+    const prevNodeCount = this._nodeList.length;
+
     this._nodeList = [];
     this._nodeIndex = new Map();
     for (const [id, sNode] of this._nodes) {
       this._nodeIndex.set(id, this._nodeList.length);
       this._nodeList.push(sNode);
     }
+
+    const nodeCount = this._nodeList.length;
+    if (nodeCount !== prevNodeCount) {
+      this._nodeRadius = new Float64Array(nodeCount);
+      this._nodeFixed = new Uint8Array(nodeCount);
+      this._nodeX = new Float64Array(nodeCount);
+      this._nodeY = new Float64Array(nodeCount);
+      this._nodeFx = new Float64Array(nodeCount);
+      this._nodeFy = new Float64Array(nodeCount);
+    }
+    this._packNodeConfig();
 
     const pairs = [], springs = [], n = this._nodes.size;
     this._edgeList = [], this._edgeIndex = new Map();
@@ -445,6 +522,8 @@ export class Simulation {
    * @returns {void}
    */
   _applyRepulsion() {
+    if (this._opts.useBarnesHut) { this._repelBarnesHut(); return; }
+
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -504,6 +583,8 @@ export class Simulation {
    * @returns {void}
    */
   _enforceRadius() {
+    if (this._opts.useBarnesHut) { this._collideBarnesHut(); return; }
+
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -530,15 +611,54 @@ export class Simulation {
     }
   }
 
+
+  _repelBarnesHut() {
+    this._packPositions();
+    const list = this._nodeList, fx = this._nodeFx, fy = this._nodeFy;
+    fx.fill(0); fy.fill(0);   // repel() adds to these
+    this._barnesHutCtx.repel(this._nodeX, this._nodeY, fx, fy, {
+      strength: this._opts.repulsion, minDistSq: this._opts.minDistSq,
+    });
+    for (let i = 0; i < list.length; i++) { list[i].fx += fx[i]; list[i].fy += fy[i]; }
+  }
+
+  _collideBarnesHut() {
+    this._packPositions();
+    this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
+    const list = this._nodeList;
+    for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
+  }
+
+
+  _packPositions() {
+    for (let i = 0; i < this._nodeList.length; i++) {
+      this._nodeX[i] = this._nodeList[i].x;
+      this._nodeY[i] = this._nodeList[i].y;
+    }
+  }
+
+
+  /**
+   * Copies node radii and fixed flags into their typed arrays. Called from
+   * `sync()`, since these values only change through node config.
+   * @returns {void}
+   */
+  _packNodeConfig() {
+    for (let i = 0; i < this._nodeList.length; i++) {
+      this._nodeRadius[i] = this._nodeList[i].radius;
+      this._nodeFixed[i] = this._nodeList[i].fixed ? 1 : 0;
+    }
+  }
+
   
   /**
    * Simulates the graph's physics for one tick, after syncing graph shape and
    * sim-node config.
-   * @param {number} [dt=1] - time step, scaling both velocity and position
+   * @param {number} [dt=opts.dt] - time step, scaling both velocity and position
    *    updates. Tuned for dt=1. Friction applies once per tick.
    * @returns {this} self reference
    */
-  tick(dt = 1) {
+  tick(dt = this._opts.dt) {
     this.sync();
 
     // reset force totals

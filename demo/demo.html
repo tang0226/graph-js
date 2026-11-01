@@ -136,7 +136,7 @@
     </div>
     <div class="row">
       <label for="nodeCount">Nodes</label><output id="nodeCountOut">24</output>
-      <input type="range" id="nodeCount" min="2" max="3000" step="1" value="24">
+      <input type="range" id="nodeCount" min="2" max="20000" step="1" value="24">
     </div>
     <div class="row">
       <label for="extraEdges">Extra edges</label><output id="extraEdgesOut">8</output>
@@ -185,10 +185,34 @@
       <label for="speed">Speed (steps/frame)</label><output id="speedOut">1.0</output>
       <input type="range" id="speed" min="0" max="8" step="0.25" value="1">
     </div>
+    <div class="row">
+      <label for="dt">Time step (dt)</label><output id="dtOut">1.0</output>
+      <input type="range" id="dt" min="0.1" max="6" step="0.1" value="1">
+    </div>
     <div class="btns">
       <button id="playPause">Pause</button>
       <button id="shake">Shake</button>
     </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Barnes-Hut</legend>
+    <div class="row inline">
+      <label for="useBarnesHut">Enabled</label>
+      <input type="checkbox" id="useBarnesHut" checked>
+    </div>
+    <div class="row">
+      <label for="theta">Theta</label><output id="thetaOut">0.90</output>
+      <input type="range" id="theta" min="0" max="2" step="0.05" value="0.9">
+    </div>
+    <div class="row">
+      <label for="maxDepth">Max depth</label><output id="maxDepthOut">20</output>
+      <input type="range" id="maxDepth" min="1" max="32" step="1" value="20">
+    </div>
+    <p class="note">
+      Lower theta is more accurate but slower. When disabled, every pair of
+      nodes is checked, which freezes the page on large graphs.
+    </p>
   </fieldset>
 
   <fieldset>
@@ -400,7 +424,11 @@ function applySimConfig() {
     gravity:         ui.gravity,
     cooling:         ui.cooling,
     minDistSq:       ui.minDistSq,
+    dt:              ui.dt,
+    useBarnesHut:    ui.useBarnesHut,
+    barnesHut:       { theta: ui.theta, maxDepth: ui.maxDepth },
   });
+  $("theta").disabled = $("maxDepth").disabled = !ui.useBarnesHut;
 }
 
 function applyNodeConfig() {
@@ -562,7 +590,7 @@ canvas.addEventListener("wheel", e => {
 
 /* ---------- control wiring ---------- */
 
-const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "minDistSq"];
+const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "minDistSq", "dt", "useBarnesHut", "theta", "maxDepth"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
 const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode"];
 const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize"];
@@ -641,8 +669,8 @@ $("recenter").addEventListener("click", () => {
 let frames = 0, fpsClock = performance.now(), stepAcc = 0;
 
 /* Speed is steps per frame, accumulated so fractional values tick on only some
-   frames. Every step keeps dt = 1: the integrator is tuned for that step size,
-   and scaling dt instead would make stability depend on frame rate.          */
+   frames. Every step uses the Time step slider's dt, never one derived from
+   frame time, which would make stability depend on frame rate.               */
 
 function frame() {
   if (running) {

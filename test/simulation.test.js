@@ -425,6 +425,66 @@ describe("Simulation: temperature", () => {
     assert.ok(Math.abs(half / full - 0.5) < 1e-12, `expected half the velocity, got ratio ${half / full}`);
   });
 
+  describe("dt option", () => {
+    function pair(opts) {
+      const g = new Graph();
+      g.addNode({ id: "a" });
+      g.addNode({ id: "b" });
+      const sim = new Simulation(g, { gravity: 0, freezePoint: 0, ...opts });
+      const A = sim.nodes.get("a"), B = sim.nodes.get("b");
+      A.x = 0; A.y = 0; B.x = 100; B.y = 0;
+      return sim;
+    }
+    const x = sim => sim.nodes.get("a").x;
+
+    test("defaults to 1, matching tick() before the option existed", () => {
+      const sim = pair(), explicit = pair();
+      assert.equal(sim.opts.dt, 1);
+      sim.tick();
+      explicit.tick(1);
+      assert.equal(x(sim), x(explicit));
+    });
+
+    test("is used by tick() when no dt is given", () => {
+      const sim = pair({ dt: 3 }), explicit = pair();
+      sim.tick();
+      explicit.tick(3);
+      assert.ok(x(sim) !== 0);
+      assert.equal(x(sim), x(explicit));
+    });
+
+    test("is overridden by a dt passed to tick()", () => {
+      const sim = pair({ dt: 3 }), explicit = pair();
+      sim.tick(2);
+      explicit.tick(2);
+      assert.equal(x(sim), x(explicit));
+    });
+
+    test("doubling it from rest quadruples the first tick's movement", () => {
+      const base = pair(), doubled = pair({ dt: 2 });
+      base.tick();
+      doubled.tick();
+      assert.ok(Math.abs(x(doubled) / x(base) - 4) < 1e-9, `got ratio ${x(doubled) / x(base)}`);
+    });
+
+    test("setOpts changes it and reheats", () => {
+      const sim = frozen();
+      sim.setOpts({ dt: 2.5 });
+      assert.equal(sim.opts.dt, 2.5);
+      assert.equal(sim.temp, 1);
+    });
+
+    test("leaves the number of ticks to freeze unchanged", () => {
+      const ticksToFreeze = dt => {
+        const sim = new Simulation(chain(6), { dt });
+        let ticks = 0;
+        while (sim.temp > 0) { sim.tick(); ticks++; }
+        return ticks;
+      };
+      assert.equal(ticksToFreeze(3), ticksToFreeze(1));
+    });
+  });
+
   test("setOpts merges options and reheats", () => {
     const sim = frozen();
     sim.setOpts({ repulsion: 1234 });
@@ -564,5 +624,291 @@ describe("Simulation: pin and unpin", () => {
     sim.tick();
     assert.equal(sim.nodes.get("p").fixed, true,
       "unpin must not write a sticky false that defeats the accessor");
+  });
+});
+
+describe("Simulation: Barnes-Hut", () => {
+  // Deterministic start. Slightly uneven, so bodies don't sit on cell boundaries.
+  function grid(n, opts = {}) {
+    const sim = new Simulation(chain(n), opts);
+    sim.nodeList.forEach((r, i) => {
+      r.x = (i % 10) * 70 + (i * 7 % 13) * 0.1;
+      r.y = Math.floor(i / 10) * 70 + (i * 11 % 17) * 0.1;
+      r.vx = 0; r.vy = 0;
+    });
+    return sim;
+  }
+
+  function assertPacked(sim) {
+    const list = sim.nodeList;
+    for (const name of ["_nodeRadius", "_nodeFixed", "_nodeX", "_nodeY", "_nodeFx", "_nodeFy"])
+      assert.equal(sim[name].length, list.length, name);
+    list.forEach((r, i) => {
+      assert.equal(sim._nodeRadius[i], r.radius, `radius of ${r.id}`);
+      assert.equal(sim._nodeFixed[i], r.fixed ? 1 : 0, `fixed flag of ${r.id}`);
+    });
+  }
+
+  describe("options", () => {
+    test("it is on by default and can be turned off", () => {
+      assert.equal(new Simulation(chain(2), {})._opts.useBarnesHut, true);
+      assert.equal(new Simulation(chain(2), { useBarnesHut: false })._opts.useBarnesHut, false);
+    });
+
+    test("constructor options reach the context, even while it is off", () => {
+      const sim = new Simulation(chain(2), { useBarnesHut: false, barnesHut: { theta: 0.4, maxDepth: 7 } });
+      assert.equal(sim._barnesHutCtx.theta, 0.4);
+      assert.equal(sim._barnesHutCtx.maxDepth, 7);
+    });
+
+    for (const useBarnesHut of [true, false]) {
+      test(`setOpts tunes the context without changing a useBarnesHut of ${useBarnesHut}`, () => {
+        const sim = new Simulation(chain(2), { useBarnesHut });
+        sim.setOpts({ barnesHut: { theta: 0.5 } });
+        assert.equal(sim._barnesHutCtx.theta, 0.5);
+        assert.equal(sim._opts.useBarnesHut, useBarnesHut);
+      });
+    }
+
+    test("barnesHut does not leak into the simulation's own options", () => {
+      const sim = new Simulation(chain(2), {});
+      sim.setOpts({ barnesHut: { theta: 0.5 } });
+      assert.equal("barnesHut" in sim._opts, false);
+    });
+
+    test("an explicit useBarnesHut wins when set alongside barnesHut", () => {
+      const sim = new Simulation(chain(2), {});
+      sim.setOpts({ barnesHut: { theta: 0.5 }, useBarnesHut: false });
+      assert.equal(sim._opts.useBarnesHut, false);
+    });
+
+    test("turning it on after construction still applies repulsion and collisions", () => {
+      const sim = grid(2, { useBarnesHut: false, gravity: 0, springStiffness: 0 });
+      const [a, b] = sim.nodeList;
+      a.x = 0; a.y = 0; b.x = 10; b.y = 0;
+
+      sim.setOpts({ useBarnesHut: true });
+      sim.tick();
+      assert.ok(a.fx < 0 && b.fx > 0, "repulsion went missing");
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 39.99, "collision went missing");
+    });
+
+    test("while on, a tick runs repel and collide once each", () => {
+      const sim = grid(6);
+      const ctx = sim._barnesHutCtx, calls = { repel: 0, collide: 0 };
+      const { repel, collide } = ctx;
+      ctx.repel = function (...args) { calls.repel++; return repel.apply(this, args); };
+      ctx.collide = function (...args) { calls.collide++; return collide.apply(this, args); };
+      sim.heat();
+      sim.tick();
+      assert.deepEqual(calls, { repel: 1, collide: 1 });
+    });
+
+    test("turning it off goes back to the exact path", () => {
+      const sim = grid(6);
+      sim._barnesHutCtx.repel = () => assert.fail("repel called while off");
+      sim._barnesHutCtx.collide = () => assert.fail("collide called while off");
+      sim.setOpts({ useBarnesHut: false });
+      sim.tick();
+    });
+  });
+
+  describe("repulsion", () => {
+    test("theta 0 gives the same forces as the exact path", () => {
+      const exact = grid(60, { useBarnesHut: false });
+      const tree = grid(60, { barnesHut: { theta: 0 } });
+      exact._applyRepulsion();
+      tree._applyRepulsion();
+      tree.nodeList.forEach((r, i) => {
+        assert.ok(Math.abs(r.fx - exact.nodeList[i].fx) < 1e-9);
+        assert.ok(Math.abs(r.fy - exact.nodeList[i].fy) < 1e-9);
+      });
+    });
+
+    test("forces add to what nodes already carry", () => {
+      const sim = grid(5);
+      sim._applyRepulsion();
+      const once = sim.nodeList.map(r => r.fx);
+      sim.nodeList.forEach(r => { r.fx += 7; });
+      sim._applyRepulsion();
+      sim.nodeList.forEach((r, i) => assert.ok(Math.abs(r.fx - (2 * once[i] + 7)) < 1e-9));
+    });
+
+    test("it reads positions set directly on nodes", () => {
+      const sim = grid(2);
+      const [a, b] = sim.nodeList;
+      sim._applyRepulsion();
+      const before = a.fx;
+      a.fx = 0; b.fx = 0;
+      b.x += 1000;
+      sim._applyRepulsion();
+      assert.ok(Math.abs(a.fx) < Math.abs(before));
+    });
+  });
+
+  test("with collisions off, both paths follow the same trajectory at theta 0", () => {
+    const opts = { nodeConfig: { radius: 0 } };
+    const exact = grid(60, { ...opts, useBarnesHut: false });
+    const tree = grid(60, { ...opts, barnesHut: { theta: 0 } });
+    for (let t = 0; t < 50; t++) { exact.tick(); tree.tick(); }
+    tree.nodeList.forEach((r, i) => {
+      assert.ok(Math.hypot(r.x - exact.nodeList[i].x, r.y - exact.nodeList[i].y) < 1e-6);
+    });
+  });
+
+  test("both paths settle into layouts of a similar size", () => {
+    const spread = sim => {
+      while (sim.temp > 0) sim.tick();
+      const list = sim.nodeList;
+      const cx = list.reduce((s, r) => s + r.x, 0) / list.length;
+      const cy = list.reduce((s, r) => s + r.y, 0) / list.length;
+      return list.reduce((s, r) => s + Math.hypot(r.x - cx, r.y - cy), 0) / list.length;
+    };
+    const exact = spread(grid(100, { useBarnesHut: false }));
+    const tree = spread(grid(100));
+    assert.ok(Math.abs(tree - exact) / exact < 0.1, `${tree} vs ${exact}`);
+  });
+
+  for (const useBarnesHut of [true, false]) {
+    describe(`collisions with useBarnesHut ${useBarnesHut}`, () => {
+      const pair = () => {
+        const g = new Graph();
+        g.addNode({ id: "a" });
+        g.addNode({ id: "b" });
+        const sim = new Simulation(g, { useBarnesHut, repulsion: 0, gravity: 0, nodeConfig: { radius: 20 } });
+        sim.sync();
+        const A = sim.nodes.get("a"), B = sim.nodes.get("b");
+        A.x = 0; A.y = 0; B.x = 10; B.y = 0;
+        return { sim, A, B };
+      };
+
+      test("an overlapping pair is written back to the nodes, just touching", () => {
+        const { sim, A, B } = pair();
+        sim._enforceRadius();
+        assert.ok(Math.abs(A.x - -15) < 1e-9);
+        assert.ok(Math.abs(B.x - 25) < 1e-9);
+      });
+
+      test("a radius changed through config applies on the next tick", () => {
+        const { sim, A, B } = pair();
+        sim.setNodeConfig("a", { radius: 100 });
+        sim.tick();
+        assert.ok(Math.hypot(A.x - B.x, A.y - B.y) >= 119.99);
+      });
+
+      test("a node fixed through config holds still", () => {
+        const { sim, A, B } = pair();
+        sim.setNodeConfig("a", { fixed: true });
+        sim.sync();
+        sim._enforceRadius();
+        assert.equal(A.x, 0);
+        assert.ok(Math.abs(B.x - 40) < 1e-9);
+      });
+
+      test("a pinned node holds still through a crowded run", () => {
+        const sim = grid(40, { useBarnesHut, springLength: 0, gravity: 0.05 });
+        sim.pin("n0", 100, 100);
+        for (let t = 0; t < 60; t++) {
+          sim.tick();
+          assert.equal(sim.nodes.get("n0").x, 100);
+          assert.equal(sim.nodes.get("n0").y, 100);
+        }
+      });
+    });
+  }
+
+  describe("packed node arrays", () => {
+    test("they match the nodes after construction", () => {
+      assertPacked(new Simulation(chain(5), { nodeConfig: { radius: 12 } }));
+    });
+
+    test("setNodeConfig updates them without a structural change", () => {
+      const sim = new Simulation(chain(4), {});
+      sim.setNodeConfig("n2", { radius: 77, fixed: true });
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius[sim.nodeIndex.get("n2")], 77);
+      assert.equal(sim._nodeFixed[sim.nodeIndex.get("n2")], 1);
+    });
+
+    test("setDefaultNodeConfig updates them", () => {
+      const sim = new Simulation(chain(4), {});
+      sim.setDefaultNodeConfig({ radius: n => n.data.w * 3 });
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius[0], 3);
+    });
+
+    test("clearNodeConfig updates them", () => {
+      const sim = new Simulation(chain(4), { nodeConfig: { radius: 9 } });
+      sim.setNodeConfig("n1", { radius: 50 });
+      sim.sync();
+      sim.clearNodeConfig("n1");
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius[sim.nodeIndex.get("n1")], 9);
+    });
+
+    test("pin and unpin update them", () => {
+      const sim = new Simulation(chain(3), {});
+      const i = sim.nodeIndex.get("n1");
+      sim.pin("n1", 0, 0);
+      sim.sync();
+      assert.equal(sim._nodeFixed[i], 1);
+      sim.unpin("n1");
+      sim.sync();
+      assert.equal(sim._nodeFixed[i], 0);
+    });
+
+    test("graph data changes update them through accessors", () => {
+      const g = chain(3);
+      const sim = new Simulation(g, { nodeConfig: { radius: n => n.data.w } });
+      g.setNodeData("n1", { w: 40 });
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius[sim.nodeIndex.get("n1")], 40);
+    });
+
+    test("they follow nodes being added and removed", () => {
+      const g = chain(4);
+      const sim = new Simulation(g, {});
+      sim.setNodeConfig("n3", { radius: 44, fixed: true });
+      sim.sync();
+
+      g.removeNode("n0");
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius.length, 3);
+
+      g.addNode({ id: "new1" });
+      g.addNode({ id: "new2" });
+      sim.sync();
+      assertPacked(sim);
+      assert.equal(sim._nodeRadius.length, 5);
+    });
+
+    test("they realign when a change keeps the node count the same", () => {
+      const g = chain(3);
+      const sim = new Simulation(g, {});
+      sim.setNodeConfig("n2", { radius: 44 });
+      sim.sync();
+      g.removeNode("n0");
+      g.addNode({ id: "swap" });
+      sim.sync();
+      assertPacked(sim);
+    });
+  });
+
+  test("ticking works from an empty graph to a populated one", () => {
+    const g = new Graph();
+    const sim = new Simulation(g, {});
+    sim.heat();
+    sim.tick();
+    g.addNode({ id: "a" });
+    sim.tick();
+    g.addNode({ id: "b" });
+    g.addEdge("a", "b");
+    for (let t = 0; t < 5; t++) sim.tick();
+    for (const r of sim.nodeList) assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
   });
 });

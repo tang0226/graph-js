@@ -1,0 +1,569 @@
+/** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs.js' */
+
+/** @type {BarnesHutOpts} */
+const DEFAULT_BH_CONFIG = {
+  capacity: 1024,
+  theta: 0.9,
+  maxDepth: 20,
+};
+
+
+
+/**
+ * Copies a typed array into a new, larger one of the same type.
+ * @param {Float64Array} a - array to copy
+ * @param {number} n - new length
+ * @returns {Float64Array} new array
+ */
+const growF64 = (a, n) => { const b = new Float64Array(n); b.set(a); return b; };
+
+/**
+ * Copies a typed array into a new, larger one of the same type.
+ * @param {Int32Array} a - array to copy
+ * @param {number} n - new length
+ * @returns {Int32Array} new array
+ */
+const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
+
+
+
+/**
+ * Internal Barnes-Hut class
+ */
+export class BarnesHutContext {
+  /** @type {number} */
+  _capacity = DEFAULT_BH_CONFIG.capacity;
+  /**
+   * Cell pool capacity
+   */
+  get capacity() { return this._capacity; }
+
+  /** @type {number} */
+  _maxDepth = DEFAULT_BH_CONFIG.maxDepth;
+  /**
+   * Max depth of quadtree
+   */
+  get maxDepth() { return this._maxDepth; }
+
+  /** @type {number} */
+  _theta = DEFAULT_BH_CONFIG.theta;
+  /**
+   * Barnes-Hut theta value
+   */
+  get theta() { return this._theta; }
+
+  /**
+   * Current number of allocated cells
+   * @type {number}
+   */
+  _cellCount = 0;
+
+  /**
+   * Center x coordinate of cells
+   * @type {Float64Array}
+   */
+  _centerX = new Float64Array();
+
+  /**
+   * Center y coordinate of cells
+   * @type {Float64Array}
+   */
+  _centerY = new Float64Array();
+
+  /**
+   * Orthogonal distance from a cell's center to its edge
+   * @type {Float64Array}
+   */
+  _halfSize = new Float64Array();
+
+  /**
+   * Centroid x of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
+   * @type {Float64Array}
+   */
+  _centroidX = new Float64Array();
+
+  /**
+   * Centroid y of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
+   * @type {Float64Array}
+   */
+  _centroidY = new Float64Array();
+
+  /**
+   * Number of bodies contained in a cell
+   * @type {Int32Array}
+   */
+  _bodyCount = new Int32Array();
+
+  /**
+   * Index of the cell's first child, or -1 if the cell is a leaf
+   * @type {Int32Array}
+   */
+  _childIndex = new Int32Array();
+
+  /**
+   * Body index of first body in a leaf cell, or -1 if the cell contains no bodies or is not a leaf.
+   * @type {Int32Array}
+   */
+  _bodyIndex = new Int32Array();
+
+  /**
+   * Largest radius of a cell's bodies. Only valid during `collide()`.
+   * @type {Float64Array}
+   */
+  _maxRadius = new Float64Array();
+
+  /**
+   * -1 for a normal body alone or last in a cell. If the body is in a multi-body leaf cell, its entry is a non-negative index pointing to the next body in the cell.
+   * @type {Int32Array}
+   */
+  _nextBody = new Int32Array();
+
+  /**
+   * x coordinates of bodies
+   * @type {ArrayLike<number>}
+   */
+  _bodyX = [];
+
+  /**
+   * y coordinates of bodies
+   * @type {ArrayLike<number>}
+   */
+  _bodyY = [];
+
+  /**
+   * Stack of cells to explore; used in `repel()` and `collide()`
+   * @type {Int32Array}
+   */
+  _cellStack = new Int32Array();
+
+
+  /**
+   * Initializes a Barnes-Hut context
+   * @param {BarnesHutOptsInput} [opts={}] - options
+   */
+  constructor(opts = {}) {
+    this.setOpts(opts);
+    if (this._centerX.length === 0) this._reallocate();
+  }
+
+
+  /**
+   * @param {BarnesHutOptsInput} [opts={}] - options to set
+   * @returns {void}
+   */
+  setOpts(opts = {}) {
+    if (opts.capacity !== undefined) {
+      this._capacity = Math.max(opts.capacity, 0);
+      this._reallocate();
+    }
+    if (opts.maxDepth !== undefined) {
+      this._maxDepth = Math.max(opts.maxDepth, 0);
+    }
+    if (opts.theta !== undefined) {
+      this._theta = Math.max(opts.theta, 0);
+    }
+  }
+
+
+  /**
+   * Reallocates arrays according to a new capacity value.
+   * @returns {void}
+   */
+  _reallocate() {
+    const c = this._capacity;
+    this._cellCount = 0;
+    this._centerX = new Float64Array(c);
+    this._centerY = new Float64Array(c);
+    this._halfSize = new Float64Array(c);
+    this._centroidX = new Float64Array(c);
+    this._centroidY = new Float64Array(c);
+    this._bodyCount = new Int32Array(c);
+    this._childIndex = new Int32Array(c);
+    this._bodyIndex = new Int32Array(c);
+    this._maxRadius = new Float64Array(c);
+  }
+
+
+  /**
+   * Doubles size of cell arrays, preserving current values.
+   * @returns {void}
+   */
+  _doubleCapacity() {
+    const n = Math.max(2 * this._capacity, 1);   // a capacity of 0 would never grow
+    this._centerX = growF64(this._centerX, n);
+    this._centerY = growF64(this._centerY, n);
+    this._halfSize = growF64(this._halfSize, n);
+    this._centroidX = growF64(this._centroidX, n);
+    this._centroidY = growF64(this._centroidY, n);
+    this._bodyCount = growI32(this._bodyCount, n);
+    this._childIndex = growI32(this._childIndex, n);
+    this._bodyIndex = growI32(this._bodyIndex, n);
+    this._maxRadius = growF64(this._maxRadius, n);
+    this._capacity = n;
+  }
+
+
+  /**
+   * Adds a cell with the given data and returns the cell's index
+   * @param {number} centerX
+   * @param {number} centerY
+   * @param {number} halfSize
+   * @param {number} sumX 
+   * @param {number} sumY
+   * @param {number} bodyCount
+   * @param {number} childIndex
+   * @param {number} bodyIndex
+   * @returns {number} the index of the new cell
+   */
+  _addCell(
+    centerX, centerY, halfSize,
+    sumX, sumY, bodyCount,
+    childIndex, bodyIndex
+  ) {
+    if (this._cellCount == this._capacity) this._doubleCapacity();
+    const i = this._cellCount;
+    this._centerX[i] = centerX;
+    this._centerY[i] = centerY;
+    this._halfSize[i] = halfSize;
+    this._centroidX[i] = sumX;
+    this._centroidY[i] = sumY;
+    this._bodyCount[i] = bodyCount;
+    this._childIndex[i] = childIndex;
+    this._bodyIndex[i] = bodyIndex;
+    this._cellCount++;
+    return i;
+  }
+
+
+  /**
+   * Gets the quadrant number for a point in a particular cell.
+   * @param {number} x - x coordinate
+   * @param {number} y - y coordinate
+   * @param {number} i - index of cell
+   * @returns {number} quadrant number (0-3)
+   */
+  _getQuadrant(x, y, i) {
+    return (y > this._centerY[i] ? 2 : 0) | (x > this._centerX[i] ? 1 : 0);
+  }
+
+
+  /**
+   * Splits a leaf cell. Assumes that the cell is a splittable leaf
+   * (not max-depth) containing one body. The existing body is moved to the
+   * corresponding subcell. The function returns the subcell where the passed
+   * coordinates belong.
+   * @param {number} i - cell to split
+   * @param {number} x - x coordinate of new body
+   * @param {number} y - y coordinate of new body
+   * @returns {number} cell to insert the body into
+   */
+  _splitCell(i, x, y) {
+    const cx = this._centerX[i],
+          cy = this._centerY[i],
+          half = this._halfSize[i] / 2;
+
+    const childI = this._addCell(cx - half, cy - half, half, 0, 0, 0, -1, -1);
+    this._addCell(cx + half, cy - half, half, 0, 0, 0, -1, -1);
+    this._addCell(cx - half, cy + half, half, 0, 0, 0, -1, -1);
+    this._addCell(cx + half, cy + half, half, 0, 0, 0, -1, -1);
+
+    this._childIndex[i] = childI;
+    
+    // subcell for the body that was already already present in the original cell
+    const otherI = childI + this._getQuadrant(this._centroidX[i], this._centroidY[i], i);
+    this._bodyCount[otherI] = 1;
+    this._centroidX[otherI] = this._centroidX[i];
+    this._centroidY[otherI] = this._centroidY[i];
+
+    this._bodyIndex[otherI] = this._bodyIndex[i];
+    this._bodyIndex[i] = -1;
+
+    return childI + this._getQuadrant(x, y, i);
+  }
+
+
+  /**
+   * Adds a body to the quadtree, splitting cells as necessary
+   * @param {number} x - body x coordinate
+   * @param {number} y - body y coordinate
+   * @param {number} b - body index
+   * @returns {void}
+   */
+  _addBody(x, y, b) {
+    let depth = 0;
+    let i = 0;
+    // Walk to leaf node
+    while (this._childIndex[i] !== -1) {
+      i = this._childIndex[i] + this._getQuadrant(x, y, i);
+      depth++;
+    }
+
+    // Split cells until the two bodies are separate, or until max depth.
+    while (depth < this._maxDepth && this._bodyCount[i] !== 0) {
+      i = this._splitCell(i, x, y);
+      depth++;
+    }
+
+    this._centroidX[i] += x;
+    this._centroidY[i] += y;
+    this._bodyCount[i]++;
+    this._nextBody[b] = this._bodyIndex[i];
+    this._bodyIndex[i] = b;
+  }
+
+
+  /**
+   * Builds a quadtree from coordinate lists.
+   * @param {ArrayLike<number>} xs - x coordinates
+   * @param {ArrayLike<number>} ys - y coordinates
+   * @throws {Error} throws when x and y arrays are not the same length
+   * @returns {void}
+   */
+  _build(xs, ys) {
+    if (xs.length !== ys.length) {
+      throw new Error("BarnesHutContext: mismatching x- and y-coordinate array lengths");
+    }
+
+    this._cellCount = 0;
+    if (xs.length === 0) return;
+
+    if (this._nextBody.length !== xs.length) {
+      this._nextBody = new Int32Array(xs.length);
+    }
+    // Opening a cell pops 1 and pushes 4, and only depths below maxDepth can open
+    const stackSize = 3 * this._maxDepth + 1;
+    if (this._cellStack.length !== stackSize) {
+      this._cellStack = new Int32Array(stackSize);
+    }
+    this._bodyX = xs;
+    this._bodyY = ys;
+
+
+    let minX, maxX, minY, maxY;
+    minX = maxX = xs[0];
+    minY = maxY = ys[0];
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i], y = ys[i];
+      if (x < minX) minX = x; else if (x > maxX) maxX = x;
+      if (y < minY) minY = y; else if (y > maxY) maxY = y;
+    }
+
+    // Seed depth-0 cell
+    const halfSize = Math.max(maxX - minX, maxY - minY, 1) / 2;
+    this._addCell(minX + halfSize, minY + halfSize, halfSize, 0, 0, 0, -1, -1);
+
+
+    // Add bodies and create the quadtree structure
+    for (let i = 0; i < xs.length; i++) {
+      this._addBody(xs[i], ys[i], i);
+    }
+
+    // Bottom-up sums
+    for (let c = this._cellCount - 1; c >= 0; c--) {
+      const k = this._childIndex[c];
+      if (k === -1) continue;
+      let n = 0, sx = 0, sy = 0;
+      for (let q = k; q < k + 4; q++) {
+        n += this._bodyCount[q];
+        sx += this._centroidX[q];
+        sy += this._centroidY[q];
+      }
+      this._bodyCount[c] = n;
+      this._centroidX[c] = sx;
+      this._centroidY[c] = sy;
+    }
+
+    // Average coordinate sums to get true centroid coordinates
+    for (let c = 0; c < this._cellCount; c++) {
+      const n = this._bodyCount[c];
+      if (n > 0) {
+        this._centroidX[c] /= n;
+        this._centroidY[c] /= n;
+      }
+    }
+  }
+
+
+  /**
+   * Adds to force values for a series of bodies
+   * @param {ArrayLike<number>} xs - x coordinates
+   * @param {ArrayLike<number>} ys - y coordinates
+   * @param {Float64Array} fx - x force array to write to
+   * @param {Float64Array} fy - y force array to write to
+   * @param {object} params - parameters
+   * @param {number} params.strength - repulsion strength
+   * @param {number} params.minDistSq - min distance-squared clamp
+   */
+  repel(xs, ys, fx, fy, { strength, minDistSq }) {
+    this._build(xs, ys);
+    if (this._cellCount === 0) return;
+
+    const cx = this._centerX, cy = this._centerY, hs = this._halfSize,
+      cnx = this._centroidX, cny = this._centroidY, bc = this._bodyCount,
+      ci = this._childIndex, bi = this._bodyIndex, nb = this._nextBody;
+    // Cached theta-comparison value that saves half-size calculations
+    const th = (this._theta / 2) ** 2;
+    const stack = this._cellStack;
+
+    for (let i = 0; i < xs.length; i++) {
+      const x = xs[i], y = ys[i];
+      let fxi = 0, fyi = 0;
+      let top = 0;
+      stack[top++] = 0;
+      while (top > 0) {
+        const c = stack[--top];
+        if (bc[c] === 0) continue;
+
+        // Is the body outside of the current cell?
+        if (Math.abs(x - cx[c]) > hs[c] || Math.abs(y - cy[c]) > hs[c]) {
+          const dx = x - cnx[c], dy = y - cny[c];
+          const dSq = dx ** 2 + dy ** 2;
+
+          // Barnes-Hut criterion
+          if (hs[c] ** 2 < th * dSq) {
+            const d2 = Math.max(dSq, minDistSq);
+            const s = strength * bc[c] / (d2 * Math.sqrt(d2));
+            fxi += s * dx;
+            fyi += s * dy;
+            continue;
+          }
+        }
+
+        // Open the cell if possible
+        const k = ci[c];
+        if (k !== -1) {
+          stack[top++] = k;
+          stack[top++] = k + 1;
+          stack[top++] = k + 2;
+          stack[top++] = k + 3;
+          continue;
+        }
+
+        // Leaf cell
+        for (let j = bi[c]; j !== -1; j = nb[j]) {
+          if (j === i) continue;
+          let dx = x - xs[j], dy = y - ys[j];
+          let dSq = dx * dx + dy * dy;
+          if (dSq < 1e-12) {
+            dx = Math.random() - 0.5; dy = Math.random() - 0.5;
+            dSq = dx * dx + dy * dy;
+          }
+          dSq = Math.max(dSq, minDistSq);
+          const s = strength / (dSq * Math.sqrt(dSq));
+          fxi += s * dx; fyi += s * dy;
+        }
+      }
+
+      fx[i] += fxi;
+      fy[i] += fyi;
+    }
+  }
+
+
+  /**
+   * Sets each cell's largest body radius. Assumes the tree is already built.
+   * @param {ArrayLike<number>} radii - body radii
+   * @returns {void}
+   */
+  _aggregateRadii(radii) {
+    // Reverse order visits a cell's children before the cell itself
+    for (let c = this._cellCount - 1; c >= 0; c--) {
+      let max = 0;
+      const k = this._childIndex[c];
+      if (k === -1) {
+        for (let b = this._bodyIndex[c]; b !== -1; b = this._nextBody[b]) {
+          if (radii[b] > max) max = radii[b];
+        }
+      }
+      else {
+        for (let q = k; q < k + 4; q++) {
+          if (this._maxRadius[q] > max) max = this._maxRadius[q];
+        }
+      }
+      this._maxRadius[c] = max;
+    }
+  }
+
+
+  /**
+   * Pushes overlapping bodies apart, writing new positions to `xs` and `ys`.
+   * Fixed bodies don't move, and a body overlapping a fixed one takes the whole
+   * push. Each pair is resolved once, so a push can create overlaps that last
+   * until the next call.
+   * @param {Float64Array} xs - x coordinates, updated in place
+   * @param {Float64Array} ys - y coordinates, updated in place
+   * @param {ArrayLike<number>} radii - body radii
+   * @param {ArrayLike<number | boolean>} fixed - whether each body is immovable
+   * @throws {Error} throws when the input arrays are not all the same length
+   * @returns {void}
+   */
+  collide(xs, ys, radii, fixed) {
+    if (radii.length !== xs.length || fixed.length !== xs.length) {
+      throw new Error("BarnesHutContext: mismatching body array lengths");
+    }
+
+    this._build(xs, ys);
+    if (this._cellCount === 0) return;
+    this._aggregateRadii(radii);
+
+    const cx = this._centerX, cy = this._centerY, hs = this._halfSize,
+      bc = this._bodyCount, ci = this._childIndex, bi = this._bodyIndex,
+      nb = this._nextBody, mr = this._maxRadius;
+    const stack = this._cellStack;
+
+    for (let i = 0; i < xs.length; i++) {
+      let x = xs[i], y = ys[i];
+      const r = radii[i];
+      let top = 0;
+      stack[top++] = 0;
+      while (top > 0) {
+        const c = stack[--top];
+        if (bc[c] === 0) continue;
+
+        // Skip the cell if the gap to it is too wide for any of its bodies to reach
+        const gapX = Math.max(Math.abs(x - cx[c]) - hs[c], 0);
+        const gapY = Math.max(Math.abs(y - cy[c]) - hs[c], 0);
+        const reach = r + mr[c];
+        if (gapX * gapX + gapY * gapY >= reach * reach) continue;
+
+        // Open the cell if possible
+        const k = ci[c];
+        if (k !== -1) {
+          stack[top++] = k;
+          stack[top++] = k + 1;
+          stack[top++] = k + 2;
+          stack[top++] = k + 3;
+          continue;
+        }
+
+        // Leaf cell
+        for (let j = bi[c]; j !== -1; j = nb[j]) {
+          if (j <= i) continue;   // each pair is handled by its lower index
+          let dx = x - xs[j], dy = y - ys[j];
+          const dSq = dx * dx + dy * dy;
+          const minD = r + radii[j];
+          if (dSq >= minD * minD) continue;
+
+          let d = Math.sqrt(dSq);
+          if (d < 1e-7) {
+            const a = Math.random() * Math.PI * 2;
+            dx = Math.cos(a); dy = Math.sin(a); d = 1;
+          }
+
+          const pushCoeff = (minD - d) / d;
+          const s1 = fixed[i] ? 0 : (fixed[j] ? 1 : 0.5);
+          const s2 = fixed[j] ? 0 : (fixed[i] ? 1 : 0.5);
+
+          x += dx * pushCoeff * s1;
+          y += dy * pushCoeff * s1;
+          xs[j] -= dx * pushCoeff * s2;
+          ys[j] -= dy * pushCoeff * s2;
+        }
+      }
+
+      xs[i] = x;
+      ys[i] = y;
+    }
+  }
+}
+

@@ -76,11 +76,14 @@
  *    inverse-square law)
  * @property {number} maxSpeed - maximum speed of each node (clamped to at the
  *    end of each tick)
+ * @property {number} dt - time step used by `tick()` when it isn't given one.
+ *    Friction and cooling still apply once per tick, regardless of `dt`.
  * @property {number} cooling - coefficient to decay temperature by each tick
  * @property {number} freezePoint - temperature value below which temp is set
  *    to 0
+ * @property {boolean} useBarnesHut - whether to use Barnes-Hut for repulsion and collision
  */
-/** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig }} SimOptsInput */
+/** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig, barnesHut?: BarnesHutOptsInput }} SimOptsInput */
 
 /**
  * Full simulation node object. Position and velocity props can be set directly,
@@ -126,6 +129,18 @@
  * @typedef {Required<SimNodeAccessors>} ResolvedSimNodeAccessors
  */
 
+
+
+// BARNES-HUT
+
+/**
+ * @typedef {object} BarnesHutOpts
+ * @property {number} capacity - initial allocation size for cell arrays
+ * @property {number} maxDepth - max depth of quadtree
+ * @property {number} theta - Barnes-Hut theta value
+ */
+
+/** @typedef {Partial<BarnesHutOpts>} BarnesHutOptsInput */
 
 
 // RENDERER LAYER
