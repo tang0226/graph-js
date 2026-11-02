@@ -136,7 +136,7 @@
     </div>
     <div class="row">
       <label for="nodeCount">Nodes</label><output id="nodeCountOut">24</output>
-      <input type="range" id="nodeCount" min="2" max="20000" step="1" value="24">
+      <input type="range" id="nodeCount" min="0" max="1000" step="1" value="270" data-exp-min="2" data-exp-max="20000">
     </div>
     <div class="row">
       <label for="extraEdges">Extra edges</label><output id="extraEdgesOut">8</output>
@@ -360,16 +360,27 @@ let running = true;
 /* ---------- control values ---------- */
 
 const ui = {};
+
+/* Sliders with data-exp-min/max are exponential: moving across the track
+   multiplies the value by a fixed ratio per step, rounded to an integer.     */
+
+function rangeValue(el) {
+  const pos = Number(el.value);
+  if (!("expMin" in el.dataset)) return pos;
+  const min = Number(el.dataset.expMin), max = Number(el.dataset.expMax);
+  return Math.round(min * (max / min) ** ((pos - el.min) / (el.max - el.min)));
+}
+
 function readUI() {
   for (const el of document.querySelectorAll("input, select")) {
     ui[el.id] = el.type === "checkbox" ? el.checked
-              : el.type === "range"    ? Number(el.value)
+              : el.type === "range"    ? rangeValue(el)
               : el.value;
     const out = $(el.id + "Out");
     if (out) {
       const step = Number(el.step) || 1;
       const dec = step < 0.001 ? 4 : step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
-      out.textContent = Number(el.value).toFixed(dec);
+      out.textContent = Number(ui[el.id]).toFixed(dec);
     }
   }
 }

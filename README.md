@@ -27,7 +27,7 @@ gjs.addEdge("b", "c");
 gjs.start();
 ```
 
-## Creating a GraphJS
+## Creating a GraphJS instance
 
 All parameters are optional. Each layer's options are passed under that layer's key.
 
@@ -51,7 +51,7 @@ const gjs = new GraphJS({
     cooling: 0.98,                  // fraction of temperature kept each tick (see "Settling")
     freezePoint: 0.01,              // temperature at which the layout stops moving
     useBarnesHut: true,             // speed up repulsion on large graphs (see "Barnes-Hut")
-    barnesHut: { theta: 0.9, maxDepth: 20, capacity: 1024 },  // tuning for the above
+    barnesHut: { theta: 0.9, maxDepth: 20, capacity: 1024 },  // tuning for Barnes-Hut
     nodeConfig: { radius: 20 },     // default physical settings for nodes
   },
 
@@ -230,6 +230,21 @@ gjs.renderer.setOpts({ renderLabels: false });                                  
 
 Labels are drawn on top of the nodes. When highlighting, a label fades with its node, and highlighted nodes are drawn over dimmed labels. A label stays visible while its node is just off the edge of the canvas.
 
+## Reading graph and simulation state
+
+The layers expose their internal state as read-only properties, for custom drawing, statistics, or hit-testing:
+
+```js
+gjs.graph.nodes;             // Map: id -> { id, data }
+gjs.graph.edges;             // Set of { src, dest, data }
+gjs.graph.directed;
+
+gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, fixed, ... }
+gjs.simulation.nodeList;     // the same nodes as an array
+```
+
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+
 ## Dragging nodes
 
 ```js
@@ -343,6 +358,48 @@ function neighborhood(id) {
 gjs.renderer.setHighlight(neighborhood("alice"));
 ```
 
+## Custom drawing
+
+Hooks draw your own content as part of each frame. A `"background"` hook runs after the background is filled, beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp.
+
+```js
+// A grid behind the graph that pans and zooms with it, 100 simulation units apart
+gjs.renderer.addHook("background", (renderer) => {
+  const { ctx, size, view } = renderer;
+  const step = 100 * view.zoom;
+  const [x0, y0] = renderer.simToCanvas(0, 0);
+  ctx.strokeStyle = "#e5e5e5";
+  ctx.beginPath();
+  for (let x = x0 % step; x < size.w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, size.h); }
+  for (let y = y0 % step; y < size.h; y += step) { ctx.moveTo(0, y); ctx.lineTo(size.w, y); }
+  ctx.stroke();
+});
+
+// A pulsing ring around one node, drawn on top
+let selected = "alice";
+function drawSelection(renderer, time) {
+  const node = gjs.simulation.nodes.get(selected);
+  if (!node) return;
+  const { ctx, view } = renderer;
+  const [x, y] = renderer.simToCanvas(node.x, node.y);
+  ctx.strokeStyle = "#e33";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(x, y, node.radius * view.zoom + 6 + 2 * Math.sin(time / 200), 0, 2 * Math.PI);
+  ctx.stroke();
+}
+gjs.renderer.addHook("overlay", drawSelection);
+
+gjs.renderer.removeHook("overlay", drawSelection);   // true if it was added
+```
+
+- **Coordinates:** hooks draw in canvas coordinates (CSS pixels), the same space as `simToCanvas()` and `getPosition()`. To draw at a node or point in the graph, convert its position with `simToCanvas()` and multiply sizes by `view.zoom`.
+- **Canvas state:** each hook runs between `ctx.save()` and `ctx.restore()`, so its changes to the transform, alpha, colours and so on don't affect the rest of the frame. Hooks start with the base transform and full alpha, but other properties are left over from drawing, so set every one you use.
+- **Errors:** a hook that throws is logged with `console.error`, and the rest of the frame is still drawn.
+- **Order:** hooks of the same type run in the order they were added, and adding the same function twice has no effect. Removing a hook needs the same function, so keep a reference to it.
+- **When they run:** every time a frame is drawn, which `start()` keeps doing after the layout settles. If the animation is stopped, call `gjs.renderer.render()` after changing something a hook draws. Nothing is drawn, and no hooks run, without a canvas.
+- **Only draw:** don't call `render()` or `step()` from a hook, since that runs the hooks again. Changes to the graph, config or highlighting made from a hook may not fully show until the next frame.
+
 ## Running the animation
 
 ```js
@@ -362,6 +419,19 @@ new ResizeObserver(() => gjs.resize()).observe(canvas);
 ```
 
 `resize()` is safe to call even when no canvas is attached.
+
+### Writing your own loop
+
+`start()` runs one tick and draws one frame each time the browser repaints. To add custom behavior to a render loop, such as timing ticks or running code between ticking and drawing, drive the two layers yourself:
+
+```js
+function frame(time) {
+  gjs.simulation.tick();
+  gjs.renderer.render(time);   // hooks and highlight fades use this timestamp
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+```
 
 ### Settling
 
@@ -416,21 +486,6 @@ For exact repulsion, set `useBarnesHut: false` instead of `theta: 0`, which give
 Only repulsion is approximated. Collisions use the same tree to find nearby nodes, but `theta` has no effect on them, and springs and gravity don't use the tree at all.
 
 Graphs of up to about 20,000 nodes stay usable. Ticks are slowest at the start, while new nodes are still bunched together, and speed up as the layout spreads out. Raising `dt` (see [Settling](#settling)) helps large graphs spread further before they freeze. With `useBarnesHut: false`, a graph that size takes over a second per tick, which is enough to freeze the page.
-
-## Reading graph and simulation state
-
-The layers expose their internal state as read-only properties, for custom drawing, statistics, or hit-testing:
-
-```js
-gjs.graph.nodes;             // Map: id -> { id, data }
-gjs.graph.edges;             // Set of { src, dest, data }
-gjs.graph.directed;
-
-gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, fixed, ... }
-gjs.simulation.nodeList;     // the same nodes as an array
-```
-
-These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
 
 ## Upgrading from 0.4
 

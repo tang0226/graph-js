@@ -1561,3 +1561,201 @@ describe("Renderer: image request options", () => {
     } finally { restore(); }
   });
 });
+
+describe("Renderer: hooks", () => {
+  /* Hooks push a ["hook", label] marker into the op stream, and `order()`
+     reduces a frame to what was drawn when: the background fill, the edge
+     line, each node circle, each label, and the hook markers. */
+  /** @type {Record<string, string>} */
+  const KIND = { fillRect: "background", lineTo: "edge", arc: "node", fillText: "label" };
+  const order = ctx => ctx.ops.flatMap(([name, ...args]) =>
+    name === "hook" ? [args[0]] : KIND[name] ? [KIND[name]] : []);
+  const mark = (ctx, label) => () => { ctx.ops.push(["hook", label]); };
+
+  // The two-node scene, with an edge and labels so every layer of the frame is drawn
+  function kscene(opts) {
+    return scene(false, [["a", "b"]], { nodeCfg: { label: n => n.id }, opts });
+  }
+
+  /* The stub context doesn't keep state across save() and restore(), so give
+     it a real state stack for the properties a hook is likely to change. */
+  const STATE = ["globalAlpha", "fillStyle", "strokeStyle", "lineWidth", "font", "textAlign", "textBaseline", "transform"];
+  function trackState(ctx) {
+    let alpha = 1;
+    Object.defineProperty(ctx, "globalAlpha", { get: () => alpha, set: v => { alpha = v; }, configurable: true });
+    const stack = [];
+    ctx.save = () => { ctx.ops.push(["save"]); stack.push(STATE.map(k => ctx[k])); };
+    ctx.restore = () => {
+      ctx.ops.push(["restore"]);
+      const saved = stack.pop();
+      if (saved) STATE.forEach((k, i) => { ctx[k] = saved[i]; });
+    };
+    return stack;
+  }
+
+  describe("adding and removing", () => {
+    test("addHook chains, and removeHook reports whether the hook was there", () => {
+      const { r } = kscene();
+      const f = () => {};
+      assert.equal(r.addHook("overlay", f), r);
+      assert.equal(r.removeHook("background", f), false, "types keep separate hooks");
+      assert.equal(r.removeHook("overlay", f), true);
+      assert.equal(r.removeHook("overlay", f), false);
+    });
+
+    test("a removed hook no longer runs", () => {
+      const { r } = kscene();
+      let calls = 0;
+      const f = () => { calls++; };
+      r.addHook("overlay", f);
+      r.render();
+      r.removeHook("overlay", f);
+      r.render();
+      assert.equal(calls, 1);
+    });
+
+    test("adding a function twice runs it once per frame; adding it to both types runs it in each", () => {
+      const { r } = kscene();
+      const seen = [];
+      const f = (_, time) => { seen.push(time); };
+      r.addHook("overlay", f).addHook("overlay", f).addHook("background", f);
+      r.render(5);
+      assert.deepEqual(seen, [5, 5]);
+    });
+
+    test("an unknown type throws instead of being ignored", () => {
+      const { r } = kscene();
+      assert.throws(() => r.addHook("foreground", () => {}), TypeError);
+      assert.throws(() => r.removeHook("foreground", () => {}), TypeError);
+    });
+  });
+
+  describe("running", () => {
+    test("background hooks run after the background fill, overlay hooks after everything else", () => {
+      const { r, ctx } = kscene();
+      r.addHook("overlay", mark(ctx, "overlay"));
+      r.addHook("background", mark(ctx, "background hook"));
+      r.render();
+      assert.deepEqual(order(ctx),
+        ["background", "background hook", "edge", "node", "node", "label", "label", "overlay"]);
+    });
+
+    test("hooks of a type run in the order they were added", () => {
+      const { r, ctx } = kscene();
+      for (const label of ["1", "2", "3"]) r.addHook("overlay", mark(ctx, label));
+      r.render();
+      assert.deepEqual(order(ctx).slice(-3), ["1", "2", "3"]);
+    });
+
+    test("hooks receive the renderer and the frame's timestamp", () => {
+      const { r } = kscene();
+      const calls = [];
+      r.addHook("background", (who, time) => { calls.push(["background", who === r, time]); });
+      r.addHook("overlay", (who, time) => { calls.push(["overlay", who === r, time]); });
+      r.render(1234);
+      assert.deepEqual(calls, [["background", true, 1234], ["overlay", true, 1234]]);
+
+      calls.length = 0;
+      r.render();
+      assert.equal(typeof calls[0][2], "number", "render() without a timestamp still passes one");
+      assert.equal(calls[0][2], calls[1][2], "both types see the same timestamp");
+    });
+
+    test("hooks don't run when there is no canvas to draw on", () => {
+      const g = new Graph();
+      g.addNode({ id: "a" });
+      const r = new Renderer(new Simulation(g, {}));
+      let calls = 0;
+      r.addHook("background", () => { calls++; }).addHook("overlay", () => { calls++; });
+      assert.equal(r.render(), false);
+      assert.equal(calls, 0);
+    });
+
+    test("a hook that removes and re-adds itself runs once per frame", () => {
+      const { r } = kscene();
+      let calls = 0;
+      // Stops re-adding itself at 100, so a regression fails rather than hangs
+      const f = () => { calls++; if (calls < 100) { r.removeHook("overlay", f); r.addHook("overlay", f); } };
+      r.addHook("overlay", f);
+      r.render();
+      assert.equal(calls, 1);
+      r.render();
+      assert.equal(calls, 2);
+    });
+
+    test("a hook added by another hook starts on the next frame", () => {
+      const { r } = kscene();
+      let lateCalls = 0;
+      const late = () => { lateCalls++; };
+      r.addHook("overlay", () => { r.addHook("overlay", late); });
+      r.render();
+      assert.equal(lateCalls, 0);
+      r.render();
+      assert.equal(lateCalls, 1);
+    });
+  });
+
+  describe("canvas state", () => {
+    test("each hook runs between its own save() and restore()", () => {
+      const { r, ctx } = kscene();
+      r.addHook("overlay", mark(ctx, "1")).addHook("overlay", mark(ctx, "2"));
+      r.render();
+      const tail = ctx.ops.filter(([name]) => name === "save" || name === "restore" || name === "hook").slice(-6);
+      assert.deepEqual(tail.map(([name, label]) => label ?? name), ["save", "1", "restore", "save", "2", "restore"]);
+    });
+
+    test("state a hook changes doesn't leak into the frame or the next one", () => {
+      const { r, ctx } = kscene();
+      const stack = trackState(ctx);
+      const base = [...ctx.transform];
+      const leaky = ({ ctx }) => {
+        ctx.globalAlpha = 0.3;
+        ctx.setTransform(2, 0, 0, 2, 50, 50);
+      };
+      r.addHook("background", leaky).addHook("overlay", leaky);
+
+      const atNodes = [];
+      const arc = ctx.arc;
+      ctx.arc = (...args) => { atNodes.push([ctx.globalAlpha, ctx.transform.join()]); arc(...args); };
+      r.render();
+      r.render();
+      assert.deepEqual(atNodes, Array(4).fill([1, base.join()]), "nodes drawn after a background hook");
+      assert.equal(ctx.globalAlpha, 1, "alpha left for the next frame");
+      assert.deepEqual(ctx.transform, base, "transform left for the next frame");
+      assert.equal(stack.length, 0, "every save() was matched by a restore()");
+    });
+
+    test("overlay hooks see the base transform and full alpha after labels and dimming", () => {
+      const { r, ctx } = kscene({ highlightFadeDuration: 0 });
+      trackState(ctx);
+      const base = [...ctx.transform];
+      r.setHighlight({ nodes: ["a"] });
+      const seen = [];
+      r.addHook("overlay", ({ ctx }) => { seen.push({ alpha: ctx.globalAlpha, transform: [...ctx.transform] }); });
+      r.render();
+      assert.ok(opsNamed(ctx, "fillText").length > 0, "labels must be drawn for this test to mean anything");
+      assert.deepEqual(seen, [{ alpha: 1, transform: base }], "once per frame, after the dimmed and highlighted passes");
+    });
+  });
+
+  describe("errors", () => {
+    test("a throwing hook is logged, and the frame and the other hooks still run", t => {
+      const error = t.mock.method(console, "error", () => {});
+      const { r, ctx } = kscene();
+      const stack = trackState(ctx);
+      const failure = new Error("hook failed");
+      r.addHook("background", () => { throw failure; });
+      r.addHook("background", mark(ctx, "next background hook"));
+      r.addHook("overlay", mark(ctx, "overlay"));
+
+      assert.equal(r.render(), true);
+      assert.deepEqual(order(ctx),
+        ["background", "next background hook", "edge", "node", "node", "label", "label", "overlay"]);
+      assert.equal(error.mock.callCount(), 1);
+      const [message, logged] = error.mock.calls[0].arguments;
+      assert.match(message, /background/, "the message names the hook type");
+      assert.equal(logged, failure);
+      assert.equal(stack.length, 0, "the failed hook's save() was still restored");
+    });
+  });
+});

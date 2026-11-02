@@ -232,6 +232,22 @@ describe("GraphJS: loop control", () => {
     } finally { gjs.stop(); restoreWindow(); raf.restore(); }
   });
 
+  test("a render hook that throws doesn't stop the loop", t => {
+    const error = t.mock.method(console, "error", () => {});
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      let frames = 0;
+      gjs.renderer.addHook("overlay", () => { frames++; throw new Error("hook failed"); });
+      gjs.start();
+      raf.flushFrame(3);
+      assert.equal(frames, 3);
+      assert.equal(error.mock.callCount(), 3);
+      assert.equal(raf.pending.size, 1, "the next frame must still be scheduled");
+      assert.equal(gjs.isRunning(), true);
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
   test("stop is safe before start", () => {
     const raf = installRaf();
     const { gjs, restoreWindow } = build();

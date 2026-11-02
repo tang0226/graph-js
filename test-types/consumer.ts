@@ -49,6 +49,19 @@ const bg: string = r.opts.background;
 // @ts-expect-error -- canvas is a setup value, not stored in opts
 r.opts.canvas;
 
+// The view reads back complete, though it can be assigned in part
+const zoom: number = r.view.zoom;
+r.view = { zoom: 2 };
+
+// Hooks: typed arguments, chainable add, boolean remove, and only known types
+const ring = (hr: Renderer, time: number) => { hr.ctx?.arc(0, 0, time, 0, 1); };
+const stillAdded: boolean = r.addHook("overlay", ring).addHook("background", ring).removeHook("overlay", ring);
+r.addHook("overlay", (hr, time) => { const t: number = time; const zoom: number = hr.view.zoom; });
+// @ts-expect-error -- not a hook type
+r.addHook("foreground", ring);
+// @ts-expect-error -- a hook receives a renderer, not a context
+r.addHook("overlay", (ctx: CanvasRenderingContext2D) => {});
+
 // Layers are usable on their own
 const sim: Simulation = new Simulation(new Graph(), {});
 sim.tick().tick();

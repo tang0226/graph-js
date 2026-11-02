@@ -8,6 +8,7 @@
  *  NodeStyleAccessors, EdgeStyleAccessors,
  *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
  *  RendererOpts, RendererOptsInput, HighlightMode,
+ *  RendererHookType, RendererHook,
  *  Canvas, CanvasContext, Size, View,
  * } from './typedefs.js'
  */
@@ -228,6 +229,7 @@ export class Renderer {
   /**
    * Current viewing window of the `Renderer`. Directly mutable. Contains
    * center simulation coordinates and a zoom factor (canvasPx/simPx).
+   * @returns {View}
    */
   get view() { return this._view; }
   /**
@@ -502,6 +504,18 @@ export class Renderer {
    */
   _imgScratch = [];
 
+
+  /**
+   * Hook functions by type, run by `render()`: "background" hooks after the
+   * background fill, "overlay" hooks after everything else is drawn
+   * @type {Record<RendererHookType, Set<RendererHook>>}
+   */
+  _hooks = {
+    overlay: new Set(),
+    background: new Set(),
+  };
+
+  
   /**
    * Stores the latest synced `Simulation` version. Used to gate node and edge
    * style cache updates.
@@ -1242,6 +1256,56 @@ export class Renderer {
 
 
   /**
+   * Adds a function for `render()` to call each frame. "background" hooks run
+   * after the background fill, beneath edges, nodes and labels; "overlay"
+   * hooks run after everything else, on top. Hooks of a type run in the order
+   * they were added, and adding the same function again has no effect.
+   *
+   * Hooks draw in canvas coordinates (CSS pixels) between `ctx.save()` and
+   * `ctx.restore()` calls. An error thrown by a hook is logged, and the
+   * render continues.
+   * @param {RendererHookType} type - hook type
+   * @param {RendererHook} f - hook function, called with the renderer and the
+   *    frame's timestamp
+   * @returns {this} self reference
+   */
+  addHook(type, f) {
+    this._hooks[type].add(f);
+    return this;
+  }
+
+
+  /**
+   * Removes a hook. Returns whether the hook existed in its corresponding
+   * type `Set`.
+   * @param {RendererHookType} type - hook type
+   * @param {RendererHook} f - hook function to remove
+   * @returns {boolean} - whether the hook existed
+   */
+  removeHook(type, f) {
+    return this._hooks[type].delete(f);
+  }
+
+
+  /**
+   * Runs all hooks of a specific type, with a timestamp passed.
+   * @param {RendererHookType} type - hook type
+   * @param {number} time - timestamp from `render()`
+   * @returns {void}
+   */
+  _runHooks(type, time) {
+    const hooks = this._hooks[type];
+    if (hooks.size === 0 || !this._ctx) return;
+    for (const f of [...hooks]) {
+      this._ctx.save();
+      try { f(this, time); }
+      catch (err) { console.error(`Renderer: ${type} hook failed`, err); }
+      finally { this._ctx.restore(); }
+    }
+  }
+
+
+  /**
    * Syncs internal nodes and edges to match the shape of underlying `Graph`.
    * Also resolves node and edge configs to apply overrides or defaults.
    * Gates on config changes, graph data changes, and graph shape changes.
@@ -1800,6 +1864,8 @@ export class Renderer {
     this._ctx.fillStyle = this._opts.background;
     this._ctx.fillRect(0, 0, this._size.w, this._size.h);
 
+    this._runHooks("background", time);
+
     // Text state shared by every label this frame; each label scales the font
     // to its own size by transform
     const hasLabels = inFrame.labelsI.length > 0;
@@ -1851,6 +1917,8 @@ export class Renderer {
       for (const i of inFrame.labelsI) this._renderNodeLabelByIndex(i);
       if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+
+    this._runHooks("overlay", time);
 
     this._evictSprites();
     if (this._spriteBuilds) this._imgScratch = [];

@@ -1,5 +1,7 @@
 // GRAPH LAYER
-/** @typedef {import("./graph").Graph} Graph */
+/** @import { Graph } from './graph.js' */
+
+import { Simulation } from './simulation.js';
 
 /**
  * @typedef {any} NodeId
@@ -144,6 +146,7 @@
 
 
 // RENDERER LAYER
+/** @import { Renderer } from './renderer.js' */
 
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
@@ -257,6 +260,19 @@
 /**
  * Fully resolved edge config accessor functions
  * @typedef {Required<EdgeStyleAccessors>} ResolvedEdgeStyleAccessors
+ */
+
+
+/**
+ * When a hook runs during `render()`: "background" after the background fill,
+ * beneath everything else; "overlay" after everything else, on top
+ * @typedef {"background" | "overlay"} RendererHookType
+ */
+
+/**
+ * Function called by `render()` to draw on the canvas, in canvas coordinates
+ * (CSS pixels). `time` is the frame timestamp passed to `render()`.
+ * @typedef {(r: Renderer, time: number) => void} RendererHook
  */
 
 

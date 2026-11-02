@@ -44,6 +44,7 @@ export class Simulation {
   /**
    * [read-only, set with `setOpts()`]
    * Simulation physics options
+   * @returns {Readonly<SimOpts>}
    */
   get opts() { return this._opts; }
 
