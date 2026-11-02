@@ -1759,3 +1759,54 @@ describe("Renderer: hooks", () => {
     });
   });
 });
+
+describe("Renderer: picking", () => {
+  /* Node "a" (radius 20) sits at canvas (300,300) at zoom 1. Probes go straight
+     down from its centre, away from "b", so only "a" can be hit. */
+  const EPS = 0.01;
+  const below = (r, id, px) => {
+    const [x, y] = r.simToCanvas(r.simulation.nodes.get(id).x, r.simulation.nodes.get(id).y);
+    return [x, y + px];
+  };
+
+  test("the default slack is 2 canvas pixels at every zoom", () => {
+    const { r } = scene(false, []);
+    for (const zoom of [0.5, 1, 4]) {
+      r.view = { x: 0, y: 0, zoom };
+      const edge = 20 * zoom + 2;
+      assert.equal(r.nodeAt(...below(r, "a", edge - EPS)), "a", `inside miss at zoom ${zoom}`);
+      assert.equal(r.nodeAt(...below(r, "a", edge + EPS)), null, `outside hit at zoom ${zoom}`);
+    }
+  });
+
+  test("a custom slack is measured in canvas pixels, not world units", () => {
+    const { r } = scene(false, []);
+    for (const zoom of [0.5, 1, 4]) {
+      r.view = { x: 0, y: 0, zoom };
+      const edge = 20 * zoom + 12;
+      assert.equal(r.nodeAt(...below(r, "a", edge - EPS), 12), "a", `inside miss at zoom ${zoom}`);
+      assert.equal(r.nodeAt(...below(r, "a", edge + EPS), 12), null, `outside hit at zoom ${zoom}`);
+    }
+  });
+
+  test("zero slack hits exactly the drawn radius", () => {
+    const { r } = scene(false, []);
+    assert.equal(r.nodeAt(...below(r, "a", 20 - EPS), 0), "a");
+    assert.equal(r.nodeAt(...below(r, "a", 20 + EPS), 0), null);
+  });
+
+  test("negative slack is treated as zero instead of growing the hit area", () => {
+    const { r } = scene(false, []);
+    // Unclamped, -60 would give r = -40, and r * r would match a radius of 40
+    assert.equal(r.nodeAt(...below(r, "a", 30), -60), null);
+    assert.equal(r.nodeAt(...below(r, "a", 20 - EPS), -60), "a");
+    assert.equal(r.nodeAt(...below(r, "a", 20 + EPS), -60), null);
+  });
+
+  test("when slack makes hit areas overlap, the node drawn last wins", () => {
+    const { r } = scene(false, []);
+    // Canvas (400,300) is 100px from both nodes; 80px of slack reaches both
+    assert.equal(r.nodeAt(400, 300), null);
+    assert.equal(r.nodeAt(400, 300, 80 + EPS), "b");
+  });
+});

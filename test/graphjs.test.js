@@ -172,6 +172,24 @@ describe("GraphJS: picking and pinning", () => {
     } finally { restoreWindow(); }
   });
 
+  test("nodeAt forwards slack to the renderer, and keeps its default when omitted", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      gjs.simulation.setDefaultNodeConfig({ radius: 20 });
+      gjs.pin("a", 400, 300);
+      gjs.pin("b", 100, 100);
+      gjs.step();
+      // 30px below the centre of "a": 10px outside its radius
+      assert.equal(gjs.nodeAt(400, 330), null);
+      assert.equal(gjs.nodeAt(400, 330, 11), "a");
+      assert.equal(gjs.nodeAt(400, 330, 9), null);
+      for (const dy of [21.99, 22.01]) {
+        assert.equal(gjs.nodeAt(400, 300 + dy), gjs.renderer.nodeAt(400, 300 + dy),
+          `facade and renderer defaults disagree ${dy}px out`);
+      }
+    } finally { restoreWindow(); }
+  });
+
   test("pin accepts canvas coordinates and getPosition returns them", () => {
     const { gjs, restoreWindow } = build();
     try {

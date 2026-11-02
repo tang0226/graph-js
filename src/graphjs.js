@@ -296,13 +296,15 @@ export class GraphJS {
    * interactions.
    * @param {number} cx - canvas space x coordinate
    * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - extra hit radius around each node, in canvas
+   *    pixels (defaults to the renderer's default)
    * @returns {any | null} id of node at coordinates, or `null` if no node
    *    was found
    * @throws {Error} throws if no canvas is attached
    */
-  nodeAt(cx, cy) {
+  nodeAt(cx, cy, slack = undefined) {
     if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    return this._renderer.nodeAt(cx, cy);
+    return this._renderer.nodeAt(cx, cy, slack);
   }
 
 

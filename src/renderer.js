@@ -1931,16 +1931,17 @@ export class Renderer {
    * Returns the id of a node at a specific point on the canvas
    * @param {number} cx - canvas x coordinate
    * @param {number} cy - canvas y coordinate
+   * @param {number} [slack] - slack, in canvas pixels
    * @returns {NodeId | null} node id
    * @throws {Error} throws when no canvas is attached
    */
-  nodeAt(cx, cy) {
+  nodeAt(cx, cy, slack = 2) {
     if (!this._canvas) throw new Error("Renderer: no canvas attached");
     const [x, y] = this.canvasToSim(cx, cy);
     const nodes = this._simulation.nodeList;
-    const slack = 4 / this._view.zoom; // 4 world-coordinate radius slack
+    const s = Math.max(slack, 0) / this._view.zoom; // radius slack
     for (let i = nodes.length - 1; i >= 0; i--) {
-      const node = nodes[i], r = node.radius + slack;
+      const node = nodes[i], r = node.radius + s;
       if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
     }
     return null;

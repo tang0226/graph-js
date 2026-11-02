@@ -31,6 +31,13 @@ const directed: boolean = gjs.graph.directed;
 gjs.resize().stop().step();
 gjs.unpin("b").stop();
 
+// nodeAt takes an optional slack in canvas pixels, on the facade and the renderer
+gjs.nodeAt(10, 10);
+gjs.nodeAt(10, 10, 12);
+gjs.renderer.nodeAt(10, 10, 12);
+// @ts-expect-error -- slack is a number
+gjs.nodeAt(10, 10, "12");
+
 // getPosition may be null for an unknown id
 const p = gjs.getPosition("b");
 // @ts-expect-error -- possibly null

@@ -257,7 +257,7 @@ const toCanvas = e => {
 
 canvas.addEventListener("pointerdown", e => {
   const [x, y] = toCanvas(e);
-  dragging = gjs.nodeAt(x, y);       // node id, or null
+  dragging = gjs.nodeAt(x, y, 4);       // node id, or null; 4 CSS px of slack (default is 2)
   if (dragging !== null) canvas.setPointerCapture(e.pointerId);
 });
 
