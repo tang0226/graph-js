@@ -2,7 +2,8 @@
  * @import {
  *  NodeData,
  *  Canvas,
- *  GraphJSOpts
+ *  GraphJSOpts,
+ *  GraphJSHookType, GraphJSHook,
  * } from './typedefs.js'
  */
 
@@ -37,6 +38,19 @@ export class GraphJS {
    * Underlying `Renderer` instance.
    */
   get renderer() { return this._renderer; }
+
+
+  /**
+   * Hook functions by type, run by each frame of `start()` and by `step()`:
+   * "preTick" before the simulation ticks, "postTick" between ticking and
+   * rendering, and "postRender" after rendering
+   * @type {Record<GraphJSHookType, Set<GraphJSHook>>}
+   */
+  _hooks = {
+    preTick: new Set(),
+    postTick: new Set(),
+    postRender: new Set(),
+  };
 
 
   /**
@@ -146,9 +160,9 @@ export class GraphJS {
     if (this._raf !== null || !this.canvas) return this;
     const frame = (/** @type {number} */ time) => {
       if (!this.canvas) { this._raf = null; return; }
-      this._simulation.tick();
-      this._renderer.render(time);
+      // Schedule first, so that a hook calling stop() cancels the next frame
       this._raf = requestAnimationFrame(frame);
+      this._frame(time);
     };
     this._raf = requestAnimationFrame(frame);
     return this;
@@ -166,11 +180,14 @@ export class GraphJS {
 
 
   /**
-   * Ticks the simulation and renders to the `Renderer`'s canvas, if possible.
-   * (see `Renderer.render()`)
+   * Ticks the simulation and renders to the `Renderer`'s canvas, if possible
+   * (see `Renderer.render()`), running hooks as a frame of `start()` would.
    * @returns {this} self reference
    */
-  step() { this._simulation.tick(); this._renderer.render(); return this; }
+  step() {
+    this._frame(globalThis.performance?.now() ?? Date.now());
+    return this;
+  }
 
 
   /**
@@ -178,6 +195,71 @@ export class GraphJS {
    * @returns {boolean} whether the animation loop is running
    */
   isRunning() { return this._raf !== null; }
+
+
+  /**
+   * Adds a function to run each frame of `start()`, and on each `step()`.
+   * "preTick" hooks run before the simulation ticks, "postTick" hooks between
+   * ticking and rendering, and "postRender" hooks after rendering. Hooks of a
+   * type run in the order they were added, and adding the same function again
+   * has no effect. An error thrown by a hook is logged, and the frame carries
+   * on.
+   *
+   * For drawing, use `Renderer.addHook()` instead: its hooks run at a fixed
+   * point in the frame, with canvas state saved and restored around them.
+   * @param {GraphJSHookType} type - hook type
+   * @param {GraphJSHook} f - hook function, called with this instance and the
+   *    frame's timestamp
+   * @returns {this} self reference
+   */
+  addHook(type, f) {
+    this._hooks[type].add(f);
+    return this;
+  }
+
+
+  /**
+   * Removes a hook. Returns whether the hook existed in its corresponding
+   * type `Set`.
+   * @param {GraphJSHookType} type - hook type
+   * @param {GraphJSHook} f - hook function to remove
+   * @returns {boolean} whether the hook existed
+   */
+  removeHook(type, f) {
+    return this._hooks[type].delete(f);
+  }
+
+
+  /**
+   * Runs all hooks of a specific type, with a timestamp. Iterates over a copy,
+   * so hooks added or re-added during the run start on the next frame.
+   * @param {GraphJSHookType} type - hook type
+   * @param {number} time - frame timestamp
+   * @returns {void}
+   */
+  _runHooks(type, time) {
+    const hooks = this._hooks[type];
+    if (hooks.size === 0) return;
+    for (const f of [...hooks]) {
+      try { f(this, time); }
+      catch (err) { console.error(`GraphJS: ${type} hook failed`, err); }
+    }
+  }
+
+
+  /**
+   * Runs one frame: ticks the simulation and renders, with hooks around each.
+   * Shared by `start()` and `step()`.
+   * @param {number} time - frame timestamp
+   * @returns {void}
+   */
+  _frame(time) {
+    this._runHooks("preTick", time);
+    this._simulation.tick();
+    this._runHooks("postTick", time);
+    this._renderer.render(time);
+    this._runHooks("postRender", time);
+  }
 
 
   /**

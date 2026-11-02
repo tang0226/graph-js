@@ -62,6 +62,15 @@ r.addHook("foreground", ring);
 // @ts-expect-error -- a hook receives a renderer, not a context
 r.addHook("overlay", (ctx: CanvasRenderingContext2D) => {});
 
+// Loop hooks: typed arguments, chainable add, boolean remove, and only known types
+const timed = (g: GraphJS, time: number) => { const running: boolean = g.isRunning(); };
+const loopRemoved: boolean = gjs.addHook("preTick", timed).addHook("postRender", timed).removeHook("preTick", timed);
+gjs.addHook("postTick", (g, time) => { const t: number = time; const temp: number = g.simulation.temp; });
+// @ts-expect-error -- renderer hook types aren't loop hook types
+gjs.addHook("overlay", timed);
+// @ts-expect-error -- a loop hook receives the GraphJS instance, not a renderer
+gjs.addHook("postRender", (hr: Renderer) => { hr.view.zoom; });
+
 // Layers are usable on their own
 const sim: Simulation = new Simulation(new Graph(), {});
 sim.tick().tick();

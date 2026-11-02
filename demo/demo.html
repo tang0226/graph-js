@@ -119,7 +119,7 @@
     <span>nodes <b id="statNodes">0</b></span>
     <span>edges <b id="statEdges">0</b></span>
     <span>springs <b id="statSprings">0</b></span>
-    <span><b id="statFps">0</b> fps</span>
+    <span><b id="statFps">0</b> fps / <b id="statTickFps">0</b> tick / <b id="statRenderFps">0</b> render</span>
   </div>
   <div id="help">drag a node to pin &amp; move it &middot; drag empty space to pan &middot; scroll to zoom</div>
 </div>
@@ -182,8 +182,8 @@
       <input type="range" id="minDistSq" min="1" max="2000" step="1" value="1">
     </div>
     <div class="row">
-      <label for="speed">Speed (steps/frame)</label><output id="speedOut">1.0</output>
-      <input type="range" id="speed" min="0" max="8" step="0.25" value="1">
+      <label for="speed">Speed (ticks/frame)</label><output id="speedOut">1</output>
+      <input type="range" id="speed" min="1" max="8" step="1" value="1">
     </div>
     <div class="row">
       <label for="dt">Time step (dt)</label><output id="dtOut">1.0</output>
@@ -355,7 +355,6 @@ const GROUP_COLORS = ["#e06c75", "#61afef", "#98c379", "#e5c07b", "#c678dd"];
 const GROUPS = GROUP_COLORS.length;
 
 let gjs = null;
-let running = true;
 
 /* ---------- control values ---------- */
 
@@ -388,12 +387,14 @@ function readUI() {
 /* ---------- graph construction ---------- */
 
 function buildGraph() {
+  const wasRunning = gjs ? gjs.isRunning() : true;   // a rebuild keeps the play state
   if (gjs) gjs.stop();
 
   gjs = new GraphJS({
     canvas,
     graph: { directed: ui.directed },
   });
+  addLoopHooks(gjs);
   hovered = null;                          // the new renderer starts unhighlighted
 
   const n = ui.nodeCount;
@@ -411,6 +412,8 @@ function buildGraph() {
   applyLabelConfig();
   applyViewConfig();
   gjs.resize();
+  if (wasRunning) play();
+  else redraw();
 }
 
 function nodeIds() { return [...gjs.graph.nodes.keys()]; }
@@ -540,7 +543,7 @@ function updateHover(id) {
   hoveredVersion = gjs.graph.version;
   if (id === null) gjs.renderer.clearHighlight();
   else gjs.renderer.setHighlight(neighbourhood(id));
-  if (!running) gjs.renderer.render();
+  redraw();
 }
 
 canvas.addEventListener("pointerleave", () => { if (!drag) updateHover(null); });
@@ -574,7 +577,7 @@ canvas.addEventListener("pointermove", e => {
     v.x = drag.vx - (e.clientX - drag.sx) / v.zoom;
     v.y = drag.vy - (e.clientY - drag.sy) / v.zoom;
   }
-  if (!running) gjs.renderer.render();
+  redraw();
 });
 
 function endDrag() {
@@ -596,7 +599,7 @@ canvas.addEventListener("wheel", e => {
   const [ax, ay] = gjs.canvasToSim(cx, cy);
   gjs.renderer.view.x += bx - ax;
   gjs.renderer.view.y += by - ay;
-  if (!running) gjs.renderer.render();
+  redraw();
 }, { passive: false });
 
 /* ---------- control wiring ---------- */
@@ -617,7 +620,7 @@ for (const el of document.querySelectorAll("input, select")) {
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
     if (LABEL_IDS.includes(el.id)) applyLabelConfig();
     if (VIEW_IDS.includes(el.id)) applyViewConfig();
-    if (!running) gjs.renderer.render();
+    redraw();
   });
 }
 
@@ -629,9 +632,10 @@ $("addNode").addEventListener("click", () => {
   if (ids.length) gjs.addEdge(ids[(Math.random() * ids.length) | 0], id);
   applyNodeConfig();                       // degree-derived radii changed
   applyEdgeConfig();
+  redraw();
 });
 
-$("addEdge").addEventListener("click", () => { addRandomEdge(); applyNodeConfig(); applyEdgeConfig(); });
+$("addEdge").addEventListener("click", () => { addRandomEdge(); applyNodeConfig(); applyEdgeConfig(); redraw(); });
 
 $("rmNode").addEventListener("click", () => {
   const ids = nodeIds();
@@ -639,6 +643,7 @@ $("rmNode").addEventListener("click", () => {
   gjs.removeNode(ids[(Math.random() * ids.length) | 0]);
   applyNodeConfig();
   applyEdgeConfig();
+  redraw();
 });
 
 $("rmEdge").addEventListener("click", () => {
@@ -648,11 +653,12 @@ $("rmEdge").addEventListener("click", () => {
   gjs.removeEdge(e.src.id, e.dest.id);
   applyNodeConfig();
   applyEdgeConfig();
+  redraw();
 });
 
-$("playPause").addEventListener("click", e => {
-  running = !running;
-  e.target.textContent = running ? "Pause" : "Play";
+$("playPause").addEventListener("click", () => {
+  if (gjs.isRunning()) pause();
+  else play();
 });
 
 $("shake").addEventListener("click", () => {
@@ -661,8 +667,7 @@ $("shake").addEventListener("click", () => {
     nd.vy += (Math.random() - 0.5) * 40;
   }
   gjs.simulation.heat();
-  running = true;
-  $("playPause").textContent = "Pause";
+  play();
 });
 
 $("recenter").addEventListener("click", () => {
@@ -672,41 +677,86 @@ $("recenter").addEventListener("click", () => {
   for (const nd of list) { x += nd.x; y += nd.y; }
   gjs.renderer.view.x = x / list.length;
   gjs.renderer.view.y = y / list.length;
-  if (!running) gjs.renderer.render();
+  redraw();
 });
 
-/* ---------- main loop ---------- */
+/* ---------- animation ----------
+   gjs.start() runs the loop: each frame ticks once and renders. Loop hooks
+   add the demo's extra work around that, so gjs.isRunning() always reflects
+   the play state.                                                          */
 
-let frames = 0, fpsClock = performance.now(), stepAcc = 0;
+let frames = 0, fpsClock = 0;
 
-/* Speed is steps per frame, accumulated so fractional values tick on only some
-   frames. Every step uses the Time step slider's dt, never one derived from
-   frame time, which would make stability depend on frame rate.               */
+function updateCounts() {
+  $("statNodes").textContent = gjs.graph.nodes.size;
+  $("statEdges").textContent = gjs.graph.edges.size;
+  $("statSprings").textContent = gjs.simulation._springs.length / 2;
+}
 
-function frame() {
-  if (running) {
-    stepAcc = Math.min(stepAcc + ui.speed, 16);
-    while (stepAcc >= 1) { gjs.simulation.tick(); stepAcc -= 1; }
-  } else {
-    stepAcc = 0;
-  }
-  gjs.renderer.render();
+/* Speed is ticks per frame: the loop ticks once, and the preTick hook adds the
+   rest. Every tick uses the Time step slider's dt, never one derived from
+   frame time, which would make stability depend on frame rate.              */
 
-  frames++;
-  const now = performance.now();
-  if (now - fpsClock >= 500) {
-    $("statFps").textContent = Math.round((frames * 1000) / (now - fpsClock));
-    $("statNodes").textContent = gjs.graph.nodes.size;
-    $("statEdges").textContent = gjs.graph.edges.size;
-    $("statSprings").textContent = gjs.simulation._springs.length / 2;
-    frames = 0; fpsClock = now;
-  }
-  requestAnimationFrame(frame);
+/* The HUD shows the actual frame rate, then the rate each phase could reach
+   on its own: frames divided by the time spent ticking or rendering. Tick
+   time covers every tick in the frame, so it includes the extra Speed ticks. */
+
+let tickMs = 0, renderMs = 0, phaseStart = 0;
+const rate = (count, ms) => ms > 0 ? Math.round((count * 1000) / ms) : "–";
+
+function addLoopHooks(g) {
+  // Added first, so the timer starts before the extra ticks below
+  g.addHook("preTick", () => { phaseStart = performance.now(); });
+  g.addHook("preTick", g => {
+    for (let i = 1; i < ui.speed; i++) g.simulation.tick();
+  });
+  g.addHook("postTick", () => {
+    const now = performance.now();
+    tickMs += now - phaseStart;
+    phaseStart = now;
+  });
+  g.addHook("postRender", (g, time) => {
+    renderMs += performance.now() - phaseStart;
+    frames++;
+    if (time - fpsClock < 500) return;
+    $("statFps").textContent = rate(frames, time - fpsClock);
+    $("statTickFps").textContent = rate(frames, tickMs);
+    $("statRenderFps").textContent = rate(frames, renderMs);
+    updateCounts();
+    frames = 0; tickMs = 0; renderMs = 0; fpsClock = time;
+  });
+}
+
+function play() {
+  frames = 0; tickMs = 0; renderMs = 0; fpsClock = performance.now();
+  gjs.start();
+  $("playPause").textContent = "Pause";
+}
+
+function pause() {
+  gjs.stop();
+  $("playPause").textContent = "Play";
+  for (const id of ["statFps", "statTickFps", "statRenderFps"]) $(id).textContent = 0;
+}
+
+/* While paused, changes are drawn on demand: at most once per frame, and
+   for as long as a highlight fade is in progress.                          */
+
+let redrawQueued = false;
+function redraw() {
+  if (gjs.isRunning() || redrawQueued) return;
+  redrawQueued = true;
+  requestAnimationFrame(time => {
+    redrawQueued = false;
+    if (gjs.isRunning()) return;
+    gjs.renderer.render(time);
+    updateCounts();
+    if (gjs.renderer.isFading()) redraw();
+  });
 }
 
 readUI();
 buildGraph();
-requestAnimationFrame(frame);
 </script>
 </body>
 </html>

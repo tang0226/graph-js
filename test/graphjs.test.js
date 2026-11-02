@@ -269,6 +269,215 @@ describe("GraphJS: loop control", () => {
   });
 });
 
+describe("GraphJS: loop hooks", () => {
+  /* A running-capable instance whose tick() and render() also write into
+     `log`, so tests can see where hooks ran relative to each phase. */
+  function hooked() {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    const log = [];
+    const tick = gjs.simulation.tick.bind(gjs.simulation);
+    gjs.simulation.tick = (...args) => { log.push("tick"); return tick(...args); };
+    const render = gjs.renderer.render.bind(gjs.renderer);
+    gjs.renderer.render = (...args) => { log.push("render"); return render(...args); };
+    const cleanup = () => { gjs.stop(); restoreWindow(); raf.restore(); };
+    return { gjs, raf, log, cleanup };
+  }
+  const mark = (log, label) => () => { log.push(label); };
+  const FRAME = ["preTick", "tick", "postTick", "render", "postRender"];
+
+  test("addHook chains, and removeHook reports whether the hook was there", () => {
+    const { gjs, cleanup } = hooked();
+    try {
+      const f = () => {};
+      assert.equal(gjs.addHook("postTick", f), gjs);
+      assert.equal(gjs.removeHook("preTick", f), false, "types keep separate hooks");
+      assert.equal(gjs.removeHook("postTick", f), true);
+      assert.equal(gjs.removeHook("postTick", f), false);
+    } finally { cleanup(); }
+  });
+
+  test("an unknown type throws instead of being ignored", () => {
+    const { gjs, cleanup } = hooked();
+    try {
+      assert.throws(() => gjs.addHook("tick", () => {}), TypeError);
+      assert.throws(() => gjs.removeHook("tick", () => {}), TypeError);
+    } finally { cleanup(); }
+  });
+
+  test("each frame runs preTick, tick, postTick, render and postRender, in that order", () => {
+    const { gjs, raf, log, cleanup } = hooked();
+    try {
+      // Added out of order: the type decides where a hook runs
+      for (const type of ["postRender", "postTick", "preTick"]) gjs.addHook(type, mark(log, type));
+      gjs.start();
+      raf.flushFrame(2);
+      assert.deepEqual(log, [...FRAME, ...FRAME]);
+    } finally { cleanup(); }
+  });
+
+  test("step() runs the same sequence once, without starting the loop", () => {
+    const { gjs, raf, log, cleanup } = hooked();
+    try {
+      for (const type of ["preTick", "postTick", "postRender"]) gjs.addHook(type, mark(log, type));
+      gjs.step();
+      assert.deepEqual(log, FRAME);
+      assert.equal(gjs.isRunning(), false);
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
+  test("step() runs every hook even without a canvas", () => {
+    const gjs = new GraphJS();
+    const log = [];
+    for (const type of ["preTick", "postTick", "postRender"]) gjs.addHook(type, mark(log, type));
+    gjs.step();
+    assert.deepEqual(log, ["preTick", "postTick", "postRender"]);
+  });
+
+  test("hooks receive the instance and the frame's timestamp, which render also gets", () => {
+    const { gjs, raf, cleanup } = hooked();
+    try {
+      const seen = [];
+      for (const type of ["preTick", "postTick", "postRender"])
+        gjs.addHook(type, (who, time) => { seen.push([type, who === gjs, time]); });
+      const render = gjs.renderer.render;
+      gjs.renderer.render = time => { seen.push(["render", true, time]); return render(time); };
+
+      gjs.start();
+      raf.flushFrame(2, { t0: 1000, dt: 16 });
+      gjs.stop();
+      const frame = t => [["preTick", true, t], ["postTick", true, t], ["render", true, t], ["postRender", true, t]];
+      assert.deepEqual(seen, [...frame(1000), ...frame(1016)]);
+
+      seen.length = 0;
+      gjs.step();
+      const t = seen[0][2];
+      assert.equal(typeof t, "number", "step() passes a timestamp too");
+      assert.deepEqual(seen, frame(t), "and every phase of the step sees the same one");
+    } finally { cleanup(); }
+  });
+
+  test("isRunning() is true inside hooks while the loop runs, and false inside step()", () => {
+    const { gjs, raf, cleanup } = hooked();
+    try {
+      const seen = [];
+      gjs.addHook("postRender", g => { seen.push(g.isRunning()); });
+      gjs.step();
+      gjs.start();
+      raf.flushFrame();
+      assert.deepEqual(seen, [false, true]);
+    } finally { cleanup(); }
+  });
+
+  test("a hook can stop the loop", () => {
+    const { gjs, raf, cleanup } = hooked();
+    try {
+      let frames = 0;
+      gjs.addHook("postRender", g => { if (++frames === 2) g.stop(); });
+      gjs.start();
+      raf.flushFrame(5);
+      assert.equal(frames, 2);
+      assert.equal(gjs.isRunning(), false);
+      assert.equal(raf.pending.size, 0, "no frame may be left scheduled");
+    } finally { cleanup(); }
+  });
+
+  test("a frame stopped from preTick still finishes, then no more run", () => {
+    const { gjs, raf, log, cleanup } = hooked();
+    try {
+      gjs.addHook("preTick", g => { log.push("preTick"); g.stop(); });
+      gjs.addHook("postRender", mark(log, "postRender"));
+      gjs.start();
+      raf.flushFrame(3);
+      assert.deepEqual(log, ["preTick", "tick", "render", "postRender"]);
+    } finally { cleanup(); }
+  });
+
+  test("a hook can restart the loop after stopping it", () => {
+    const { gjs, raf, cleanup } = hooked();
+    try {
+      let frames = 0;
+      gjs.addHook("postRender", g => { frames++; g.stop().start(); });
+      gjs.start();
+      raf.flushFrame(3);
+      assert.equal(frames, 3);
+      assert.equal(raf.pending.size, 1, "exactly one loop keeps running");
+    } finally { cleanup(); }
+  });
+
+  test("a throwing hook is logged, and the frame and the loop carry on", t => {
+    const error = t.mock.method(console, "error", () => {});
+    const { gjs, raf, log, cleanup } = hooked();
+    try {
+      const failure = new Error("hook failed");
+      gjs.addHook("preTick", () => { throw failure; });
+      gjs.addHook("preTick", mark(log, "next preTick hook"));
+      gjs.addHook("postRender", mark(log, "postRender"));
+      gjs.start();
+      raf.flushFrame(2);
+      const frame = ["next preTick hook", "tick", "render", "postRender"];
+      assert.deepEqual(log, [...frame, ...frame]);
+      assert.equal(error.mock.callCount(), 2);
+      const [message, logged] = error.mock.calls[0].arguments;
+      assert.match(message, /preTick/, "the message names the hook type");
+      assert.equal(logged, failure);
+      assert.equal(gjs.isRunning(), true);
+      assert.equal(raf.pending.size, 1);
+    } finally { cleanup(); }
+  });
+
+  test("hooks of a type run in the order they were added, and a duplicate runs once", () => {
+    const { gjs, log, cleanup } = hooked();
+    try {
+      const one = mark(log, "1");
+      gjs.addHook("postTick", one).addHook("postTick", mark(log, "2")).addHook("postTick", one);
+      gjs.step();
+      assert.deepEqual(log, ["tick", "1", "2", "render"]);
+    } finally { cleanup(); }
+  });
+
+  test("a removed hook no longer runs", () => {
+    const { gjs, cleanup } = hooked();
+    try {
+      let calls = 0;
+      const f = () => { calls++; };
+      gjs.addHook("postTick", f);
+      gjs.step();
+      gjs.removeHook("postTick", f);
+      gjs.step();
+      assert.equal(calls, 1);
+    } finally { cleanup(); }
+  });
+
+  test("a hook that removes and re-adds itself runs once per frame", () => {
+    const { gjs, cleanup } = hooked();
+    try {
+      let calls = 0;
+      // Stops re-adding itself at 100, so a regression fails rather than hangs
+      const f = g => { calls++; if (calls < 100) { g.removeHook("preTick", f); g.addHook("preTick", f); } };
+      gjs.addHook("preTick", f);
+      gjs.step();
+      assert.equal(calls, 1);
+      gjs.step();
+      assert.equal(calls, 2);
+    } finally { cleanup(); }
+  });
+
+  test("a hook added by another hook of its type starts on the next frame", () => {
+    const { gjs, cleanup } = hooked();
+    try {
+      let lateCalls = 0;
+      const late = () => { lateCalls++; };
+      gjs.addHook("postRender", g => { g.addHook("postRender", late); });
+      gjs.step();
+      assert.equal(lateCalls, 0);
+      gjs.step();
+      assert.equal(lateCalls, 1);
+    } finally { cleanup(); }
+  });
+});
+
 describe("GraphJS: end to end", () => {
   test("mutating during a running layout stays finite", () => {
     const { gjs, restoreWindow } = build({ directed: true });

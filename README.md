@@ -360,7 +360,7 @@ gjs.renderer.setHighlight(neighborhood("alice"));
 
 ## Custom drawing
 
-Hooks draw your own content as part of each frame. A `"background"` hook runs after the background is filled, beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp.
+Renderer hooks draw your own content as part of each frame. A `"background"` hook runs after the background is filled, beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp. For non-drawing per-frame code, use [loop hooks](#loop-hooks).
 
 ```js
 // A grid behind the graph that pans and zooms with it, 100 simulation units apart
@@ -420,18 +420,39 @@ new ResizeObserver(() => gjs.resize()).observe(canvas);
 
 `resize()` is safe to call even when no canvas is attached.
 
-### Writing your own loop
+### Loop hooks
 
-`start()` runs one tick and draws one frame each time the browser repaints. To add custom behavior to a render loop, such as timing ticks or running code between ticking and drawing, drive the two layers yourself:
+Each frame of `start()`, and each `step()`, ticks the simulation once and then draws. Loop hooks run your own code around those two steps:
+
+| Hook | Runs |
+|---|---|
+| `"preTick"` | before the simulation ticks |
+| `"postTick"` | after the tick, before drawing |
+| `"postRender"` | after the frame is drawn |
 
 ```js
-function frame(time) {
-  gjs.simulation.tick();
-  gjs.renderer.render(time);   // hooks and highlight fades use this timestamp
-  requestAnimationFrame(frame);
+// Time each tick
+let tickStart = 0, tickMs = 0;
+gjs.addHook("preTick", () => { tickStart = performance.now(); });
+gjs.addHook("postTick", () => { tickMs = performance.now() - tickStart; });
+
+// Keep every node inside a 1000 x 1000 box
+function keepInBox(gjs) {
+  for (const node of gjs.simulation.nodeList) {
+    node.x = Math.max(-500, Math.min(500, node.x));
+    node.y = Math.max(-500, Math.min(500, node.y));
+  }
 }
-requestAnimationFrame(frame);
+gjs.addHook("postTick", keepInBox);
+
+gjs.removeHook("postTick", keepInBox);   // true if it existed and was removed
 ```
+
+- **Arguments:** each hook is called with the GraphJS instance and the frame's timestamp. That's the `requestAnimationFrame` time in the loop, or `performance.now()` for `step()`, and the renderer is given the same one.
+- **When they run:** on every frame, including after the layout settles. The tick does nothing then, but `"preTick"` and `"postTick"` hooks still run.
+- **Stopping:** a hook can call `stop()`. The current frame finishes, and no more are run. Don't call `step()` from a hook, since that runs the hooks again.
+- **Errors and order:** these work as they do for [renderer hooks](#custom-drawing). A hook that throws is logged and the frame carries on, and hooks of a type run in the order they were added.
+- **Drawing:** use renderer hooks instead. They run at a fixed point in the frame with canvas state saved and restored, while a `"postRender"` hook's changes to canvas state carry into the next frame.
 
 ### Settling
 

@@ -286,4 +286,20 @@ import { Simulation } from './simulation.js';
  * @property {Canvas} [canvas] - canvas to render to
  */
 
+/** @import { GraphJS } from './graphjs.js' */
+
+/**
+ * When a hook runs in each frame of `start()` and each `step()`: "preTick"
+ * before the simulation ticks, "postTick" between ticking and rendering, and
+ * "postRender" after rendering
+ * @typedef {"preTick" | "postTick" | "postRender"} GraphJSHookType
+ */
+
+/**
+ * Function called during each frame of `start()` and each `step()`. `time` is
+ * the frame timestamp: the `requestAnimationFrame` time in a `start()` loop,
+ * or `performance.now()` for `step()`.
+ * @typedef {(gjs: GraphJS, time: number) => void} GraphJSHook
+ */
+
 export {};
