@@ -1,23 +1,15 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { BarnesHutContext } from "../src/barnes-hut.js";
+import {
+  rng, scatter, bruteCollide, overlapDepth, assertClose, assertAllClose,
+} from "./helpers/bodies.js";
 
 const STRENGTH = 1000, MIN_DIST_SQ = 1;
 const CELL_ARRAYS = [
   "_centerX", "_centerY", "_halfSize", "_centroidX", "_centroidY",
   "_bodyCount", "_childIndex", "_bodyIndex", "_maxRadius",
 ];
-
-// Seeded, so a failure reproduces
-function rng(seed = 1) {
-  return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
-}
-
-function scatter(n, size = 1000, seed = 1) {
-  const r = rng(seed), xs = new Float64Array(n), ys = new Float64Array(n);
-  for (let i = 0; i < n; i++) { xs[i] = r() * size; ys[i] = r() * size; }
-  return { xs, ys };
-}
 
 function repelForces(ctx, xs, ys, params = {}) {
   const fx = new Float64Array(xs.length), fy = new Float64Array(xs.length);
@@ -37,43 +29,6 @@ function bruteRepel(xs, ys, { strength = STRENGTH, minDistSq = MIN_DIST_SQ } = {
     }
   }
   return { fx, fy };
-}
-
-// Mirrors Simulation._enforceRadius, on arrays
-function bruteCollide(xs, ys, radii, fixed) {
-  for (let i = 0; i < xs.length - 1; i++) {
-    for (let j = i + 1; j < xs.length; j++) {
-      const dx = xs[i] - xs[j], dy = ys[i] - ys[j];
-      const dSq = dx * dx + dy * dy, minD = radii[i] + radii[j];
-      if (dSq >= minD * minD) continue;
-      const d = Math.sqrt(dSq), push = (minD - d) / d;
-      const s1 = fixed[i] ? 0 : (fixed[j] ? 1 : 0.5);
-      const s2 = fixed[j] ? 0 : (fixed[i] ? 1 : 0.5);
-      xs[i] += dx * push * s1; ys[i] += dy * push * s1;
-      xs[j] -= dx * push * s2; ys[j] -= dy * push * s2;
-    }
-  }
-}
-
-function overlapDepth(xs, ys, radii) {
-  let depth = 0;
-  for (let i = 0; i < xs.length; i++) {
-    for (let j = i + 1; j < xs.length; j++) {
-      depth += Math.max(radii[i] + radii[j] - Math.hypot(xs[i] - xs[j], ys[i] - ys[j]), 0);
-    }
-  }
-  return depth;
-}
-
-function assertClose(actual, expected, tol = 1e-9, msg) {
-  assert.ok(Math.abs(actual - expected) <= tol, msg ?? `${actual} is not within ${tol} of ${expected}`);
-}
-
-function assertAllClose(actual, expected, tol = 1e-9) {
-  assert.equal(actual.length, expected.length);
-  for (let i = 0; i < actual.length; i++) {
-    assertClose(actual[i], expected[i], tol, `index ${i}: ${actual[i]} vs ${expected[i]}`);
-  }
 }
 
 // Bodies stored in a cell's own bucket

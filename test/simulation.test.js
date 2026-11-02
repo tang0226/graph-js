@@ -693,21 +693,19 @@ describe("Simulation: Barnes-Hut", () => {
       assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= 39.99, "collision went missing");
     });
 
-    test("while on, a tick runs repel and collide once each", () => {
+    test("while on, a tick runs repel once", () => {
       const sim = grid(6);
-      const ctx = sim._barnesHutCtx, calls = { repel: 0, collide: 0 };
-      const { repel, collide } = ctx;
+      const ctx = sim._barnesHutCtx, calls = { repel: 0 };
+      const { repel } = ctx;
       ctx.repel = function (...args) { calls.repel++; return repel.apply(this, args); };
-      ctx.collide = function (...args) { calls.collide++; return collide.apply(this, args); };
       sim.heat();
       sim.tick();
-      assert.deepEqual(calls, { repel: 1, collide: 1 });
+      assert.deepEqual(calls, { repel: 1 });
     });
 
     test("turning it off goes back to the exact path", () => {
-      const sim = grid(6);
+      const sim = grid(6, { collision: "barnesHut" });
       sim._barnesHutCtx.repel = () => assert.fail("repel called while off");
-      sim._barnesHutCtx.collide = () => assert.fail("collide called while off");
       sim.setOpts({ useBarnesHut: false });
       sim.tick();
     });
@@ -769,13 +767,13 @@ describe("Simulation: Barnes-Hut", () => {
     assert.ok(Math.abs(tree - exact) / exact < 0.1, `${tree} vs ${exact}`);
   });
 
-  for (const useBarnesHut of [true, false]) {
-    describe(`collisions with useBarnesHut ${useBarnesHut}`, () => {
+  for (const collision of ["grid", "barnesHut", "pairs"]) {
+    describe(`collisions with collision "${collision}"`, () => {
       const pair = () => {
         const g = new Graph();
         g.addNode({ id: "a" });
         g.addNode({ id: "b" });
-        const sim = new Simulation(g, { useBarnesHut, repulsion: 0, gravity: 0, nodeConfig: { radius: 20 } });
+        const sim = new Simulation(g, { collision, repulsion: 0, gravity: 0, nodeConfig: { radius: 20 } });
         sim.sync();
         const A = sim.nodes.get("a"), B = sim.nodes.get("b");
         A.x = 0; A.y = 0; B.x = 10; B.y = 0;
@@ -806,7 +804,7 @@ describe("Simulation: Barnes-Hut", () => {
       });
 
       test("a pinned node holds still through a crowded run", () => {
-        const sim = grid(40, { useBarnesHut, springLength: 0, gravity: 0.05 });
+        const sim = grid(40, { collision, springLength: 0, gravity: 0.05 });
         sim.pin("n0", 100, 100);
         for (let t = 0; t < 60; t++) {
           sim.tick();
@@ -816,6 +814,84 @@ describe("Simulation: Barnes-Hut", () => {
       });
     });
   }
+
+  describe("collision option", () => {
+    // Counts calls to each collision implementation
+    function spy(sim) {
+      const calls = { grid: 0, barnesHut: 0, pairs: 0 };
+      const grid = sim._collisionGrid, ctx = sim._barnesHutCtx;
+      const g = grid.collide, b = ctx.collide, p = sim._enforceRadius;
+      grid.collide = function (...args) { calls.grid++; return g.apply(this, args); };
+      ctx.collide = function (...args) { calls.barnesHut++; return b.apply(this, args); };
+      const exact = Simulation.prototype._enforceRadius;
+      sim._enforceRadius = function () {
+        if (this._opts.collision === "pairs") calls.pairs++;
+        return exact.call(this);
+      };
+      return calls;
+    }
+
+    test("it defaults to the grid", () => {
+      const sim = grid(6);
+      assert.equal(sim.opts.collision, "grid");
+      const calls = spy(sim);
+      sim.tick();
+      assert.deepEqual(calls, { grid: 1, barnesHut: 0, pairs: 0 });
+    });
+
+    for (const collision of ["grid", "barnesHut", "pairs"]) {
+      test(`"${collision}" runs only its own implementation, once per tick`, () => {
+        const sim = grid(6, { collision });
+        const calls = spy(sim);
+        sim.tick();
+        assert.deepEqual(calls, { grid: 0, barnesHut: 0, pairs: 0, [collision]: 1 });
+      });
+    }
+
+    test("it is independent of useBarnesHut", () => {
+      for (const useBarnesHut of [true, false]) {
+        const sim = grid(6, { useBarnesHut });
+        const calls = spy(sim);
+        sim.tick();
+        assert.deepEqual(calls, { grid: 1, barnesHut: 0, pairs: 0 }, `useBarnesHut ${useBarnesHut}`);
+      }
+    });
+
+    test("setOpts switches the method and wakes the layout", () => {
+      const sim = grid(6);
+      sim.heat(0);
+      sim.setOpts({ collision: "pairs" });
+      assert.ok(sim.temp > 0);
+      const calls = spy(sim);
+      sim.tick();
+      assert.deepEqual(calls, { grid: 0, barnesHut: 0, pairs: 1 });
+    });
+
+    test("all three methods settle a crowded layout with similar overlap", () => {
+      // Strong gravity keeps re-creating overlaps that one pass per tick can't
+      // fully clear, so each method is compared against checking every pair
+      const depth = sim => {
+        let d = 0;
+        const list = sim.nodeList;
+        for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+          const a = list[i], b = list[j];
+          d += Math.max(a.radius + b.radius - Math.hypot(a.x - b.x, a.y - b.y), 0);
+        }
+        return d;
+      };
+      const settled = collision => {
+        const sim = grid(60, { collision, springLength: 0, gravity: 0.05, repulsion: 0 });
+        sim.setDefaultNodeConfig({ radius: n => (n.id === "n7" ? 90 : 15) });
+        while (sim.temp > 0) sim.tick();
+        return depth(sim);
+      };
+      const exact = settled("pairs");
+      for (const collision of ["grid", "barnesHut"]) {
+        const d = settled(collision);
+        assert.ok(d < 1.5 * exact, `${collision} left ${d} of overlap, vs ${exact} for pairs`);
+      }
+    });
+  });
 
   describe("packed node arrays", () => {
     test("they match the nodes after construction", () => {

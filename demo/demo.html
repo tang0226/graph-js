@@ -178,8 +178,8 @@
       <input type="range" id="cooling" min="0.95" max="1" step="0.001" value="0.99">
     </div>
     <div class="row">
-      <label for="minDistSq">Min dist² clamp</label><output id="minDistSqOut">1</output>
-      <input type="range" id="minDistSq" min="1" max="2000" step="1" value="1">
+      <label for="maxSpeed">Max speed</label><output id="maxSpeedOut">50</output>
+      <input type="range" id="maxSpeed" min="1" max="50" step="1" value="50">
     </div>
     <div class="row">
       <label for="speed">Speed (ticks/frame)</label><output id="speedOut">1</output>
@@ -437,7 +437,7 @@ function applySimConfig() {
     springLength:    ui.springLength,
     gravity:         ui.gravity,
     cooling:         ui.cooling,
-    minDistSq:       ui.minDistSq,
+    maxSpeed:        ui.maxSpeed,
     dt:              ui.dt,
     useBarnesHut:    ui.useBarnesHut,
     barnesHut:       { theta: ui.theta, maxDepth: ui.maxDepth },
@@ -604,7 +604,7 @@ canvas.addEventListener("wheel", e => {
 
 /* ---------- control wiring ---------- */
 
-const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "minDistSq", "dt", "useBarnesHut", "theta", "maxDepth"];
+const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "maxSpeed", "dt", "useBarnesHut", "theta", "maxDepth"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
 const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode"];
 const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize"];

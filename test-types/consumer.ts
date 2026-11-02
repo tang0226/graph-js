@@ -20,6 +20,13 @@ new GraphJS({ graph: { notAnOption: 1 } });
 // @ts-expect-error -- simulation options are type-checked too
 new GraphJS({ simulation: { friction: "high" } });
 
+// The collision method is one of three names
+gjs.simulation.setOpts({ collision: "grid" });
+gjs.simulation.setOpts({ collision: "barnesHut", useBarnesHut: false });
+const method: "grid" | "barnesHut" | "pairs" = gjs.simulation.opts.collision;
+// @ts-expect-error -- not a collision method
+gjs.simulation.setOpts({ collision: "quadtree" });
+
 // Graph mutators forward their results; an id can be passed through the facade
 const a: any = gjs.addNode({ label: "a" });
 gjs.addNode({ id: "b", group: 1 }, "b");

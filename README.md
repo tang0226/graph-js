@@ -52,6 +52,7 @@ const gjs = new GraphJS({
     freezePoint: 0.01,              // temperature at which the layout stops moving
     useBarnesHut: true,             // speed up repulsion on large graphs (see "Barnes-Hut")
     barnesHut: { theta: 0.9, maxDepth: 20, capacity: 1024 },  // tuning for Barnes-Hut
+    collision: "grid",              // how overlapping nodes are found (see "Collisions")
     nodeConfig: { radius: 20 },     // default physical settings for nodes
   },
 
@@ -504,14 +505,31 @@ Like other options, these wake the layout when changed. Setting `barnesHut` tune
 
 For exact repulsion, set `useBarnesHut: false` instead of `theta: 0`, which gives the same forces but runs several times slower.
 
-Only repulsion is approximated. Collisions use the same tree to find nearby nodes, but `theta` has no effect on them, and springs and gravity don't use the tree at all.
+Only repulsion uses Barnes-Hut. Collisions have their own option (see [Collisions](#collisions)), and springs and gravity don't use the tree at all.
 
 Graphs of up to about 20,000 nodes stay usable. Ticks are slowest at the start, while new nodes are still bunched together, and speed up as the layout spreads out. Raising `dt` (see [Settling](#settling)) helps large graphs spread further before they freeze. With `useBarnesHut: false`, a graph that size takes over a second per tick, which is enough to freeze the page.
+
+## Collisions
+
+After each tick, nodes that overlap are pushed apart until they just touch. A fixed or pinned node doesn't move, and the other node takes the whole push. The `collision` option chooses how overlapping nodes are found:
+
+```js
+gjs.simulation.setOpts({ collision: "grid" });       // the default
+gjs.simulation.setOpts({ collision: "barnesHut" });  // recreate the Barnes-Hut quadtree
+gjs.simulation.setOpts({ collision: "pairs" });      // check every pair of nodes
+```
+
+- **`"grid"`** sorts nodes into square cells about two radii wide, so each node is only checked against the cells around it. Nodes much larger than average are left out of the cells and check the area they could reach instead, so a few big nodes don't slow everything else down.
+- **`"barnesHut"`** finds nearby nodes by walking the same kind of tree that repulsion uses. It works whether or not `useBarnesHut` is on, and `theta` has no effect on it.
+- **`"pairs"`** checks every pair of nodes. It's the slowest on large graphs.
+
+All three find the same overlaps, but they resolve them in a different order, so the same graph can settle slightly differently. Each tick resolves each overlapping pair once. A push can create a new overlap, which is left until the next tick, so a crowded layout can still show some overlap while it's moving.
 
 ## Upgrading from 0.4
 
 - **The layout now settles and stops.** It wakes automatically after the changes listed under [Settling](#settling). If you move nodes or change their velocities directly, call `gjs.simulation.heat()` afterwards.
 - **Repulsion now uses [Barnes-Hut](#barnes-hut) by default.** Forces are approximate, so the same graph can settle slightly differently. Set `useBarnesHut: false` to check every pair of nodes as before.
+- **Collisions now use a grid by default, set by the new `collision` option** (see [Collisions](#collisions)). `useBarnesHut` no longer affects collisions. Set `collision: "pairs"` to check every pair of nodes as before.
 - **Layer properties are read-only.** `opts`, `canvas`, `ctx`, `size`, `graph`, `simulation`, `renderer`, `nodes` and similar properties can no longer be reassigned; doing so throws a `TypeError` in modules and strict mode, and is silently ignored elsewhere. Use `setOpts()`, `attach()` and the config methods instead. `renderer.view` is the exception: it can still be assigned, and the given fields are merged in.
 - **Former internal properties have public names.** For example, `simulation._nodeList` is now `simulation.nodeList`, `_edgePairs` is `edgePairs`, `renderer._nodeStyles` is `nodeStyles`, and `renderer._loadImage()` is `loadImage()`.
 - **`JSON.stringify(graph)` no longer includes `directed`.** Read `graph.directed` instead.

@@ -83,8 +83,18 @@ import { Simulation } from './simulation.js';
  * @property {number} cooling - coefficient to decay temperature by each tick
  * @property {number} freezePoint - temperature value below which temp is set
  *    to 0
- * @property {boolean} useBarnesHut - whether to use Barnes-Hut for repulsion and collision
+ * @property {boolean} useBarnesHut - whether to use Barnes-Hut for repulsion
+ * @property {CollisionMethod} collision - how overlapping nodes are found
  */
+
+/**
+ * How the simulation finds overlapping nodes. `"grid"` sorts nodes into a
+ * uniform grid, `"barnesHut"` reuses the Barnes-Hut quadtree, and `"pairs"`
+ * checks every pair. All three resolve the same overlaps, though in different
+ * orders.
+ * @typedef {"grid" | "barnesHut" | "pairs"} CollisionMethod
+ */
+
 /** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig, barnesHut?: BarnesHutOptsInput }} SimOptsInput */
 
 /**

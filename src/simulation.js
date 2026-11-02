@@ -13,6 +13,7 @@
 
 import { asFn } from "./utils.js";
 import { BarnesHutContext } from "./barnes-hut.js";
+import { CollisionGrid } from "./collision-grid.js";
 
 
 /** @type {{ mass: number, radius: number, fixed: boolean }} */
@@ -224,6 +225,12 @@ export class Simulation {
    */
   _barnesHutCtx;
 
+  /**
+   * Grid used when `opts.collision` is `"grid"`
+   * @type {CollisionGrid}
+   */
+  _collisionGrid = new CollisionGrid();
+
 
   /** @type {number} */
   _version = 1;
@@ -270,6 +277,7 @@ export class Simulation {
       cooling:         opts.cooling ?? 0.98,
       freezePoint:     opts.freezePoint ?? 0.01,
       useBarnesHut:    opts.useBarnesHut ?? true,
+      collision:       opts.collision ?? "grid",
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
@@ -584,7 +592,8 @@ export class Simulation {
    * @returns {void}
    */
   _enforceRadius() {
-    if (this._opts.useBarnesHut) { this._collideBarnesHut(); return; }
+    if (this._opts.collision === "barnesHut") { this._collideBarnesHut(); return; }
+    if (this._opts.collision !== "pairs") { this._collideGrid(); return; }
 
     const list = this._nodeList;
     for (let i = 0; i < list.length - 1; i++) {
@@ -626,8 +635,13 @@ export class Simulation {
   _collideBarnesHut() {
     this._packPositions();
     this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
-    const list = this._nodeList;
-    for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
+    this._unpackPositions();
+  }
+
+  _collideGrid() {
+    this._packPositions();
+    this._collisionGrid.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
+    this._unpackPositions();
   }
 
 
@@ -636,6 +650,11 @@ export class Simulation {
       this._nodeX[i] = this._nodeList[i].x;
       this._nodeY[i] = this._nodeList[i].y;
     }
+  }
+
+  _unpackPositions() {
+    const list = this._nodeList;
+    for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
   }
 
 
