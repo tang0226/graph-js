@@ -97,7 +97,7 @@ const toEdgeAccessors = config => ({
 const LABEL_REF_SIZE = 100;
 
 /** Sizes (device px) that sprites of node images are made at. */
-const SPRITE_SIZES = [16, 32, 64, 128, 256, 512];
+const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
 
 /** Below this on-screen diameter (device px), an image node is drawn as a
     circle in the image's average colour. */
@@ -1546,12 +1546,17 @@ export class Renderer {
         this._ctx.fillStyle = this._imageAverage(src, img) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
-        const size = pickSpriteSize(needed, Math.min(img.width, img.height));
-        const sprite = this._getSprite(src, img, size);
+        const side = Math.min(img.width, img.height);
+        const size = pickSpriteSize(needed, side);
+        // A sprite smaller than the node is stretched, which blurs it. When the
+        // source has more detail than that sprite (past the largest sprite
+        // size, or between two sizes), draw the source instead.
+        const sprite = size < needed && size < side ? null : this._getSprite(src, img, size);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
-          // No sprite available (no canvas support, or over this frame's build limit)
+          // Drawing the source: no sprite is sharp enough, none is available
+          // (no canvas support), or this frame's build limit was reached
           const scale = r * 2 / Math.min(img.width, img.height);
           const dw = img.width * scale, dh = img.height * scale;
           this._ctx.save();

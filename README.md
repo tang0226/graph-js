@@ -203,7 +203,7 @@ gjs.renderer.loadImage("https://example.com/alice.png");
 
 Unused images are cleaned up periodically as nodes are removed, so preload shortly before the nodes that use them are added.
 
-For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 512 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
+For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the original image, so they stay as sharp as it allows. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
 
 ### Node labels
 

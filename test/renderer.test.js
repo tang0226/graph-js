@@ -431,6 +431,61 @@ describe("Renderer: sprites", () => {
       } finally { s.restore(); }
     });
 
+    test("the largest sprite covers nodes past 512 px", async () => {
+      const s = await spriteScene({ size: 2048 });
+      try {
+        s.r.view.zoom = 16;                              // 640 px across
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx)[0].width, 1024);
+        assert.equal(opsNamed(s.ctx, "clip").length, 0);
+      } finally { s.restore(); }
+    });
+
+    test("past the largest sprite, a larger source is drawn instead of a stretched sprite", async () => {
+      const s = await spriteScene({ size: 2048 });
+      try {
+        s.r.view.zoom = 32;                              // 1280 px across
+        s.r.render();
+        const [[, img, ...box]] = opsNamed(s.ctx, "drawImage");
+        assert.equal(img.width, 2048, "the source image, not a 1024 sprite");
+        assert.deepEqual(box, [-240, -340, 1280, 1280]);
+        assert.equal(opsNamed(s.ctx, "clip").length, 1, "the source is clipped to the circle");
+        assert.equal(drawnSprites(s.ctx).length, 0);
+        assert.ok(s.created.every(c => c.width <= 64), "no sprite is built for it");
+      } finally { s.restore(); }
+    });
+
+    test("between sprite sizes, a source with more detail is drawn instead", async () => {
+      const s = await spriteScene({ size: 400 });
+      try {
+        s.r.view.zoom = 7.5;                             // 300 px across: the 400 source only allows 256
+        s.r.render();
+        const [[, img]] = opsNamed(s.ctx, "drawImage");
+        assert.equal(img.width, 400);
+        assert.equal(drawnSprites(s.ctx).length, 0);
+      } finally { s.restore(); }
+    });
+
+    test("a sprite is kept when the source has no more detail than it", async () => {
+      const s = await spriteScene({ size: 256 });
+      try {
+        s.r.view.zoom = 10;                              // 400 px across, past the 256 source
+        s.r.render();
+        assert.equal(drawnSprites(s.ctx)[0].width, 256, "the full-size sprite, stretched like the source would be");
+        assert.equal(opsNamed(s.ctx, "clip").length, 0);
+      } finally { s.restore(); }
+    });
+
+    test("the device pixel ratio counts toward the switch to the source", async () => {
+      const s = await spriteScene({ size: 2048, dpr: 2 });
+      try {
+        s.r.view.zoom = 16;                              // 640 CSS px, 1280 device px
+        s.r.render();
+        assert.equal(opsNamed(s.ctx, "drawImage")[0][1].width, 2048);
+        assert.equal(drawnSprites(s.ctx).length, 0);
+      } finally { s.restore(); }
+    });
+
     test("below 6 device px a node is a dot in the image's average colour", async () => {
       const s = await spriteScene();
       try {
