@@ -525,6 +525,32 @@ gjs.simulation.setOpts({ collision: "pairs" });      // check every pair of node
 
 All three find the same overlaps, but they resolve them in a different order, so the same graph can settle slightly differently. Each tick resolves each overlapping pair once. A push can create a new overlap, which is left until the next tick, so a crowded layout can still show some overlap while it's moving.
 
+## TypeScript
+
+The package ships its own type declarations. Option, config, and hook types can be imported from the package root:
+
+```ts
+import { GraphJS } from "@tang0226/graph-js";
+import type { GraphJSOpts, SimNodeConfig, NodeStyleConfig, RendererHook } from "@tang0226/graph-js";
+
+const opts: GraphJSOpts = { simulation: { collision: "grid" } };
+const sizes: SimNodeConfig = { radius: node => 5 + node.data.weight };
+```
+
+The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
+
+```ts
+import { Graph } from "@tang0226/graph-js/graph";
+import { Simulation } from "@tang0226/graph-js/simulation";
+```
+
+Members whose names start with `_` are internal and declared `private`, so TypeScript rejects them. Types that aren't exported from the package root are internal too, and may change between versions.
+
+## Upgrading from 0.5
+
+- **Internal members are `private` in the type declarations.** TypeScript code that reads or writes a member starting with `_` no longer compiles. Use the public equivalents: for example, `simulation._nodeList` is `simulation.nodeList`, `_springs` is `springs`, `_temp` is `temp`, and `_opts` is `opts`. Hooks are managed with `addHook()` and `removeHook()`. JavaScript code still runs, but internal members aren't supported and can change without notice.
+- **Option and config types can be imported by name** (see [TypeScript](#typescript)). Code that extracted them with helpers like `ConstructorParameters<typeof GraphJS>[0]` can use `GraphJSOpts` and the other named types instead.
+
 ## Upgrading from 0.4
 
 - **The layout now settles and stops.** It wakes automatically after the changes listed under [Settling](#settling). If you move nodes or change their velocities directly, call `gjs.simulation.heat()` afterwards.

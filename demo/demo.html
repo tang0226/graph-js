@@ -662,7 +662,7 @@ $("playPause").addEventListener("click", () => {
 });
 
 $("shake").addEventListener("click", () => {
-  for (const nd of gjs.simulation._nodeList) {
+  for (const nd of gjs.simulation.nodeList) {
     nd.vx += (Math.random() - 0.5) * 40;
     nd.vy += (Math.random() - 0.5) * 40;
   }
@@ -671,7 +671,7 @@ $("shake").addEventListener("click", () => {
 });
 
 $("recenter").addEventListener("click", () => {
-  const list = gjs.simulation._nodeList;
+  const list = gjs.simulation.nodeList;
   if (!list.length) return;
   let x = 0, y = 0;
   for (const nd of list) { x += nd.x; y += nd.y; }
@@ -690,7 +690,7 @@ let frames = 0, fpsClock = 0;
 function updateCounts() {
   $("statNodes").textContent = gjs.graph.nodes.size;
   $("statEdges").textContent = gjs.graph.edges.size;
-  $("statSprings").textContent = gjs.simulation._springs.length / 2;
+  $("statSprings").textContent = gjs.simulation.springs.length / 2;
 }
 
 /* Speed is ticks per frame: the loop ticks once, and the preTick hook adds the
