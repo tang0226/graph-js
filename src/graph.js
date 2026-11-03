@@ -1,10 +1,10 @@
-/** @import {NodeId, NodeData, GraphNode, GraphEdge} from './typedefs.js' */
+/** @import {NodeId, NodeData, GraphNode, GraphEdge} from './typedefs/graph.js' */
 
 /**
  * Represents the shape of a directed or undirected graph and stores custom data for nodes and edges.
  */
 export class Graph {
-  /** @type {Map<NodeId, GraphNode>} */
+  /** @private @type {Map<NodeId, GraphNode>} */
   _nodes = new Map();
   /**
    * [read-only]
@@ -14,7 +14,7 @@ export class Graph {
   get nodes() { return this._nodes; }
 
 
-  /** @type {Set<GraphEdge>} */
+  /** @private @type {Set<GraphEdge>} */
   _edges = new Set();
   /**
    * [read-only]
@@ -25,7 +25,7 @@ export class Graph {
   get edges() { return this._edges; }
 
 
-  /** @type {Map<NodeId, Map<NodeId, GraphEdge>>} */
+  /** @private @type {Map<NodeId, Map<NodeId, GraphEdge>>} */
   _adjacency = new Map();
   /**
    * [read-only]
@@ -36,7 +36,7 @@ export class Graph {
   get adjacency() { return this._adjacency; }
 
 
-  /** @type {boolean} */
+  /** @private @type {boolean} */
   _directed = false;
   /**
    * [read-only constant] Boolean indicating whether the graph is directed or
@@ -45,7 +45,7 @@ export class Graph {
   get directed() { return this._directed; }
 
 
-  /** @type {number} */
+  /** @private @type {number} */
   _version = 1;
   /**
    * [read-only]
@@ -60,7 +60,7 @@ export class Graph {
    */
   get version() { return this._version; }
 
-  /** @type {number} */
+  /** @private @type {number} */
   _dataVersion = 1;
   /**
    * Monotonic counter for *payload* change: bumped only by `setNodeData` and

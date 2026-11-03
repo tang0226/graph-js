@@ -1,14 +1,13 @@
 /**
  * @import { Graph } from './graph.js'
  */
+/** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
 /**
  * @import {
- *  NodeId, GraphNode, GraphEdge,
  *  SimNode, SimNodeConfig, SimNodeAccessors,
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
  *  SimOpts, SimOptsInput,
- NodeStyleConfig
- * } from './typedefs.js'
+ * } from './typedefs/simulation.js'
  */
 
 import { asFn } from "./utils.js";
@@ -35,12 +34,12 @@ const toAccessors = config => ({
  * and collision resolution for an underlying `Graph` instance.
  */
 export class Simulation {
-  /** @type {Graph} */
+  /** @private @type {Graph} */
   _graph;
   get graph() { return this._graph; }
 
 
-  /** @type {SimOpts} */
+  /** @private @type {SimOpts} */
   _opts;
   /**
    * [read-only, set with `setOpts()`]
@@ -50,7 +49,7 @@ export class Simulation {
   get opts() { return this._opts; }
 
 
-  /** @type {Map<NodeId, SimNode>} */
+  /** @private @type {Map<NodeId, SimNode>} */
   _nodes = new Map();
   /**
    * Map of mutable physical node objects, keyed by keys used in the
@@ -60,7 +59,7 @@ export class Simulation {
   get nodes() { return this._nodes; }
 
 
-  /** @type {SimNode[]} */
+  /** @private @type {SimNode[]} */
   _nodeList = [];
   /**
    * Cached array of mutable simulation nodes, recreated in effective
@@ -72,6 +71,7 @@ export class Simulation {
 
   /**
    * @type {Map<NodeId, number>}
+   * @private
    */
   _nodeIndex = new Map();
   /**
@@ -86,6 +86,7 @@ export class Simulation {
    * Cached array of resolved node radius values.
    * Updated in effective `sync()` calls.
    * @type {Float64Array}
+   * @private
    */
   _nodeRadius = new Float64Array();
 
@@ -94,6 +95,7 @@ export class Simulation {
    * Cached array of resolved node fixed flags.
    * Updated in effective `sync()` calls.
    * @type {Uint8Array}
+   * @private
    */
   _nodeFixed = new Uint8Array();
 
@@ -102,6 +104,7 @@ export class Simulation {
    * Cached array of resolved node x coordinates. Resized when `sync()`
    * updates the node count. Updated by `_packPositions()`
    * @type {Float64Array}
+   * @private
    */
   _nodeX = new Float64Array();
 
@@ -110,6 +113,7 @@ export class Simulation {
    * Cached array of resolved node y coordinates. Resized when `sync()`
    * updates the node count. Updated by `_packPositions()`
    * @type {Float64Array}
+   * @private
    */
   _nodeY = new Float64Array();
 
@@ -118,6 +122,7 @@ export class Simulation {
    * Scratch array for accumulating x force values in Barnes-Hut repulsion
    * before applying them to SimNode objects.
    * @type {Float64Array}
+   * @private
    */
   _nodeFx = new Float64Array();
 
@@ -126,11 +131,12 @@ export class Simulation {
    * Scratch array for accumulating x force values in Barnes-Hut repulsion
    * before applying them to SimNode objects.
    * @type {Float64Array}
+   * @private
    */
   _nodeFy = new Float64Array();
 
 
-  /** @type {Int32Array} */
+  /** @private @type {Int32Array} */
   _springs = new Int32Array(0);
   /**
    * Cached flattened array of index pairs for applying spring
@@ -142,7 +148,7 @@ export class Simulation {
   get springs() { return this._springs; }
 
   
-  /** @type {Int32Array} */
+  /** @private @type {Int32Array} */
   _edgePairs = new Int32Array(0);
   /**
    * Cached flattened array of index pairs for drawing edges. Recreated in
@@ -153,7 +159,7 @@ export class Simulation {
   get edgePairs() { return this._edgePairs; }
 
 
-  /** @type {GraphEdge[]} */
+  /** @private @type {GraphEdge[]} */
   _edgeList = [];
   /**
    * Cached edge objects, parallel to index pairs in `edgePairs`.
@@ -162,7 +168,7 @@ export class Simulation {
   get edgeList() { return this._edgeList; }
 
 
-  /** @type {Map<GraphEdge, number>} */
+  /** @private @type {Map<GraphEdge, number>} */
   _edgeIndex = new Map();
   /**
    * Cached map connecting edge objects to indices in `edgeList`.
@@ -177,11 +183,12 @@ export class Simulation {
    * Node props specified here get first priority over the simulation's current
    * default config and the global default config.
    * @type {Map<NodeId, SimNodeAccessors>}
+   * @private
    */
   _overrides = new Map();
 
 
-  /** @type {ResolvedSimNodeConfig} */
+  /** @private @type {ResolvedSimNodeConfig} */
   _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
   /**
    * [read-only, set with `setDefaultNodeConfig()` or `setOpts()`]
@@ -196,6 +203,7 @@ export class Simulation {
    * `defaultNodeConfig` as cached functions. Used to apply the simulation's
    * default config when resolving a `SimNode`'s raw configuration.
    * @type {ResolvedSimNodeAccessors}
+   * @private
    */
   _accessors = toAccessors(SIM_NODE_DEFAULTS);
 
@@ -203,11 +211,12 @@ export class Simulation {
   /**
    * Set to `true` whenever any node config (default or override) is changed.
    * Set back to `false` once those changes are applied in `sync()`.
+   * @private
    * @type {boolean} */
   _configDirty = false;
 
 
-  /** @type {number} */
+  /** @private @type {number} */
   _temp = 0;
   /**
    * [read-only, reset with `heat()`]
@@ -222,17 +231,19 @@ export class Simulation {
   /**
    * Always initialized
    * @type {BarnesHutContext}
+   * @private
    */
   _barnesHutCtx;
 
   /**
    * Grid used when `opts.collision` is `"grid"`
    * @type {CollisionGrid}
+   * @private
    */
   _collisionGrid = new CollisionGrid();
 
 
-  /** @type {number} */
+  /** @private @type {number} */
   _version = 1;
   /**
    * Monotonic counter for *structural* changes to the node and edge tables.
@@ -246,6 +257,7 @@ export class Simulation {
    * Stores the latest synced `Graph` version. Used to gate node and edge
    * cache updates.
    * @type {number}
+   * @private
    */
   _syncedGraphVersion = -1;
 
@@ -253,6 +265,7 @@ export class Simulation {
   /**
    * Stores the latest synced `Graph` *data* version. Used to efficiently
    * update physical node config based on underlying graph node payloads.
+   * @private
    * @type {number} */
   _syncedGraphDataVersion = -1;
 
@@ -368,6 +381,7 @@ export class Simulation {
    * @param {GraphNode} gNode - graph node
    * @param {SimNode} sNode - matching sim-node
    * @returns {boolean} whether resolved physical values changed
+   * @private
    */
   _resolve(gNode, sNode) {
     const acc = this._accessors,
@@ -392,6 +406,7 @@ export class Simulation {
    * Creates a sim-node object based on the given graph node
    * @param {GraphNode} gNode - graph node to seed sim-node from
    * @returns {SimNode} resulting sim-node
+   * @private
    */
   _seedNode(gNode) {
     const pos = this._seedPos(gNode);
@@ -413,6 +428,7 @@ export class Simulation {
    * @param {GraphNode} gNode - graph node
    * @returns {{ x: number, y: number, vx: number, vy: number }} - initial
    *    position and velocity of sim-node
+   * @private
    */
   _seedPos(gNode) {
     const neighbors = this._graph.adjacency.get(gNode.id);
@@ -529,6 +545,7 @@ export class Simulation {
    * Applies repulsive forces with O(n^2) pairwise force accumulation.
    * Uses Coulomb's law, without any charge parameters.
    * @returns {void}
+   * @private
    */
   _applyRepulsion() {
     if (this._opts.useBarnesHut) { this._repelBarnesHut(); return; }
@@ -558,6 +575,7 @@ export class Simulation {
   /**
    * Applies spring forces between nodes connected by edges.
    * @returns {void}
+   * @private
    */
   _applySprings() {
     const list = this._nodeList;
@@ -576,6 +594,7 @@ export class Simulation {
   /**
    * Applies graviational acceleration towards the origin
    * @returns {void}
+   * @private
    */
   _applyGravity() {
     const list = this._nodeList;
@@ -590,6 +609,7 @@ export class Simulation {
   /**
    * Pushes intersecting nodes apart.
    * @returns {void}
+   * @private
    */
   _enforceRadius() {
     if (this._opts.collision === "barnesHut") { this._collideBarnesHut(); return; }
@@ -622,6 +642,7 @@ export class Simulation {
   }
 
 
+  /** @private */
   _repelBarnesHut() {
     this._packPositions();
     const list = this._nodeList, fx = this._nodeFx, fy = this._nodeFy;
@@ -632,12 +653,14 @@ export class Simulation {
     for (let i = 0; i < list.length; i++) { list[i].fx += fx[i]; list[i].fy += fy[i]; }
   }
 
+  /** @private */
   _collideBarnesHut() {
     this._packPositions();
     this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
     this._unpackPositions();
   }
 
+  /** @private */
   _collideGrid() {
     this._packPositions();
     this._collisionGrid.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
@@ -645,6 +668,7 @@ export class Simulation {
   }
 
 
+  /** @private */
   _packPositions() {
     for (let i = 0; i < this._nodeList.length; i++) {
       this._nodeX[i] = this._nodeList[i].x;
@@ -652,6 +676,7 @@ export class Simulation {
     }
   }
 
+  /** @private */
   _unpackPositions() {
     const list = this._nodeList;
     for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
@@ -662,6 +687,7 @@ export class Simulation {
    * Copies node radii and fixed flags into their typed arrays. Called from
    * `sync()`, since these values only change through node config.
    * @returns {void}
+   * @private
    */
   _packNodeConfig() {
     for (let i = 0; i < this._nodeList.length; i++) {

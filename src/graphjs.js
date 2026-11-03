@@ -1,11 +1,6 @@
-/**
- * @import {
- *  NodeData,
- *  Canvas,
- *  GraphJSOpts,
- *  GraphJSHookType, GraphJSHook,
- * } from './typedefs.js'
- */
+/** @import { NodeData } from './typedefs/graph.js' */
+/** @import { Canvas } from './typedefs/renderer.js' */
+/** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 
 
 import { Graph } from "./graph.js";
@@ -17,7 +12,7 @@ import { Renderer } from "./renderer.js";
  * Unified interface over the `Graph`, `Simulation`, and `Renderer` layers.
  */
 export class GraphJS {
-  /** @type {Graph} */
+  /** @private @type {Graph} */
   _graph;
   /**
    * Underlying `Graph` instance.
@@ -25,14 +20,14 @@ export class GraphJS {
   get graph() { return this._graph; }
 
 
-  /** @type {Simulation} */
+  /** @private @type {Simulation} */
   _simulation;
   /**
    * Underlying `Simulation` instance.
    */
   get simulation() { return this._simulation; }
 
-  /** @type {Renderer} */
+  /** @private @type {Renderer} */
   _renderer;
   /**
    * Underlying `Renderer` instance.
@@ -45,12 +40,22 @@ export class GraphJS {
    * "preTick" before the simulation ticks, "postTick" between ticking and
    * rendering, and "postRender" after rendering
    * @type {Record<GraphJSHookType, Set<GraphJSHook>>}
+   * @private
    */
   _hooks = {
     preTick: new Set(),
     postTick: new Set(),
     postRender: new Set(),
   };
+
+
+  /**
+   * Handle of the pending animation frame while `start()` is running, or
+   * `null` when stopped
+   * @type {number | null}
+   * @private
+   */
+  _raf = null;
 
 
   /**
@@ -67,8 +72,6 @@ export class GraphJS {
       ? { ...opts.renderer, canvas: opts.canvas }
       : opts.renderer ?? {};
     this._renderer = new Renderer(this._simulation, rendererOpts);
-    
-    this._raf = null;
   }
 
 
@@ -236,6 +239,7 @@ export class GraphJS {
    * @param {GraphJSHookType} type - hook type
    * @param {number} time - frame timestamp
    * @returns {void}
+   * @private
    */
   _runHooks(type, time) {
     const hooks = this._hooks[type];
@@ -252,6 +256,7 @@ export class GraphJS {
    * Shared by `start()` and `step()`.
    * @param {number} time - frame timestamp
    * @returns {void}
+   * @private
    */
   _frame(time) {
     this._runHooks("preTick", time);

@@ -3,9 +3,24 @@
    `tsc` accepts every line, and each `@ts-expect-error` must really error.
 
    Catches regressions that runtime tests cannot, because the JS behaves
-   correctly while the emitted types are wrong. */
-import { GraphJS, Graph, Renderer } from "../types/index.js";
-import { Simulation } from "../types/simulation.js";   // headless subpath
+   correctly while the emitted types are wrong.
+
+   Imports use the package's own name, so they resolve through the `exports`
+   map in package.json, as they would for a real consumer. */
+import { GraphJS, Graph, Renderer } from "@tang0226/graph-js";
+import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpath
+// Public types, re-exported from the package root
+import type {
+  NodeId, NodeData, GraphNode, GraphEdge, GraphOpts,
+  NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
+  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig,
+  BarnesHutOpts, BarnesHutOptsInput,
+  Canvas, CanvasContext, LabelPosition, HighlightMode,
+  RendererOptsInput, RendererOpts, Size, View,
+  NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
+  RendererHookType, RendererHook,
+  GraphJSOpts, GraphJSHookType, GraphJSHook,
+} from "@tang0226/graph-js";
 
 // Constructor: every argument optional, options are each layer's input shape
 new GraphJS();
@@ -85,9 +100,37 @@ gjs.addHook("overlay", timed);
 // @ts-expect-error -- a loop hook receives the GraphJS instance, not a renderer
 gjs.addHook("postRender", (hr: Renderer) => { hr.view.zoom; });
 
+// Internal members are private, so consumers can't depend on them
+// @ts-expect-error -- private
+gjs.simulation._temp;
+// @ts-expect-error -- private
+r._hooks;
+// @ts-expect-error -- private
+gjs._frame(0);
+
 // Layers are usable on their own
 const sim: Simulation = new Simulation(new Graph(), {});
 sim.tick().tick();
+
+// Public types are importable from the package root, and match what the API uses
+const opts: GraphJSOpts = { simulation: { collision: "pairs" }, renderer: { background: "#fff" } };
+new GraphJS(opts);
+const collision: CollisionMethod = "grid";
+// @ts-expect-error -- not a collision method
+const badCollision: CollisionMethod = "quadtree";
+const radius: NodeOption<number> = n => n.data.size;
+const width: EdgeOption<number> = 2;
+const nodeConfig: SimNodeConfig = { radius, fixed: false };
+const style: NodeStyleConfig = { color: "red" };
+const edgeStyle: EdgeStyleConfig = { width };
+const simOpts: Readonly<SimOpts> = gjs.simulation.opts;
+const rendererOpts: Readonly<RendererOpts> = r.opts;
+const view: View = r.view;
+const simNode: SimNode | undefined = gjs.simulation.nodes.get("b");
+const hookType: RendererHookType = "overlay";
+const hook: RendererHook = ring;
+const loopType: GraphJSHookType = "postTick";
+const loopHook: GraphJSHook = timed;
 
 // Image request options use the DOM's own types, so invalid values are rejected
 new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });

@@ -1,7 +1,8 @@
 /** @import { Graph } from './graph.js' */
+/** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
+/** @import { SimNode } from './typedefs/simulation.js' */
 /**
  * @import {
- *  NodeId, GraphNode, GraphEdge, SimNode,
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
@@ -10,7 +11,7 @@
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
  *  Canvas, CanvasContext, Size, View,
- * } from './typedefs.js'
+ * } from './typedefs/renderer.js'
  */
 
 
@@ -174,7 +175,7 @@ export class Renderer {
   static IMAGE_LOADING = "loading";
   static IMAGE_FAILED = "failed";
 
-  /** @type {Graph} */
+  /** @private @type {Graph} */
   _graph;
   /**
    * Underlying `Graph` instance.
@@ -182,7 +183,7 @@ export class Renderer {
   get graph() { return this._graph; }
 
 
-  /** @type {Simulation} */
+  /** @private @type {Simulation} */
   _simulation;
   /**
    * Underlying `Simulation` instance.
@@ -190,7 +191,7 @@ export class Renderer {
   get simulation() { return this._simulation; }
 
 
-  /** @type {Canvas | null} */
+  /** @private @type {Canvas | null} */
   _canvas = null;
   /**
    * Canvas element. Set with `attach()`, unset with `detach()`.
@@ -198,7 +199,7 @@ export class Renderer {
   get canvas() { return this._canvas; }
 
 
-  /** @type {CanvasContext | null} */
+  /** @private @type {CanvasContext | null} */
   _ctx = null;
   /**
    * Canvas context. Automatically set to correspond to `canvas`.
@@ -206,7 +207,7 @@ export class Renderer {
   get ctx() { return this._ctx; }
 
 
-  /** @type {RendererOpts} */
+  /** @private @type {RendererOpts} */
   _opts = { ...RENDERER_DEFAULTS };
   /**
    * [read-only, set with `setOpts()`] Renderer configuration options.
@@ -215,7 +216,7 @@ export class Renderer {
   get opts() { return this._opts; }
 
 
-  /** @type {Size | null} */
+  /** @private @type {Size | null} */
   _size = null;
   /**
    * [read-only] Logical canvas size in CSS pixels (`clientWidth`, `clientHeight`).
@@ -224,7 +225,7 @@ export class Renderer {
   get size() { return this._size; }
 
 
-  /** @type {View} */
+  /** @private @type {View} */
   _view = { x: 0, y: 0, zoom: 1 };
   /**
    * Current viewing window of the `Renderer`. Directly mutable. Contains
@@ -238,7 +239,7 @@ export class Renderer {
   set view(v) { Object.assign(this._view, v); }
 
 
-  /** @type {Map<NodeId, NodeStyle>} */
+  /** @private @type {Map<NodeId, NodeStyle>} */
   _nodes = new Map();
   /**
    * [read-only] Cached map of resolved node styles, keyed by node id from the underlying
@@ -248,7 +249,7 @@ export class Renderer {
   get nodes() { return this._nodes; }
 
 
-  /** @type {Map<GraphEdge, EdgeStyle>} */
+  /** @private @type {Map<GraphEdge, EdgeStyle>} */
   _edges = new Map();
   /**
    * Cached map of resolved edge styles, keyed by edge object from the
@@ -258,7 +259,7 @@ export class Renderer {
   get edges() { return this._edges; }
 
 
-  /** @type {ResolvedNodeStyleConfig} */
+  /** @private @type {ResolvedNodeStyleConfig} */
   _defaultNodeConfig = {...NODE_STYLE_DEFAULTS};
   /**
    * [read-only, set with `setDefaultNodeConfig()`]
@@ -270,7 +271,7 @@ export class Renderer {
   get defaultNodeConfig() { return this._defaultNodeConfig; }
 
 
-  /** @type {ResolvedEdgeStyleConfig} */
+  /** @private @type {ResolvedEdgeStyleConfig} */
   _defaultEdgeConfig = {...EDGE_STYLE_DEFAULTS};
   /**
    * Current default edge style config. During style resolution, it takes
@@ -286,6 +287,7 @@ export class Renderer {
    * precedence over global defaults and the `Renderer`'s current
    * `_defaultNodeConfig`
    * @type {Map<NodeId, NodeStyleAccessors>}
+   * @private
    */
   _nodeOverrides = new Map();
 
@@ -294,6 +296,7 @@ export class Renderer {
    * precedence over global defaults and the `Renderer`'s current
    * `_defaultEdgeConfig`
    * @type {Map<GraphEdge, EdgeStyleAccessors>}
+   * @private
    */
   _edgeOverrides = new Map();
 
@@ -301,6 +304,7 @@ export class Renderer {
    * `_defaultNodeConfig` as cached functions. Used to apply the `Renderer`'s
    * default config when resolving a node's raw style.
    * @type {ResolvedNodeStyleAccessors}
+   * @private
    */
   _nodeAccessors = toNodeAccessors(NODE_STYLE_DEFAULTS);
 
@@ -308,10 +312,19 @@ export class Renderer {
    * `_defaultEdgeConfig` as cached functions. Used to apply the `Renderer`'s
    * default config when resolving a edge's raw style.
    * @type {ResolvedEdgeStyleAccessors}
+   * @private
    */
   _edgeAccessors = toEdgeAccessors(EDGE_STYLE_DEFAULTS);
 
-  /** @type {NodeStyle[]} */
+  /**
+   * Whether a style config changed since the last effective `sync()`
+   * @type {boolean}
+   * @private
+   */
+  _stylesDirty = false;
+
+
+  /** @private @type {NodeStyle[]} */
   _nodeStyles = [];
   /**
    * [read-only]
@@ -322,7 +335,7 @@ export class Renderer {
   get nodeStyles() { return this._nodeStyles; }
 
 
-  /** @type {EdgeStyle[]} */
+  /** @private @type {EdgeStyle[]} */
   _edgeStyles = [];
   /**
    * [read_only]
@@ -337,11 +350,12 @@ export class Renderer {
    * Cached edge bowing coefficient (0 or 1) for digraphs. Recreated in
    * effective `sync()` calls.
    * @type {Int8Array}
+   * @private
    */
   _edgeBow = new Int8Array(0);
 
 
-  /** @type {Set<NodeId>}*/
+  /** @private @type {Set<NodeId>}*/
   _highlightedNodes = new Set();
   /**
    * Ids of highlighted nodes. Modified via `highlight()`.
@@ -353,11 +367,12 @@ export class Renderer {
   /**
    * Array of highlight state flags parallel to `Simulation.nodeList`
    * @type {Uint8Array}
+   * @private
    */
   _nodeHighlightState = new Uint8Array(0);
 
 
-  /** @type {Set<GraphEdge>}*/
+  /** @private @type {Set<GraphEdge>}*/
   _highlightedEdges = new Set();
   /**
    * Highlighted edge objects. Modified via `highlight()`.
@@ -369,6 +384,7 @@ export class Renderer {
   /**
    * Array of highlight state flags parallel to `Simulation.edgeList`
    * @type {Uint8Array}
+   * @private
    */
   _edgeHighlightState = new Uint8Array(0);
 
@@ -377,6 +393,7 @@ export class Renderer {
    * Current drawing alpha of each node, parallel to `Simulation.nodeList`.
    * Eased toward its highlight target over `highlightFadeDuration`.
    * @type {Float64Array}
+   * @private
    */
   _nodeAlpha = new Float64Array(0);
 
@@ -384,6 +401,7 @@ export class Renderer {
   /**
    * Current drawing alpha of each edge, parallel to `Simulation.edgeList`.
    * @type {Float64Array}
+   * @private
    */
   _edgeAlpha = new Float64Array(0);
 
@@ -392,6 +410,7 @@ export class Renderer {
    * Width of each node's label per px of font size, parallel to
    * `Simulation.nodeList`. 0 for nodes without a label.
    * @type {Float64Array}
+   * @private
    */
   _labelWidthRatio = new Float64Array(0);
 
@@ -401,6 +420,7 @@ export class Renderer {
    * `labelFont`. Holds only the labels present at the last measure
    * (updated by `_measureLabels()`).
    * @type {Map<string, number>}
+   * @private
    */
   _labelWidthCache = new Map();
 
@@ -409,6 +429,7 @@ export class Renderer {
    * Whether `_labelWidthRatio` must be remeasured before the next draw. Set
    * when styles are resolved or `labelFont` changes.
    * @type {boolean}
+   * @private
    */
   _labelsDirty = true;
 
@@ -417,6 +438,7 @@ export class Renderer {
    * Whether any element's alpha may still differ from its target. Set by
    * anything that changes targets; cleared once a step finds all settled.
    * @type {boolean}
+   * @private
    */
   _fadeActive = false;
 
@@ -425,6 +447,7 @@ export class Renderer {
    * Timestamp of the previous `render()`, or `null` when a fade has just
    * started.
    * @type {number | null}
+   * @private
    */
   _lastFrameTime = null;
 
@@ -432,11 +455,12 @@ export class Renderer {
   /**
    * The canvas context's `globalAlpha` during the current faded draw.
    * @type {number}
+   * @private
    */
   _frameAlpha = 1;
 
 
-  /** @type {Map<string, HTMLImageElement | string>} */
+  /** @private @type {Map<string, HTMLImageElement | string>} */
   _images = new Map();
   /**
    * Cache of node image elements, keyed by source string.
@@ -450,6 +474,7 @@ export class Renderer {
    * collection (`_garbageCollectImages()`). GC happens when it reaches 16, at
    * which point it is reset to 0.
    * @type {number}
+   * @private
    */
   _imageDebt = 0;
 
@@ -458,6 +483,7 @@ export class Renderer {
    * Device pixel ratio applied by the last `resize()`. Sprites are chosen
    * by on-screen size in device pixels.
    * @type {number}
+   * @private
    */
   _dpr = 1;
 
@@ -465,6 +491,7 @@ export class Renderer {
   /**
    * Pre-clipped sprites and average colours, keyed by image source.
    * @type {Map<string, SpriteEntry>}
+   * @private
    */
   _spriteCache = new Map();
 
@@ -473,19 +500,20 @@ export class Renderer {
    * Recency order of cached sprites, least recently used first, keyed
    * `size:src`. `frame` is the last frame the sprite was drawn in.
    * @type {Map<string, { src: string, size: number, bytes: number, frame: number }>}
+   * @private
    */
   _spriteLru = new Map();
 
 
-  /** Total bytes held by cached sprites. @type {number} */
+  /** Total bytes held by cached sprites. @type {number} @private */
   _spriteBytes = 0;
 
 
-  /** Counter incremented once per `render()`. @type {number} */
+  /** Counter incremented once per `render()`. @type {number} @private */
   _frameId = 0;
 
 
-  /** Sprites built during the current frame. @type {number} */
+  /** Sprites built during the current frame. @type {number} @private */
   _spriteBuilds = 0;
 
 
@@ -493,6 +521,7 @@ export class Renderer {
    * Reusable canvases sprites are built in, one per size. Only used with
    * `OffscreenCanvas`, whose builds are handed off as `ImageBitmap`s.
    * @type {Map<number, OffscreenCanvas>}
+   * @private
    */
   _spriteCanvases = new Map();
 
@@ -501,6 +530,7 @@ export class Renderer {
    * Scratch canvases for shrinking images by halves. Dropped after a frame
    * that used them, so large sources don't pin memory.
    * @type {Canvas[]}
+   * @private
    */
   _imgScratch = [];
 
@@ -509,6 +539,7 @@ export class Renderer {
    * Hook functions by type, run by `render()`: "background" hooks after the
    * background fill, "overlay" hooks after everything else is drawn
    * @type {Record<RendererHookType, Set<RendererHook>>}
+   * @private
    */
   _hooks = {
     overlay: new Set(),
@@ -519,16 +550,18 @@ export class Renderer {
   /**
    * Stores the latest synced `Simulation` version. Used to gate node and edge
    * style cache updates.
+   * @private
    * @type {number} */
   _syncedSimulation = -1;
 
   /**
    * Stores the latest synced `Graph`-data version. Used to gate node and edge
    * style cache updates.
+   * @private
    * @type {number} */
   _syncedDataVersion = -1;
 
-  /** @type {number} */
+  /** @private @type {number} */
   _version = 1;
   /**
    * Monotonic counter for *structural* modifications adopted from the
@@ -781,6 +814,7 @@ export class Renderer {
    * Updates a node's style config based on graph node.
    * @param {GraphNode} gNode - graph node
    * @param {NodeStyle} rNode - node style
+   * @private
    */
   _resolveNode(gNode, rNode) {
     const acc = this._nodeAccessors, g = this._graph, o = this._nodeOverrides.get(gNode.id);
@@ -799,6 +833,7 @@ export class Renderer {
    * Updates an edge's style config based on graph node.
    * @param {GraphEdge} gEdge - graph edge
    * @param {EdgeStyle} rEdge - edge style
+   * @private
    */
   _resolveEdge(gEdge, rEdge) {
     const acc = this._edgeAccessors, g = this._graph, o = this._edgeOverrides.get(gEdge);
@@ -927,6 +962,7 @@ export class Renderer {
    * Marks alpha targets as changed. Restarts the frame clock if no fade was
    * running, so time spent idle isn't applied to the first step.
    * @returns {void}
+   * @private
    */
   _startFade() {
     if (this._fadeActive) return;
@@ -939,6 +975,7 @@ export class Renderer {
    * Target alpha for non-highlighted elements: 1 with no highlight, 0 when
    * hiding, otherwise `highlightAlpha`.
    * @returns {number} target alpha
+   * @private
    */
   _dimmedAlpha() {
     if (!this.hasHighlight()) return 1;
@@ -950,6 +987,7 @@ export class Renderer {
    * Seeds a node's style config based on its underlying `Graph` node.
    * @param {GraphNode} gNode - graph node to seed the node style from
    * @returns {NodeStyle} seeded node style
+   * @private
    */
   _seedNode(gNode) {
     const rNode = {
@@ -965,6 +1003,7 @@ export class Renderer {
    * Seeds an edge's style config based on its underlying `Graph` edge.
    * @param {GraphEdge} gEdge - graph edge to seed the edge style from
    * @returns {EdgeStyle} seeded edge style
+   * @private
    */
   _seedEdge(gEdge) {
     const rEdge = {...EDGE_STYLE_DEFAULTS};
@@ -997,6 +1036,7 @@ export class Renderer {
   /**
    * Find and delete images that are no longer used by any nodes.
    * @returns {void}
+   * @private
    */
   _garbageCollectImages() {
     const live = new Set();
@@ -1015,6 +1055,7 @@ export class Renderer {
    * @param {number} w - width
    * @param {number} h - height
    * @returns {Canvas | null} new canvas
+   * @private
    */
   _createCanvas(w, h) {
     if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
@@ -1032,6 +1073,7 @@ export class Renderer {
    * @param {number} i - scratch slot (0 or 1)
    * @param {number} size - minimum side
    * @returns {Canvas | null} scratch canvas
+   * @private
    */
   _scratchCanvas(i, size) {
     const s = this._imgScratch[i];
@@ -1049,6 +1091,7 @@ export class Renderer {
    * Otherwise each sprite needs its own canvas.
    * @param {number} size - sprite size
    * @returns {Canvas | null} build canvas
+   * @private
    */
   _spriteCanvas(size) {
     if (typeof OffscreenCanvas === "undefined") return this._createCanvas(size, size);
@@ -1071,6 +1114,7 @@ export class Renderer {
    * @param {SpriteEntry} entry - cache entry for `img`
    * @param {number} size - sprite size in px
    * @returns {Sprite | null} the sprite, or `null` if no canvas could be made
+   * @private
    */
   _buildSprite(img, entry, size) {
     const out = this._spriteCanvas(size);
@@ -1121,6 +1165,7 @@ export class Renderer {
    * pixels can't be read (a canvas tainted by a cross-origin image throws).
    * @param {Canvas} canvas - canvas (at most 64 px)
    * @returns {string | null} CSS colour
+   * @private
    */
   _averageColor(canvas) {
     try {
@@ -1148,6 +1193,7 @@ export class Renderer {
    * @param {HTMLImageElement} img - loaded source image
    * @param {number} size - wanted sprite size
    * @returns {Sprite | null} sprite, or `null` if none is available
+   * @private
    */
   _getSprite(src, img, size) {
     let entry = this._spriteCache.get(src);
@@ -1200,6 +1246,7 @@ export class Renderer {
    * @param {string} src - image source
    * @param {HTMLImageElement} img - loaded source image
    * @returns {string | null} CSS colour
+   * @private
    */
   _imageAverage(src, img) {
     const avg = this._spriteCache.get(src)?.avg;
@@ -1214,6 +1261,7 @@ export class Renderer {
    * @param {string} src - image source
    * @param {number} size - sprite size
    * @returns {void}
+   * @private
    */
   _deleteSprite(src, size) {
     const entry = this._spriteCache.get(src);
@@ -1232,6 +1280,7 @@ export class Renderer {
    * stopping at the first one drawn this frame: what is on screen always
    * stays cached.
    * @returns {void}
+   * @private
    */
   _evictSprites() {
     const budget = this._opts.imageCacheMB * 1024 * 1024;
@@ -1246,6 +1295,7 @@ export class Renderer {
    * Drops every cached sprite of an image source.
    * @param {string} src - image source
    * @returns {void}
+   * @private
    */
   _dropSprites(src) {
     const entry = this._spriteCache.get(src);
@@ -1292,6 +1342,7 @@ export class Renderer {
    * @param {RendererHookType} type - hook type
    * @param {number} time - timestamp from `render()`
    * @returns {void}
+   * @private
    */
   _runHooks(type, time) {
     const hooks = this._hooks[type];
@@ -1478,6 +1529,7 @@ export class Renderer {
    * @param {SimNode} sNode - simulation's node body object
    * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
+   * @private
    */
   _drawNode(sNode, nodeStyle) {
     if (!this._ctx) return;
@@ -1531,6 +1583,7 @@ export class Renderer {
    * @param {SimNode} sNode - simulation node body object
    * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
+   * @private
    */
   _drawNodeLabel(sNode, nodeStyle) {
     if (!this._ctx) return;
@@ -1560,6 +1613,7 @@ export class Renderer {
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
    * @returns {void}
+   * @private
    */
   _drawEdge(src, dest, style, bowDir) {
     if (!this._ctx) return;
@@ -1617,6 +1671,7 @@ export class Renderer {
    * @param {number} size - arrowhead length, in canvas px
    * @param {EdgeStyle} style - resolved edge style (supplies the fill color)
    * @returns {void}
+   * @private
    */
   _drawArrowhead(tipX, tipY, tx, ty, size, style) {
     if (!this._ctx) return;
@@ -1643,6 +1698,7 @@ export class Renderer {
    * @param {number} r - node radius, in canvas px
    * @param {EdgeStyle} style - resolved edge style
    * @returns {void}
+   * @private
    */
   _drawSelfLoop(cx, cy, r, style) {
     if (!this._ctx) return;
@@ -1687,6 +1743,7 @@ export class Renderer {
   /**
    * Draws a node identified by cache index.
    * @param {number} i - cache index of node
+   * @private
    */
   _renderNodeByIndex(i) {
     this._drawNode(this.simulation.nodeList[i], this._nodeStyles[i]);
@@ -1695,6 +1752,7 @@ export class Renderer {
   /**
    * Draws a node's label, identified by cache index.
    * @param {number} i - cache index of node
+   * @private
    */
   _renderNodeLabelByIndex(i) {
     this._drawNodeLabel(this.simulation.nodeList[i], this._nodeStyles[i]);
@@ -1704,6 +1762,7 @@ export class Renderer {
   /**
    * Draws an edge identified by cache index.
    * @param {number} i - cache index of edge
+   * @private
    */
   _renderEdgeByIndex(i) {
     const sim = this.simulation;
@@ -1721,6 +1780,7 @@ export class Renderer {
    * Measures each node's label width per px of font size into
    * `_labelWidthRatio`, reusing cached widths of unchanged label text.
    * @returns {void}
+   * @private
    */
   _measureLabels() {
     if (!this._ctx) return;
@@ -1751,6 +1811,7 @@ export class Renderer {
    * Only keeps on-screen nodes, edges connected to at least one on-screen
    * node, and on-screen labels.
    * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
+   * @private
    */
   _cull() {
     if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
@@ -1812,6 +1873,7 @@ export class Renderer {
    * back into view mid-fade.
    * @param {number} time - current timestamp in milliseconds
    * @returns {void}
+   * @private
    */
   _stepFade(time) {
     const dt = this._lastFrameTime === null ? 0 : time - this._lastFrameTime;
@@ -1832,6 +1894,7 @@ export class Renderer {
    * changes.
    * @param {number} alpha - element alpha
    * @returns {boolean} `false` when the element is invisible and can be skipped
+   * @private
    */
   _useAlpha(alpha) {
     if (alpha === 0) return false;

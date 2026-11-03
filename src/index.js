@@ -2,3 +2,51 @@ export { Graph } from "./graph.js";
 export { GraphJS } from "./graphjs.js";
 export { Renderer } from "./renderer.js";
 export { Simulation } from "./simulation.js";
+
+
+// Public types, re-exported so TypeScript users can import them from the
+// package root. These comments have no runtime effect. Types left out here
+// (resolved configs, accessor maps) are internal and may change.
+
+// GRAPH LAYER
+/** @typedef {import("./typedefs/graph.js").NodeId} NodeId */
+/** @typedef {import("./typedefs/graph.js").NodeData} NodeData */
+/** @typedef {import("./typedefs/graph.js").GraphNode} GraphNode */
+/** @typedef {import("./typedefs/graph.js").GraphEdge} GraphEdge */
+/** @typedef {import("./typedefs/graph.js").GraphOpts} GraphOpts */
+
+// CONFIG VALUES
+/** @template T @typedef {import("./typedefs/graph.js").NodeAccessor<T>} NodeAccessor */
+/** @template T @typedef {import("./typedefs/graph.js").NodeOption<T>} NodeOption */
+/** @template T @typedef {import("./typedefs/graph.js").EdgeAccessor<T>} EdgeAccessor */
+/** @template T @typedef {import("./typedefs/graph.js").EdgeOption<T>} EdgeOption */
+
+// SIMULATION LAYER
+/** @typedef {import("./typedefs/simulation.js").SimOpts} SimOpts */
+/** @typedef {import("./typedefs/simulation.js").SimOptsInput} SimOptsInput */
+/** @typedef {import("./typedefs/simulation.js").CollisionMethod} CollisionMethod */
+/** @typedef {import("./typedefs/simulation.js").SimNode} SimNode */
+/** @typedef {import("./typedefs/simulation.js").SimNodeConfig} SimNodeConfig */
+/** @typedef {import("./typedefs/simulation.js").BarnesHutOpts} BarnesHutOpts */
+/** @typedef {import("./typedefs/simulation.js").BarnesHutOptsInput} BarnesHutOptsInput */
+
+// RENDERER LAYER
+/** @typedef {import("./typedefs/renderer.js").Canvas} Canvas */
+/** @typedef {import("./typedefs/renderer.js").CanvasContext} CanvasContext */
+/** @typedef {import("./typedefs/renderer.js").LabelPosition} LabelPosition */
+/** @typedef {import("./typedefs/renderer.js").HighlightMode} HighlightMode */
+/** @typedef {import("./typedefs/renderer.js").RendererOptsInput} RendererOptsInput */
+/** @typedef {import("./typedefs/renderer.js").RendererOpts} RendererOpts */
+/** @typedef {import("./typedefs/renderer.js").Size} Size */
+/** @typedef {import("./typedefs/renderer.js").View} View */
+/** @typedef {import("./typedefs/renderer.js").NodeStyle} NodeStyle */
+/** @typedef {import("./typedefs/renderer.js").EdgeStyle} EdgeStyle */
+/** @typedef {import("./typedefs/renderer.js").NodeStyleConfig} NodeStyleConfig */
+/** @typedef {import("./typedefs/renderer.js").EdgeStyleConfig} EdgeStyleConfig */
+/** @typedef {import("./typedefs/renderer.js").RendererHookType} RendererHookType */
+/** @typedef {import("./typedefs/renderer.js").RendererHook} RendererHook */
+
+// GRAPHJS LAYER
+/** @typedef {import("./typedefs/graphjs.js").GraphJSOpts} GraphJSOpts */
+/** @typedef {import("./typedefs/graphjs.js").GraphJSHookType} GraphJSHookType */
+/** @typedef {import("./typedefs/graphjs.js").GraphJSHook} GraphJSHook */

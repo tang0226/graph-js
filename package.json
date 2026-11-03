@@ -55,8 +55,8 @@
   "scripts": {
     "test": "node --test test/",
     "check": "tsc -p tsconfig.json",
-    "types": "tsc -p tsconfig.types.json",
-    "test:types": "npm run types && tsc -p test-types/tsconfig.json",
+    "types": "node -e \"fs.rmSync('types', { recursive: true, force: true })\" && tsc -p tsconfig.types.json",
+    "test:types": "npm run types && tsc -p test-types/tsconfig.json && tsc -p test-types/tsconfig.headless.json",
     "prepublishOnly": "npm test && npm run test:types"
   },
   "devDependencies": {

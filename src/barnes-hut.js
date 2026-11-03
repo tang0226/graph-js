@@ -1,4 +1,4 @@
-/** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs.js' */
+/** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs/simulation.js' */
 
 /** @type {BarnesHutOpts} */
 const DEFAULT_BH_CONFIG = {
@@ -31,21 +31,21 @@ const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
  * Internal Barnes-Hut class
  */
 export class BarnesHutContext {
-  /** @type {number} */
+  /** @private @type {number} */
   _capacity = DEFAULT_BH_CONFIG.capacity;
   /**
    * Cell pool capacity
    */
   get capacity() { return this._capacity; }
 
-  /** @type {number} */
+  /** @private @type {number} */
   _maxDepth = DEFAULT_BH_CONFIG.maxDepth;
   /**
    * Max depth of quadtree
    */
   get maxDepth() { return this._maxDepth; }
 
-  /** @type {number} */
+  /** @private @type {number} */
   _theta = DEFAULT_BH_CONFIG.theta;
   /**
    * Barnes-Hut theta value
@@ -55,84 +55,98 @@ export class BarnesHutContext {
   /**
    * Current number of allocated cells
    * @type {number}
+   * @private
    */
   _cellCount = 0;
 
   /**
    * Center x coordinate of cells
    * @type {Float64Array}
+   * @private
    */
   _centerX = new Float64Array();
 
   /**
    * Center y coordinate of cells
    * @type {Float64Array}
+   * @private
    */
   _centerY = new Float64Array();
 
   /**
    * Orthogonal distance from a cell's center to its edge
    * @type {Float64Array}
+   * @private
    */
   _halfSize = new Float64Array();
 
   /**
    * Centroid x of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
    * @type {Float64Array}
+   * @private
    */
   _centroidX = new Float64Array();
 
   /**
    * Centroid y of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
    * @type {Float64Array}
+   * @private
    */
   _centroidY = new Float64Array();
 
   /**
    * Number of bodies contained in a cell
    * @type {Int32Array}
+   * @private
    */
   _bodyCount = new Int32Array();
 
   /**
    * Index of the cell's first child, or -1 if the cell is a leaf
    * @type {Int32Array}
+   * @private
    */
   _childIndex = new Int32Array();
 
   /**
    * Body index of first body in a leaf cell, or -1 if the cell contains no bodies or is not a leaf.
    * @type {Int32Array}
+   * @private
    */
   _bodyIndex = new Int32Array();
 
   /**
    * Largest radius of a cell's bodies. Only valid during `collide()`.
    * @type {Float64Array}
+   * @private
    */
   _maxRadius = new Float64Array();
 
   /**
    * -1 for a normal body alone or last in a cell. If the body is in a multi-body leaf cell, its entry is a non-negative index pointing to the next body in the cell.
    * @type {Int32Array}
+   * @private
    */
   _nextBody = new Int32Array();
 
   /**
    * x coordinates of bodies
    * @type {ArrayLike<number>}
+   * @private
    */
   _bodyX = [];
 
   /**
    * y coordinates of bodies
    * @type {ArrayLike<number>}
+   * @private
    */
   _bodyY = [];
 
   /**
    * Stack of cells to explore; used in `repel()` and `collide()`
    * @type {Int32Array}
+   * @private
    */
   _cellStack = new Int32Array();
 
@@ -168,6 +182,7 @@ export class BarnesHutContext {
   /**
    * Reallocates arrays according to a new capacity value.
    * @returns {void}
+   * @private
    */
   _reallocate() {
     const c = this._capacity;
@@ -187,6 +202,7 @@ export class BarnesHutContext {
   /**
    * Doubles size of cell arrays, preserving current values.
    * @returns {void}
+   * @private
    */
   _doubleCapacity() {
     const n = Math.max(2 * this._capacity, 1);   // a capacity of 0 would never grow
@@ -214,6 +230,7 @@ export class BarnesHutContext {
    * @param {number} childIndex
    * @param {number} bodyIndex
    * @returns {number} the index of the new cell
+   * @private
    */
   _addCell(
     centerX, centerY, halfSize,
@@ -241,6 +258,7 @@ export class BarnesHutContext {
    * @param {number} y - y coordinate
    * @param {number} i - index of cell
    * @returns {number} quadrant number (0-3)
+   * @private
    */
   _getQuadrant(x, y, i) {
     return (y > this._centerY[i] ? 2 : 0) | (x > this._centerX[i] ? 1 : 0);
@@ -256,6 +274,7 @@ export class BarnesHutContext {
    * @param {number} x - x coordinate of new body
    * @param {number} y - y coordinate of new body
    * @returns {number} cell to insert the body into
+   * @private
    */
   _splitCell(i, x, y) {
     const cx = this._centerX[i],
@@ -288,6 +307,7 @@ export class BarnesHutContext {
    * @param {number} y - body y coordinate
    * @param {number} b - body index
    * @returns {void}
+   * @private
    */
   _addBody(x, y, b) {
     let depth = 0;
@@ -318,6 +338,7 @@ export class BarnesHutContext {
    * @param {ArrayLike<number>} ys - y coordinates
    * @throws {Error} throws when x and y arrays are not the same length
    * @returns {void}
+   * @private
    */
   _build(xs, ys) {
     if (xs.length !== ys.length) {
@@ -464,6 +485,7 @@ export class BarnesHutContext {
    * Sets each cell's largest body radius. Assumes the tree is already built.
    * @param {ArrayLike<number>} radii - body radii
    * @returns {void}
+   * @private
    */
   _aggregateRadii(radii) {
     // Reverse order visits a cell's children before the cell itself

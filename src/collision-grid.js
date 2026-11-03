@@ -73,30 +73,35 @@ export class CollisionGrid {
   /**
    * Bucket index of each grid body, or -1 for a large body
    * @type {Int32Array}
+   * @private
    */
   _bucket = new Int32Array();
 
   /**
    * Cell x coordinate of each grid body (int32, wraps for very distant bodies)
    * @type {Int32Array}
+   * @private
    */
   _cellX = new Int32Array();
 
   /**
    * Cell y coordinate of each grid body (int32, wraps for very distant bodies)
    * @type {Int32Array}
+   * @private
    */
   _cellY = new Int32Array();
 
   /**
    * Grid body indices, sorted by bucket
    * @type {Int32Array}
+   * @private
    */
   _order = new Int32Array();
 
   /**
    * Indices of large bodies, which are not in the grid
    * @type {Int32Array}
+   * @private
    */
   _large = new Int32Array();
 
@@ -104,54 +109,63 @@ export class CollisionGrid {
    * Offset of each bucket's first body in `_order`, plus a final end offset.
    * Only the first `_bucketCount + 1` entries are in use.
    * @type {Int32Array}
+   * @private
    */
   _bucketStart = new Int32Array();
 
   /**
    * Write cursor per bucket, used while filling `_order`
    * @type {Int32Array}
+   * @private
    */
   _fill = new Int32Array();
 
   /**
    * Side length of a cell, from the last `collide()` call
    * @type {number}
+   * @private
    */
   _cellSize = 0;
 
   /**
    * Number of buckets in use
    * @type {number}
+   * @private
    */
   _bucketCount = 0;
 
   /**
    * Whether each cell has its own bucket (true), or cells are hashed (false)
    * @type {boolean}
+   * @private
    */
   _dense = false;
 
   /**
    * Cell x coordinate of the dense grid's first column
    * @type {number}
+   * @private
    */
   _originX = 0;
 
   /**
    * Cell y coordinate of the dense grid's first row
    * @type {number}
+   * @private
    */
   _originY = 0;
 
   /**
    * Width of the dense grid, in cells
    * @type {number}
+   * @private
    */
   _width = 0;
 
   /**
    * Height of the dense grid, in cells
    * @type {number}
+   * @private
    */
   _height = 0;
 
@@ -232,6 +246,7 @@ export class CollisionGrid {
    * @param {number} limit - largest radius of a grid body
    * @param {number} inv - inverse cell size
    * @returns {void}
+   * @private
    */
   _collideLarge(xs, ys, radii, fixed, largeCount, limit, inv) {
     const cellX = this._cellX, cellY = this._cellY, order = this._order,
@@ -278,6 +293,7 @@ export class CollisionGrid {
    * @param {number} cx - cell x coordinate, as an int32
    * @param {number} cy - cell y coordinate, as an int32
    * @returns {number} bucket index, or -1 if the cell is outside the dense grid
+   * @private
    */
   _bucketOf(cx, cy) {
     if (!this._dense) return hashCell(cx, cy, this._bucketCount - 1);
@@ -296,6 +312,7 @@ export class CollisionGrid {
    * @param {number} limit - largest radius of a grid body
    * @param {number} inv - inverse cell size
    * @returns {number} number of large bodies
+   * @private
    */
   _bin(xs, ys, radii, limit, inv) {
     const n = xs.length;
