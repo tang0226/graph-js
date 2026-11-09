@@ -23,6 +23,13 @@
  *    labels are hidden
  * @property {number} [maxLabelSize] - canvas px font size that scaled labels
  *    are capped at
+ * @property {boolean} [scaleStrokes] - whether edge `width`, `arrowSize` and
+ *    node `outlineWidth` are in world px and scale with zoom. When `false`
+ *    they are in canvas px and stay the same size at every zoom.
+ * @property {number} [minEdgeWidth] - canvas px width below which scaled
+ *    edges are drawn at this width, faded in proportion
+ * @property {number} [maxEdgeWidth] - canvas px width that scaled edges are
+ *    capped at; their arrowheads shrink to match
  * @property {HighlightMode} [highlightMode] - highlight mode
  * @property {number} [highlightAlpha] - highlight alpha
  * @property {number} [highlightFadeDuration] - milliseconds for an element to
@@ -57,7 +64,8 @@
  * @typedef {object} NodeStyle
  * @property {string} color - node fill color
  * @property {string} outlineColor - node outline color
- * @property {number} outlineWidth - node outline width
+ * @property {number} outlineWidth - node outline width, in world px (canvas
+ *    px when the renderer's `scaleStrokes` is off)
  * @property {string | null} image - node image source
  * @property {string | number | null} label - text label
  * @property {boolean} renderLabel - whether to render the label, if it exists
@@ -68,10 +76,12 @@
 /**
  * @typedef {object} EdgeStyle
  * @property {string} color - edge color
- * @property {number} width - edge width/thickness
+ * @property {number} width - edge width/thickness, in world px (canvas px
+ *    when the renderer's `scaleStrokes` is off)
  * @property {boolean | null} arrow - whether to draw an arrow (`null` follows
  *    from an undirected graph)
- * @property {number} arrowSize - size of arrow, if drawn
+ * @property {number} arrowSize - length of the arrowhead, if drawn, in world
+ *    px (canvas px when the renderer's `scaleStrokes` is off)
  * @property {number} bow - world px of perpendicular bow for reciprocal
  *    directed pairs
  */

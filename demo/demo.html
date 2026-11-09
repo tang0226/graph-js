@@ -281,6 +281,18 @@
         <option value="degree">by endpoint degree</option>
       </select>
     </div>
+    <div class="row inline">
+      <label for="scaleStrokes">Scale widths with zoom</label>
+      <input type="checkbox" id="scaleStrokes" checked>
+    </div>
+    <div class="row">
+      <label for="minEdgeWidth">Fade below (screen px)</label><output id="minEdgeWidthOut">1.0</output>
+      <input type="range" id="minEdgeWidth" min="0" max="3" step="0.1" value="1">
+    </div>
+    <div class="row">
+      <label for="maxEdgeWidth">Max width (screen px)</label><output id="maxEdgeWidthOut">8.0</output>
+      <input type="range" id="maxEdgeWidth" min="0.5" max="20" step="0.5" value="8">
+    </div>
   </fieldset>
 
   <fieldset>
@@ -473,7 +485,12 @@ function applyNodeConfig() {
 
 function applyEdgeConfig() {
   const g = gjs.graph;
-  gjs.renderer.setOpts({ renderEdges: ui.renderEdges });
+  gjs.renderer.setOpts({
+    renderEdges: ui.renderEdges,
+    scaleStrokes: ui.scaleStrokes,          // also applies to node outlines
+    minEdgeWidth: ui.minEdgeWidth,
+    maxEdgeWidth: ui.maxEdgeWidth,
+  });
   gjs.renderer.setDefaultEdgeConfig({
     color: ui.edgeColor,
     width: ui.edgeWidthMode === "degree"
@@ -606,7 +623,7 @@ canvas.addEventListener("wheel", e => {
 
 const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "maxSpeed", "dt", "useBarnesHut", "theta", "maxDepth"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
-const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode"];
+const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode", "scaleStrokes", "minEdgeWidth", "maxEdgeWidth"];
 const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize"];
 const VIEW_IDS = ["background", "zoom", "highlightFade", "highlightAlpha"];
 

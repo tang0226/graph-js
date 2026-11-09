@@ -29,6 +29,9 @@ const RENDERER_DEFAULTS = {
   labelMargin: 2,
   minLabelSize: 6,
   maxLabelSize: Infinity,
+  scaleStrokes: true,
+  minEdgeWidth: 1,
+  maxEdgeWidth: 8,
   highlightMode: "dim",
   highlightAlpha: 0.15,
   highlightFadeDuration: 150,
@@ -95,6 +98,14 @@ const toEdgeAccessors = config => ({
  * linearly with it.
  */
 const LABEL_REF_SIZE = 100;
+
+/** Faintest an edge is drawn when it fades below `minEdgeWidth`, as a
+    fraction of its normal alpha. Fainter edges are skipped. */
+const MIN_EDGE_FADE = 0.05;
+
+/** Thinnest scaled node outline drawn, in canvas px. Thinner ones are
+    skipped. */
+const MIN_OUTLINE_WIDTH = 0.05;
 
 /** Sizes (device px) that sprites of node images are made at. */
 const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
@@ -588,6 +599,10 @@ export class Renderer {
       labelMargin: opts.labelMargin ?? DF.labelMargin,
       minLabelSize: Math.max(opts.minLabelSize ?? DF.minLabelSize, 0),
       maxLabelSize: Math.max(opts.maxLabelSize ?? DF.maxLabelSize, 0),
+
+      scaleStrokes: opts.scaleStrokes ?? DF.scaleStrokes,
+      minEdgeWidth: Math.max(opts.minEdgeWidth ?? DF.minEdgeWidth, 0),
+      maxEdgeWidth: Math.max(opts.maxEdgeWidth ?? DF.maxEdgeWidth, 0),
       
       highlightMode: opts.highlightMode ?? DF.highlightMode,
 
@@ -621,7 +636,7 @@ export class Renderer {
    */
   setOpts({
     canvas, nodeConfig, edgeConfig,
-    minLabelSize, maxLabelSize,
+    minLabelSize, maxLabelSize, minEdgeWidth, maxEdgeWidth,
     highlightAlpha, highlightFadeDuration, imageCacheMB,
     ...opts
   } = {}) {
@@ -631,6 +646,12 @@ export class Renderer {
     }
     if (maxLabelSize !== undefined) {
       this._opts.maxLabelSize = Math.max(maxLabelSize, 0);
+    }
+    if (minEdgeWidth !== undefined) {
+      this._opts.minEdgeWidth = Math.max(minEdgeWidth, 0);
+    }
+    if (maxEdgeWidth !== undefined) {
+      this._opts.maxEdgeWidth = Math.max(maxEdgeWidth, 0);
     }
     if (highlightAlpha !== undefined) {
       this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
@@ -1570,8 +1591,12 @@ export class Renderer {
       this._ctx.fill();
     }
     if (nodeStyle.outlineWidth) {
+      // Scaled outlines too thin to see are skipped
+      const scale = this._opts.scaleStrokes;
+      const width = scale ? nodeStyle.outlineWidth * this._view.zoom : nodeStyle.outlineWidth;
+      if (scale && width < MIN_OUTLINE_WIDTH) return;
       this._ctx.strokeStyle = nodeStyle.outlineColor;
-      this._ctx.lineWidth = nodeStyle.outlineWidth;
+      this._ctx.lineWidth = width;
       this._ctx.stroke();
     }
   }
@@ -1617,23 +1642,53 @@ export class Renderer {
    * @param {SimNode} dest - destination node
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
+   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
+   *    has already set on the context. A faded edge (scaled below
+   *    `minEdgeWidth`) is drawn fainter than this, then the context is reset
+   *    to it.
    * @returns {void}
    * @private
    */
-  _drawEdge(src, dest, style, bowDir) {
+  _drawEdge(src, dest, style, bowDir, alpha = 1) {
     if (!this._ctx) return;
     const ctx = this._ctx, z = this._view.zoom;
+
+    /* Stroke size in canvas px. A scaled edge follows the zoom, and `k` sizes
+       its arrowhead and self-loop to match, so they shrink along with it
+       while the line is capped at `maxEdgeWidth`. An edge thinner than
+       `minEdgeWidth` is drawn at that width but fainter, instead of as a
+       sub-pixel line, which browsers render inconsistently. */
+    let width = style.width, k = 1, fade = 1;
+    if (this._opts.scaleStrokes) {
+      const { minEdgeWidth, maxEdgeWidth } = this._opts;
+      width *= z;
+      k = z;
+      if (width > maxEdgeWidth) {
+        k *= maxEdgeWidth / width;
+        width = maxEdgeWidth;
+      } else if (width < minEdgeWidth) {
+        fade = width / minEdgeWidth;
+        width = minEdgeWidth;
+      }
+      if (fade < MIN_EDGE_FADE || !(width > 0)) return;    // too faint to see
+    }
+
     const [ax, ay] = this.simToCanvas(src.x, src.y);
     const [bx, by] = this.simToCanvas(dest.x, dest.y);
     const ra = src.radius * z, rb = dest.radius * z;
 
-    if (src === dest) return this._drawSelfLoop(ax, ay, ra, style);
+    if (src === dest) {
+      if (fade < 1) ctx.globalAlpha = alpha * fade;
+      this._drawSelfLoop(ax, ay, ra, style, width, k);
+      if (fade < 1) ctx.globalAlpha = alpha;
+      return;
+    }
 
     const dx = bx - ax, dy = by - ay;
     const d = Math.hypot(dx, dy);
     if (d < 1e-6) return;
 
-    const head = style.arrow ? style.arrowSize : 0;
+    const head = style.arrow ? style.arrowSize * k : 0;
     if (d <= ra + rb + head) return;
 
     const ux = dx / d, uy = dy / d;
@@ -1653,8 +1708,9 @@ export class Renderer {
     const sx = ax + t0x * ra, sy = ay + t0y * ra;
     const ex = bx - t1x * rb, ey = by - t1y * rb;
 
+    if (fade < 1) ctx.globalAlpha = alpha * fade;
     ctx.strokeStyle = style.color;
-    ctx.lineWidth = style.width;
+    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     // Stop the stroke at the arrowhead's base so a thick line can't show
@@ -1664,6 +1720,7 @@ export class Renderer {
     ctx.stroke();
 
     if (style.arrow) this._drawArrowhead(ex, ey, t1x, t1y, head, style);
+    if (fade < 1) ctx.globalAlpha = alpha;
   }
 
 
@@ -1702,20 +1759,23 @@ export class Renderer {
    * @param {number} cy - canvas y of the node center
    * @param {number} r - node radius, in canvas px
    * @param {EdgeStyle} style - resolved edge style
+   * @param {number} width - line width, in canvas px
+   * @param {number} k - canvas px per unit of `arrowSize`
    * @returns {void}
    * @private
    */
-  _drawSelfLoop(cx, cy, r, style) {
+  _drawSelfLoop(cx, cy, r, style, width, k) {
     if (!this._ctx) return;
     const ctx = this._ctx;
-    const lr = Math.max(r * 0.8, (style.arrow ? style.arrowSize : 6) * 1.6);
+    const head = style.arrowSize * k;
+    const lr = Math.max(r * 0.8, (style.arrow ? head : 6 * k) * 1.6);
     const a = -Math.PI / 4;
     const D = r + lr * 0.6;                      // node centre -> loop centre
     const ux = Math.cos(a), uy = Math.sin(a);
     const lx = cx + ux * D, ly = cy + uy * D;
 
     ctx.strokeStyle = style.color;
-    ctx.lineWidth = style.width;
+    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.arc(lx, ly, lr, 0, Math.PI * 2);
     ctx.stroke();
@@ -1738,7 +1798,7 @@ export class Renderer {
       const l = Math.hypot(tx, ty) || 1;
       tx /= l; ty /= l;
       if (tx * (cx - tipX) + ty * (cy - tipY) > 0) {
-        this._drawArrowhead(tipX, tipY, tx, ty, style.arrowSize, style);
+        this._drawArrowhead(tipX, tipY, tx, ty, head, style);
         return;
       }
     }
@@ -1767,9 +1827,11 @@ export class Renderer {
   /**
    * Draws an edge identified by cache index.
    * @param {number} i - cache index of edge
+   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
+   *    has already set on the context
    * @private
    */
-  _renderEdgeByIndex(i) {
+  _renderEdgeByIndex(i, alpha = 1) {
     const sim = this.simulation;
     const iDbl = 2 * i;
     this._drawEdge(
@@ -1777,6 +1839,7 @@ export class Renderer {
       sim.nodeList[sim.edgePairs[iDbl + 1]],
       this._edgeStyles[i],
       this._edgeBow[i],
+      alpha,
     );
   }
 
@@ -1965,7 +2028,7 @@ export class Renderer {
       for (const flag of [0, 1]) {
         for (const i of inFrame.edgesI) {
           if (this._edgeHighlightState[i] === flag && this._useAlpha(this._edgeAlpha[i]))
-            this._renderEdgeByIndex(i);
+            this._renderEdgeByIndex(i, this._edgeAlpha[i]);
         }
         for (const i of inFrame.nodesI) {
           if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))

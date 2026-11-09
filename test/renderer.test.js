@@ -137,6 +137,115 @@ describe("Renderer: self-loops", () => {
   });
 });
 
+describe("Renderer: stroke scaling", () => {
+  /* Logs each stroke and fill with the line width and alpha it was drawn at.
+     Edges are drawn first, then node a (fill, outline), then node b. */
+  function recordStrokes(ctx) {
+    ctx.globalAlpha = 1;
+    ctx.stroke = () => ctx.ops.push(["stroke", ctx.lineWidth, ctx.globalAlpha]);
+    ctx.fill = () => ctx.ops.push(["fill", ctx.lineWidth, ctx.globalAlpha]);
+  }
+  const strokes = ctx => opsNamed(ctx, "stroke").map(o => o.slice(1).map(r2));
+
+  test("edge and outline widths scale with zoom", () => {
+    const { r, ctx } = scene(false, [["a", "b"]]);
+    recordStrokes(ctx);
+    r.view.zoom = 2;
+    r.render();
+    assert.deepEqual(strokes(ctx), [[2, 1], [2, 1], [2, 1]], "edge, then both outlines");
+  });
+
+  test("zoom 1 draws at the configured widths", () => {
+    const { r, ctx } = scene(true, [["a", "b"]], { edgeCfg: { width: 3 } });
+    recordStrokes(ctx);
+    r.render();
+    assert.equal(strokes(ctx)[0][0], 3);
+    assert.deepEqual(opsNamed(ctx, "lineTo")[0].slice(1).map(r2), [470, 300], "10px arrowhead");
+  });
+
+  test("edges are capped at maxEdgeWidth, and their arrowheads shrink to match", () => {
+    // Nodes land at canvas (0,300) and (800,300) with radius 80
+    const { r, ctx } = scene(true, [["a", "b"]], { edgeCfg: { width: 4 } });
+    recordStrokes(ctx);
+    r.view.zoom = 4;                                  // 16 px wide, capped at 8
+    r.render();
+    assert.equal(strokes(ctx)[0][0], 8);
+    // Tip at 720; the width was halved by the cap, so the head is 10 * 4 / 2
+    assert.deepEqual(opsNamed(ctx, "lineTo")[0].slice(1).map(r2), [700, 300]);
+  });
+
+  test("edges thinner than minEdgeWidth are drawn at it, fainter", () => {
+    const { r, ctx } = scene(false, [["a", "b"]]);
+    recordStrokes(ctx);
+    r.view.zoom = 0.25;
+    r.render();
+    const [edge, ...rest] = opsNamed(ctx, "stroke").map(o => o.slice(1));
+    assert.deepEqual(edge, [1, 0.25]);
+    for (const [, alpha] of rest) assert.equal(alpha, 1, "alpha is restored for the nodes");
+    for (const [, , alpha] of opsNamed(ctx, "fill")) assert.equal(alpha, 1);
+  });
+
+  test("edges and outlines too faint to see are skipped", () => {
+    const { r, ctx } = scene(false, [["a", "b"]]);
+    recordStrokes(ctx);
+    r.view.zoom = 0.04;                               // 0.04 px edges and outlines
+    r.render();
+    assert.equal(opsNamed(ctx, "stroke").length, 0);
+    assert.equal(opsNamed(ctx, "fill").length, 2, "nodes are still filled");
+  });
+
+  test("a short directed edge stays visible when zoomed out", () => {
+    // Centres 20 px apart with radius 6: the 8 px gap fits a 1 px arrowhead,
+    // but a fixed 10 px one would hide the edge
+    const { r, ctx } = scene(true, [["a", "b"]], { radius: 60 });
+    r.view.zoom = 0.1;
+    r.render();
+    assert.equal(opsNamed(ctx, "closePath").length, 1, "the arrowhead is drawn");
+  });
+
+  test("the fade multiplies the highlight alpha", () => {
+    const { r, ctx } = scene(false, [["a", "b"]], { opts: { highlightFadeDuration: 0 } });
+    recordStrokes(ctx);
+    r.addHighlight({ nodes: ["a"] });
+    r.view.zoom = 0.5;
+    r.render();
+    const [edge, aOutline, bOutline] = strokes(ctx).map(([, alpha]) => alpha);
+    assert.equal(edge, r2(0.15 * 0.5));
+    assert.equal(bOutline, 1, "highlighted node a is drawn last");
+    assert.equal(aOutline, 0.15, "dimmed node b keeps the highlight alpha");
+  });
+
+  test("self-loops shrink with zoom", () => {
+    const { r, ctx } = scene(true, [["a", "a"]]);
+    r.view.zoom = 0.5;                                // node radius 10
+    r.render();
+    const loop = opsNamed(ctx, "arc")[0];
+    assert.equal(r2(loop[3]), 8, "a 5 px arrowhead no longer forces a 16 px loop");
+  });
+
+  test("scaleStrokes: false keeps screen-px widths at every zoom", () => {
+    const { r, ctx } = scene(true, [["a", "b"]], { opts: { scaleStrokes: false } });
+    recordStrokes(ctx);
+    r.view.zoom = 4;
+    r.render();
+    assert.deepEqual(strokes(ctx).map(([w]) => w), [1, 1, 1]);
+    // Tip at 720 with a 10 px head
+    assert.deepEqual(opsNamed(ctx, "lineTo")[0].slice(1).map(r2), [710, 300]);
+    ctx.ops.length = 0;
+    r.view.zoom = 0.25;
+    r.render();
+    assert.deepEqual(strokes(ctx)[0], [1, 1], "no fade");
+  });
+
+  test("setOpts clamps edge width limits to zero", () => {
+    const { r } = scene(false, []);
+    r.setOpts({ minEdgeWidth: -1, maxEdgeWidth: -5, scaleStrokes: false });
+    assert.equal(r.opts.minEdgeWidth, 0);
+    assert.equal(r.opts.maxEdgeWidth, 0);
+    assert.equal(r.opts.scaleStrokes, false);
+  });
+});
+
 describe("Renderer: style cascade", () => {
   test("arrow defaults to the graph's directedness", () => {
     assert.equal(scene(true, [["a", "b"]]).r._edgeStyles[0].arrow, true);

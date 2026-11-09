@@ -65,6 +65,9 @@ const gjs = new GraphJS({
     labelMargin: 2,                 // gap between a node and its label, in simulation units
     minLabelSize: 6,                // labels smaller than this on screen (px) are hidden
     maxLabelSize: Infinity,         // labels stop growing at this size on screen (px)
+    scaleStrokes: true,             // edge and outline widths scale with zoom (see "Edge and outline widths")
+    minEdgeWidth: 1,                // edges thinner than this on screen (px) fade out instead
+    maxEdgeWidth: 8,                // edges stop growing at this width on screen (px)
     crossOrigin: "anonymous",       // crossOrigin for node image requests
     imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
@@ -158,16 +161,16 @@ All the available settings:
 | | `fixed` | `false` | `true` holds the node in place |
 | Renderer (nodes) | `color` | `"#ffffff"` | fill color |
 | | `outlineColor` | `"#000000"` | |
-| | `outlineWidth` | `1` | `0` for no outline |
+| | `outlineWidth` | `1` | in simulation units; `0` for no outline |
 | | `image` | `null` | image URL drawn inside the node (see below) |
 | | `label` | `null` | text drawn beside the node; a string or number (see below) |
 | | `renderLabel` | `true` | `false` hides this node's label |
 | | `labelScale` | `15` | label font size, in simulation units |
 | | `labelTextColor` | `"#000000"` | |
 | Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
-| | `width` | `1` | |
+| | `width` | `1` | in simulation units (see "Edge and outline widths") |
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
-| | `arrowSize` | `10` | |
+| | `arrowSize` | `10` | arrowhead length, in simulation units |
 | | `bow` | `14` | how far a pair of opposite directed edges curve apart |
 
 A function receives the node or edge object with custom data stored in `.data`. Whenever the graph changes, the function is re-run and the results are cached. That keeps the `radius` above in step as connections are added.
@@ -230,6 +233,15 @@ gjs.renderer.setOpts({ renderLabels: false });                                  
 ```
 
 Labels are drawn on top of the nodes. When highlighting, a label fades with its node, and highlighted nodes are drawn over dimmed labels. A label stays visible while its node is just off the edge of the canvas.
+
+### Edge and outline widths
+
+Edge `width`, `arrowSize` and node `outlineWidth` are in simulation units, so they scale with the view like nodes and labels do. Zoomed out, edges get thinner, which keeps large graphs from turning into a solid cloud of lines. Two renderer options keep them reasonable at the extremes:
+
+- `minEdgeWidth`: an edge thinner than this on screen (px) is drawn at this width but fainter, in proportion. Edges too faint to see are skipped, which also speeds up drawing large zoomed-out graphs.
+- `maxEdgeWidth`: edges stop getting thicker past this width on screen (px), and their arrowheads stop growing with them.
+
+To keep widths fixed on screen at every zoom instead, set `scaleStrokes: false`. `width`, `arrowSize` and `outlineWidth` are then in screen pixels, and `minEdgeWidth` and `maxEdgeWidth` don't apply.
 
 ## Reading graph and simulation state
 
@@ -545,6 +557,10 @@ import { Simulation } from "@tang0226/graph-js/simulation";
 ```
 
 Members whose names start with `_` are internal and declared `private`, so TypeScript rejects them. Types that aren't exported from the package root are internal too, and may change between versions.
+
+## Upgrading from 0.6
+
+- **Edge widths, arrowheads and node outlines now scale with zoom** (see [Edge and outline widths](#edge-and-outline-widths)). At zoom 1 they look the same as before. Zoomed out they get thinner and fade, and zoomed in they get thicker, up to `maxEdgeWidth`. Set `scaleStrokes: false` to keep the old fixed screen sizes.
 
 ## Upgrading from 0.5
 
