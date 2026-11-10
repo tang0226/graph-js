@@ -167,7 +167,7 @@ export class Simulation {
    * Cached flattened array of index pairs for applying spring
    * forces. Recreated in effective `sync()` calls.
    * Because it is used in force application, it does not contain
-   * reverse-twin pairs, unlike `edgePairs`.
+   * self-loops or reverse-twin pairs, unlike `edgePairs`.
    * @returns {Readonly<Int32Array>}
    */
   get springs() { return this._springs; }
@@ -771,22 +771,22 @@ export class Simulation {
       this._edgeIndex.set(edge, e);
       this._edgeList.push(edge);
 
-      // Undirected: springs are edgePairs (self-loops included), one per edge
-      if (!seen) { springEdges.push(e, -1); continue; }
-
-      if (i === j) continue;
-      const key = i < j ? i * n + j : j * n + i;
-      const s = seen.get(key);
-      if (s !== undefined) { springEdges[2 * s + 1] = e; continue; } // reverse twin
-      seen.set(key, springs.length / 2);
+      if (i === j) continue; // self-loops have no spring
+      if (seen) {
+        const key = i < j ? i * n + j : j * n + i;
+        const s = seen.get(key);
+        if (s !== undefined) { springEdges[2 * s + 1] = e; continue; } // reverse twin
+        seen.set(key, springs.length / 2);
+      }
       springs.push(i, j);
       springEdges.push(e, -1);
     }
 
     this._edgePairs = Int32Array.from(pairs);
-    this._springs   = this._graph.directed ?
-      Int32Array.from(springs) :
-      this._edgePairs;
+    // Share edgePairs when no self-loop or reverse twin was filtered out
+    this._springs  = springs.length === pairs.length ?
+      this._edgePairs :
+      Int32Array.from(springs);
     this._springEdges = Int32Array.from(springEdges);
     this._springLength = new Float64Array(this._springs.length / 2);
     this._springStiffness = new Float64Array(this._springs.length / 2);

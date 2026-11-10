@@ -269,13 +269,25 @@ describe("Simulation: springs and edge pairs", () => {
     assert.equal(sim.springs.length, 0);
   });
 
-  test("undirected: self-loops are excluded from springs", {
-    todo: "the undirected path aliases springs to edgePairs, re-admitting the "
-        + "self-loop the build loop filtered out. Fix: alias only when nothing "
-        + "was filtered (springs.length === pairs.length).",
-  }, () => {
+  test("undirected: self-loops are excluded from springs", () => {
     const sim = pairSim(false, [["a", "a"]]);
+    assert.deepEqual([...sim.edgePairs], [0, 0]);
     assert.equal(sim.springs.length, 0);
+    assert.equal(sim.springLength.length, 0);
+  });
+
+  test("springs keep their own edges when a self-loop is filtered out", () => {
+    const g = new Graph();
+    for (const id of ["a", "b", "c"]) g.addNode({ id });
+    g.addEdge("a", "a"); g.addEdge("a", "b"); g.addEdge("b", "c");
+    const sim = new Simulation(g, {});
+    sim.setEdgeConfig("b", "c", { length: 77 });
+    sim.sync();
+    assert.equal(sim.springs.length, 4);
+    for (let k = 0; k < sim.springs.length / 2; k++) {
+      const a = sim.nodeList[sim.springs[2 * k]].id, b = sim.nodeList[sim.springs[2 * k + 1]].id;
+      assert.equal(sim.springLength[k], sim.getEdgeSpring(a, b).length, `spring ${a}-${b}`);
+    }
   });
 });
 
