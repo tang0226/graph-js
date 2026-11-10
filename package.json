@@ -40,6 +40,10 @@
       "types": "./types/renderer.d.ts",
       "default": "./src/renderer.js"
     },
+    "./tween": {
+      "types": "./types/tween.d.ts",
+      "default": "./src/tween.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

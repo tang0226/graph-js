@@ -18,7 +18,7 @@ function build({ dpr = 1, directed = false, w = 800, h = 600 } = {}) {
 
 describe("package entry", () => {
   test("the barrel exports every public class", () => {
-    assert.deepEqual(Object.keys(pkg).sort(), ["Graph", "GraphJS", "Renderer", "Simulation"]);
+    assert.deepEqual(Object.keys(pkg).sort(), ["Graph", "GraphJS", "Renderer", "Simulation", "Tween", "easings"]);
   });
 });
 
@@ -493,6 +493,167 @@ describe("GraphJS: loop hooks", () => {
       gjs.step();
       assert.equal(lateCalls, 1);
     } finally { cleanup(); }
+  });
+});
+
+describe("GraphJS: tweens", () => {
+  /* A headless instance (no canvas needed) and a tween that records values. */
+  function tweened(gjs, opts) {
+    const values = [];
+    const tw = gjs.tween({ set: v => { values.push(v); }, from: 0, to: 100, duration: 100, ...opts });
+    return { tw, values };
+  }
+
+  test("tweens step at the start of each frame, before preTick hooks", () => {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      const log = [];
+      gjs.addHook("preTick", () => log.push("preTick"));
+      gjs.tween({ set: () => log.push("tween"), from: 0, to: 1, duration: 1000 });
+      gjs.start();
+      raf.flushFrame(2);
+      assert.deepEqual(log, ["tween", "preTick", "tween", "preTick"]);
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
+  test("the loop advances tweens by frame time", () => {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      const { values } = tweened(gjs);
+      gjs.start();
+      raf.flushFrame(3, { t0: 5000, dt: 25 });
+      assert.deepEqual(values, [0, 25, 50]);
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
+  test("time between stop() and start() doesn't count", () => {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      const { values } = tweened(gjs);
+      gjs.start();
+      raf.flushFrame(2, { t0: 0, dt: 10 });           // 0, 10
+      gjs.stop();
+      gjs.start();
+      raf.flushFrame(2, { t0: 60000, dt: 10 });       // a minute later: 10, 20
+      assert.deepEqual(values, [0, 10, 10, 20]);
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
+  test("step() advances tweens by performance.now()", t => {
+    let now = 1000;
+    t.mock.method(performance, "now", () => now);
+    const gjs = new GraphJS();
+    const { values } = tweened(gjs);
+    gjs.step();
+    now += 40;
+    gjs.step();
+    assert.deepEqual(values, [0, 40]);
+  });
+
+  test("stepTweens() advances tweens without ticking the simulation", () => {
+    const gjs = new GraphJS();
+    let ticks = 0;
+    gjs.simulation.tick = () => { ticks++; return gjs.simulation; };
+    const { values } = tweened(gjs);
+    gjs.stepTweens(0).stepTweens(50);
+    assert.deepEqual(values, [0, 50]);
+    assert.equal(ticks, 0);
+  });
+
+  test("tweenUnit sets the default unit, and a tween can override it", () => {
+    const gjs = new GraphJS({ tweenUnit: "frames" });
+    const frames = tweened(gjs, { duration: 4 });
+    const ms = tweened(gjs, { duration: 100, unit: "ms" });
+    gjs.stepTweens(0).stepTweens(1000);
+    assert.deepEqual(frames.values, [25, 50]);
+    assert.deepEqual(ms.values, [0, 100]);
+    assert.throws(() => new GraphJS({ tweenUnit: "s" }), RangeError);
+  });
+
+  test("an ended tween is forgotten, and isTweening() reflects that", async () => {
+    const gjs = new GraphJS();
+    assert.equal(gjs.isTweening(), false);
+    const { tw } = tweened(gjs, { key: "k", duration: 10 });
+    assert.equal(gjs.isTweening(), true);
+    assert.equal(gjs.getTween("k"), tw);
+    gjs.stepTweens(0).stepTweens(10);
+    assert.equal(await tw.finished, true);
+    assert.equal(gjs.isTweening(), false);
+    assert.equal(gjs.getTween("k"), null);
+  });
+
+  test("a tween cancelled through its handle is forgotten too", () => {
+    const gjs = new GraphJS();
+    const { tw } = tweened(gjs, { key: "k" });
+    tw.cancel();
+    assert.equal(gjs.getTween("k"), null);
+    assert.equal(gjs.isTweening(), false);
+  });
+
+  test("a tween with an active key replaces it, cancelling the old one", async () => {
+    const gjs = new GraphJS();
+    const old = tweened(gjs, { key: "zoom" });
+    const next = tweened(gjs, { key: "zoom", from: 1, to: 2 });
+    gjs.stepTweens(0);
+    assert.equal(await old.tw.finished, false);
+    assert.deepEqual(old.values, []);
+    assert.deepEqual(next.values, [1]);
+    assert.equal(gjs.getTween("zoom"), next.tw);
+  });
+
+  test("tweens without a key never replace each other", () => {
+    const gjs = new GraphJS();
+    tweened(gjs);
+    tweened(gjs);
+    gjs.stepTweens(0);
+    assert.equal(gjs._tweens.size, 2);
+  });
+
+  test("cancelTween and cancelAllTweens", async () => {
+    const gjs = new GraphJS();
+    const a = tweened(gjs, { key: "a" }), b = tweened(gjs), c = tweened(gjs);
+    assert.equal(gjs.cancelTween("a"), true);
+    assert.equal(gjs.cancelTween("a"), false);
+    assert.equal(await a.tw.finished, false);
+    assert.equal(gjs.cancelAllTweens(), gjs);
+    assert.equal(gjs.isTweening(), false);
+    assert.deepEqual(await Promise.all([b.tw.finished, c.tw.finished]), [false, false]);
+  });
+
+  test("a tween started under the same key by onFinish survives", () => {
+    const gjs = new GraphJS();
+    let second;
+    gjs.tween({
+      key: "pulse", set: () => {}, from: 0, to: 1, duration: 10,
+      onFinish: () => { second = gjs.tween({ key: "pulse", set: () => {}, from: 1, to: 0, duration: 10 }); },
+    });
+    gjs.stepTweens(0).stepTweens(10);
+    assert.ok(second);
+    assert.equal(gjs.getTween("pulse"), second);
+  });
+
+  test("a tween started during stepTweens begins on the next call", () => {
+    const gjs = new GraphJS();
+    let inner;
+    gjs.tween({
+      set: () => { inner ??= tweened(gjs); }, from: 0, to: 1, duration: 100,
+    });
+    gjs.stepTweens(0);
+    assert.deepEqual(inner.values, []);
+    gjs.stepTweens(30);
+    assert.deepEqual(inner.values, [0], "its first step counts as no time");
+  });
+
+  test("a tween started mid-run counts from its own first step", () => {
+    const gjs = new GraphJS();
+    tweened(gjs);
+    gjs.stepTweens(0).stepTweens(40);
+    const late = tweened(gjs);
+    gjs.stepTweens(50).stepTweens(60);
+    assert.deepEqual(late.values, [0, 10]);
   });
 });
 

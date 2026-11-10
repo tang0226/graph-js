@@ -1,11 +1,13 @@
 /** @import { NodeData } from './typedefs/graph.js' */
 /** @import { Canvas } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
+/** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
 
 
 import { Graph } from "./graph.js";
 import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
+import { Tween } from "./tween.js";
 
 
 /**
@@ -59,10 +61,42 @@ export class GraphJS {
 
 
   /**
+   * Active tweens by key. Keys default to a fresh symbol per tween.
+   * @type {Map<any, Tween<any>>}
+   * @private
+   */
+  _tweens = new Map();
+
+
+  /**
+   * Timestamp of the previous `stepTweens()`, or `null` when tween time
+   * shouldn't count from it: before the first step, after `start()` or
+   * `stop()`, and while no tweens are active
+   * @type {number | null}
+   * @private
+   */
+  _tweenClock = null;
+
+
+  /**
+   * Default unit of tweens that don't set one
+   * @type {TweenUnit}
+   * @private
+   */
+  _tweenUnit;
+
+
+  /**
    * Initializes a GraphJS instance.
    * @param {GraphJSOpts} opts
    */
   constructor(opts = {}) {
+    const tweenUnit = opts.tweenUnit ?? "ms";
+    if (tweenUnit !== "ms" && tweenUnit !== "frames") {
+      throw new RangeError(`GraphJS: unknown tweenUnit "${tweenUnit}"`);
+    }
+    this._tweenUnit = tweenUnit;
+
     this._graph = new Graph(opts.graph ?? {});
     this._simulation = new Simulation(this._graph, opts.simulation ?? {});
 
@@ -168,6 +202,7 @@ export class GraphJS {
       this._frame(time);
     };
     this._raf = requestAnimationFrame(frame);
+    this._tweenClock = null;
     return this;
   }
 
@@ -178,6 +213,7 @@ export class GraphJS {
    */
   stop() {
     if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
+    this._tweenClock = null;
     return this;
   }
 
@@ -259,11 +295,99 @@ export class GraphJS {
    * @private
    */
   _frame(time) {
+    this.stepTweens(time);
     this._runHooks("preTick", time);
     this._simulation.tick();
     this._runHooks("postTick", time);
     this._renderer.render(time);
     this._runHooks("postRender", time);
+  }
+
+
+  /**
+   * Starts a tween, which animates a number or an array of numbers by passing
+   * each new value to `set`. Active tweens are advanced at the start of every
+   * frame of `start()` and every `step()`, before the "preTick" hooks, or by
+   * `stepTweens()`. Time only counts while frames run: the gap across a
+   * `stop()` and `start()` is skipped.
+   *
+   * Starting a tween with the `key` of an active one cancels the old one, so
+   * two tweens never fight over the same value.
+   * @template {TweenValue} T
+   * @param {TweenOpts<T> & { key?: any }} opts - tween options, plus an
+   *    optional `key` to find, cancel or replace the tween by. The `unit`
+   *    defaults to this instance's `tweenUnit`.
+   * @returns {Tween<T>} the tween, which can be cancelled or finished directly
+   * @throws {TypeError | RangeError} throws if an option is invalid (see
+   *    `Tween`)
+   */
+  tween(opts) {
+    const { key = Symbol("tween"), ...rest } = opts;
+    /** @type {Tween<T>} */
+    const tw = new Tween({ ...rest, unit: rest.unit ?? this._tweenUnit }, () => {
+      // A tween started under this key by onFinish has already replaced it
+      if (this._tweens.get(key) === tw) this._tweens.delete(key);
+      if (this._tweens.size === 0) this._tweenClock = null;
+    });
+    this._tweens.get(key)?.cancel();
+    this._tweens.set(key, tw);
+    return tw;
+  }
+
+
+  /**
+   * Returns the active tween with a key, or `null` if there is none.
+   * @param {any} key - tween key
+   * @returns {Tween<any> | null} the tween, or `null`
+   */
+  getTween(key) { return this._tweens.get(key) ?? null; }
+
+
+  /**
+   * Cancels the active tween with a key, leaving its value where it is.
+   * @param {any} key - tween key
+   * @returns {boolean} whether there was a tween to cancel
+   */
+  cancelTween(key) {
+    const tw = this._tweens.get(key);
+    tw?.cancel();
+    return tw !== undefined;
+  }
+
+
+  /**
+   * Cancels every active tween, leaving their values where they are.
+   * @returns {this} self reference
+   */
+  cancelAllTweens() {
+    for (const tw of [...this._tweens.values()]) tw.cancel();
+    return this;
+  }
+
+
+  /**
+   * Returns whether any tweens are active. Loops that only render on demand
+   * can keep requesting frames while this is `true`.
+   * @returns {boolean} whether any tweens are active
+   */
+  isTweening() { return this._tweens.size > 0; }
+
+
+  /**
+   * Advances every active tween to a timestamp, without ticking the
+   * simulation or rendering. Frames of `start()` and `step()` already do
+   * this; call it from loops that render on demand instead. Tweens started
+   * during the call begin on the next one.
+   * @param {number} [time] - frame timestamp in milliseconds. Defaults to
+   *    `performance.now()`.
+   * @returns {this} self reference
+   */
+  stepTweens(time = globalThis.performance?.now() ?? Date.now()) {
+    if (this._tweens.size === 0) return this;
+    const dt = this._tweenClock === null ? 0 : Math.max(time - this._tweenClock, 0);
+    this._tweenClock = time;
+    for (const tw of [...this._tweens.values()]) tw.step(dt);
+    return this;
   }
 
 

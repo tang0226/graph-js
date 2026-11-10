@@ -2,6 +2,7 @@ export { Graph } from "./graph.js";
 export { GraphJS } from "./graphjs.js";
 export { Renderer } from "./renderer.js";
 export { Simulation } from "./simulation.js";
+export { Tween, easings } from "./tween.js";
 
 
 // Public types, re-exported so TypeScript users can import them from the
@@ -50,3 +51,11 @@ export { Simulation } from "./simulation.js";
 /** @typedef {import("./typedefs/graphjs.js").GraphJSOpts} GraphJSOpts */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSHookType} GraphJSHookType */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSHook} GraphJSHook */
+
+// TWEENS
+/** @typedef {import("./typedefs/tween.js").TweenValue} TweenValue */
+/** @template T @typedef {import("./typedefs/tween.js").TweenSetValue<T>} TweenSetValue */
+/** @typedef {import("./typedefs/tween.js").TweenUnit} TweenUnit */
+/** @typedef {import("./typedefs/tween.js").Easing} Easing */
+/** @typedef {import("./typedefs/tween.js").EasingName} EasingName */
+/** @template {TweenValue} [T=TweenValue] @typedef {import("./typedefs/tween.js").TweenOpts<T>} TweenOpts */

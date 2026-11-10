@@ -121,7 +121,7 @@
     <span>springs <b id="statSprings">0</b></span>
     <span><b id="statFps">0</b> fps / <b id="statTickFps">0</b> tick / <b id="statRenderFps">0</b> render</span>
   </div>
-  <div id="help">drag a node to pin &amp; move it &middot; drag empty space to pan &middot; scroll to zoom</div>
+  <div id="help">drag a node to pin &amp; move it &middot; double-click a node to fly to it &middot; drag empty space to pan &middot; scroll to zoom</div>
 </div>
 
 <aside>
@@ -348,6 +348,7 @@
     </div>
     <div class="btns">
       <button id="recenter">Recenter</button>
+      <button id="zoomFit">Zoom to fit</button>
     </div>
   </fieldset>
 
@@ -525,6 +526,79 @@ function applyViewConfig() {
 
 new ResizeObserver(() => { if (gjs) { gjs.resize(); gjs.renderer.render(); } }).observe(canvas);
 
+/* ---------- camera ----------
+   Recenter, Zoom to fit and double-click all glide the view with one tween,
+   keyed "camera": starting a new move replaces the old one mid-flight, and
+   grabbing the view (drag, wheel, Zoom slider) cancels it.
+
+   The tween only runs a plain 0 -> 1 progress value. Each frame, set() reads
+   where the camera should end up *now* and blends toward it, so the move
+   tracks nodes that are still drifting and lands exactly on them. Zoom is
+   blended in log space, so zooming 0.1 -> 1 feels as fast as 1 -> 10.     */
+
+const ZOOM_MIN = 0.01, ZOOM_MAX = 10;     // the Zoom slider's range
+const clampZoom = z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+/* Applies a zoom to the view and mirrors it on the Zoom slider. */
+function setZoom(zoom) {
+  gjs.renderer.view.zoom = zoom;
+  ui.zoom = zoom;
+  $("zoom").value = zoom;
+  $("zoomOut").textContent = zoom.toFixed(2);
+}
+
+/* Glides the view to target(), which returns [x, y, zoom] and is re-read
+   every frame.
+
+   Zoom follows z(p) = z0 * r^p, with r = z1 / z0. Blending the position
+   linearly as well would make the pan look uneven: a world-space step looks
+   z times bigger on screen, so the scene would crawl while zoomed out and
+   race while zoomed in. For a steady pan on screen, the world-space pan rate
+   must go as 1/z(p). Integrating that and scaling it to run 0 -> 1 gives
+       u(p) = (1 - r^-p) / (1 - r^-1)
+   which front-loads the pan when zooming in and back-loads it when zooming
+   out. With no zoom change (r = 1) it is just p.                           */
+function flyTo(target, duration = 700) {
+  const { x: sx, y: sy, zoom } = gjs.renderer.view;
+  const sz = Math.log(zoom);
+  gjs.tween({
+    key: "camera",
+    from: 0, to: 1, duration,
+    ease: "inOutCubic",
+    set: p => {
+      const [tx, ty, tz] = target();
+      const k = Math.log(clampZoom(tz)) - sz;              // ln r
+      const u = Math.abs(k) < 1e-6 ? p : (1 - Math.exp(-k * p)) / (1 - Math.exp(-k));
+      gjs.renderer.view = { x: sx + (tx - sx) * u, y: sy + (ty - sy) * u };
+      setZoom(Math.exp(sz + k * p));
+    },
+  });
+  redraw();
+}
+
+/* Centroid of every node, or null for an empty graph. */
+function centroid() {
+  const list = gjs.simulation.nodeList;
+  if (!list.length) return null;
+  let x = 0, y = 0;
+  for (const nd of list) { x += nd.x; y += nd.y; }
+  return [x / list.length, y / list.length];
+}
+
+/* Centre and zoom that fit every node, with a margin, or null for an empty
+   graph. */
+function fitView() {
+  const list = gjs.simulation.nodeList, size = gjs.renderer.size;
+  if (!list.length || !size) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const nd of list) {
+    x0 = Math.min(x0, nd.x - nd.radius); x1 = Math.max(x1, nd.x + nd.radius);
+    y0 = Math.min(y0, nd.y - nd.radius); y1 = Math.max(y1, nd.y + nd.radius);
+  }
+  const zoom = 0.9 * Math.min(size.w / (x1 - x0), size.h / (y1 - y0));
+  return [(x0 + x1) / 2, (y0 + y1) / 2, zoom];
+}
+
 /* ---------- interaction ---------- */
 
 function pointerToCanvas(e) {
@@ -575,6 +649,7 @@ canvas.addEventListener("pointerdown", e => {
     drag = { kind: "node", id, dx: nx - cx, dy: ny - cy };
     gjs.pin(id, nx, ny);
   } else {
+    gjs.cancelTween("camera");             // grabbing the view stops a camera move
     const v = gjs.renderer.view;
     drag = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
   }
@@ -605,14 +680,24 @@ function endDrag() {
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
 
+// Fly to a node, zooming in to at least 2x, and follow it if it's still moving
+canvas.addEventListener("dblclick", e => {
+  const id = gjs.nodeAt(...pointerToCanvas(e));
+  if (id === null) return;
+  const zoom = Math.max(ui.zoom, 2);
+  let last = gjs.simulation.getPosition(id);
+  flyTo(() => {
+    last = gjs.simulation.getPosition(id) ?? last;   // keep the last spot if it's removed
+    return [...last, zoom];
+  });
+});
+
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
+  gjs.cancelTween("camera");               // it would undo the anchoring below
   const [cx, cy] = pointerToCanvas(e);
   const [bx, by] = gjs.canvasToSim(cx, cy);              // anchor under cursor
-  const next = Math.min(10, Math.max(0.01, ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  $("zoom").value = next;
-  readUI();
-  gjs.renderer.view.zoom = next;
+  setZoom(clampZoom(ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
   const [ax, ay] = gjs.canvasToSim(cx, cy);
   gjs.renderer.view.x += bx - ax;
   gjs.renderer.view.y += by - ay;
@@ -632,6 +717,7 @@ for (const el of document.querySelectorAll("input, select")) {
     readUI();
     if (el.id === "directed") { buildGraph(); return; }
     if (el.id === "hoverHighlight") updateHover(null);
+    if (el.id === "zoom") gjs.cancelTween("camera");
     if (SIM_IDS.includes(el.id))  applySimConfig();
     if (NODE_IDS.includes(el.id)) applyNodeConfig();
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
@@ -688,13 +774,15 @@ $("shake").addEventListener("click", () => {
 });
 
 $("recenter").addEventListener("click", () => {
-  const list = gjs.simulation.nodeList;
-  if (!list.length) return;
-  let x = 0, y = 0;
-  for (const nd of list) { x += nd.x; y += nd.y; }
-  gjs.renderer.view.x = x / list.length;
-  gjs.renderer.view.y = y / list.length;
-  redraw();
+  if (!centroid()) return;
+  const zoom = ui.zoom;
+  flyTo(() => [...(centroid() ?? [gjs.renderer.view.x, gjs.renderer.view.y]), zoom], 500);
+});
+
+$("zoomFit").addEventListener("click", () => {
+  if (!fitView()) return;
+  const v = gjs.renderer.view;
+  flyTo(() => fitView() ?? [v.x, v.y, v.zoom]);
 });
 
 /* ---------- animation ----------
@@ -757,7 +845,8 @@ function pause() {
 }
 
 /* While paused, changes are drawn on demand: at most once per frame, and
-   for as long as a highlight fade is in progress.                          */
+   for as long as a highlight fade or a tween is in progress. Tweens are
+   stepped here, since gjs.step() would also tick the paused layout.       */
 
 let redrawQueued = false;
 function redraw() {
@@ -766,9 +855,10 @@ function redraw() {
   requestAnimationFrame(time => {
     redrawQueued = false;
     if (gjs.isRunning()) return;
+    gjs.stepTweens(time);
     gjs.renderer.render(time);
     updateCounts();
-    if (gjs.renderer.isFading()) redraw();
+    if (gjs.renderer.isFading() || gjs.isTweening()) redraw();
   });
 }
 

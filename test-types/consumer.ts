@@ -7,7 +7,7 @@
 
    Imports use the package's own name, so they resolve through the `exports`
    map in package.json, as they would for a real consumer. */
-import { GraphJS, Graph, Renderer } from "@tang0226/graph-js";
+import { GraphJS, Graph, Renderer, Tween, easings } from "@tang0226/graph-js";
 import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpath
 // Public types, re-exported from the package root
 import type {
@@ -20,6 +20,7 @@ import type {
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
+  TweenValue, TweenUnit, Easing, EasingName, TweenOpts,
 } from "@tang0226/graph-js";
 
 // Constructor: every argument optional, options are each layer's input shape
@@ -131,6 +132,35 @@ const hookType: RendererHookType = "overlay";
 const hook: RendererHook = ring;
 const loopType: GraphJSHookType = "postTick";
 const loopHook: GraphJSHook = timed;
+
+// Tweens: the setter gets a number for number tweens, an array for array tweens
+new GraphJS({ tweenUnit: "frames" });
+// @ts-expect-error -- not a tween unit
+new GraphJS({ tweenUnit: "seconds" });
+const zoomTween: Tween<number> = gjs.tween({
+  set: z => { const n: number = z; r.view = { zoom: n }; },
+  from: () => r.view.zoom, to: 2, duration: 300, ease: "outCubic", key: "zoom",
+});
+gjs.tween({
+  set: v => { const xy: number[] = v; },
+  from: [0, 0], to: [10, 10], duration: 30, unit: "frames", repeat: Infinity, yoyo: true,
+  onFinish: () => {},
+});
+// @ts-expect-error -- from and to must have the same shape
+gjs.tween({ set: () => {}, from: [0, 0], to: 1, duration: 10 });
+// @ts-expect-error -- not a built-in easing
+gjs.tween({ set: () => {}, from: 0, to: 1, duration: 10, ease: "bouncy" });
+const ended: Promise<boolean> = zoomTween.cancel().finish().finished;
+const isDone: boolean = zoomTween.done;
+const active: Tween<any> | null = gjs.getTween("zoom");
+const cancelled: boolean = gjs.cancelTween("zoom");
+const tweening: boolean = gjs.cancelAllTweens().stepTweens(16).isTweening();
+const ease: Easing = easings.inOutQuad;
+const easeName: EasingName = "outBack";
+const unit: TweenUnit = "ms";
+const value: TweenValue = [1, 2];
+const tweenOpts: TweenOpts<number> = { set: n => {}, from: 0, to: 1, duration: 10 };
+new Tween(tweenOpts).step(16);
 
 // Image request options use the DOM's own types, so invalid values are rejected
 new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });

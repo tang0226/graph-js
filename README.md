@@ -34,6 +34,7 @@ All parameters are optional. Each layer's options are passed under that layer's 
 ```js
 const gjs = new GraphJS({
   canvas,                           // or attach one later
+  tweenUnit: "ms",                  // default unit of tweens: "ms" or "frames" (see "Tweens")
 
   graph: {
     directed: true,                 // default false; cannot be changed after instantiation
@@ -466,6 +467,76 @@ gjs.removeHook("postTick", keepInBox);   // true if it existed and was removed
 - **Stopping:** a hook can call `stop()`. The current frame finishes, and no more are run. Don't call `step()` from a hook, since that runs the hooks again.
 - **Errors and order:** these work as they do for [renderer hooks](#custom-drawing). A hook that throws is logged and the frame carries on, and hooks of a type run in the order they were added.
 - **Drawing:** use renderer hooks instead. They run at a fixed point in the frame with canvas state saved and restored, while a `"postRender"` hook's changes to canvas state carry into the next frame.
+
+### Tweens
+
+A tween animates a number, or an array of numbers, from one value to another. You give it a `set` function, and it's called with each new value:
+
+```js
+// Zoom to 2x over 400 ms
+gjs.tween({
+  set: zoom => { gjs.renderer.view = { zoom }; },
+  from: () => gjs.renderer.view.zoom,   // read when the tween starts
+  to: 2,
+  duration: 400,
+  ease: "inOutQuad",
+  key: "zoom",
+});
+
+// Pan to a node, with the x and y coordinates as one array value
+gjs.tween({
+  set: ([x, y]) => { gjs.renderer.view = { x, y }; },
+  from: () => [gjs.renderer.view.x, gjs.renderer.view.y],
+  to: gjs.simulation.getPosition("alice"),
+  duration: 600,
+  ease: "outCubic",
+  key: "pan",
+});
+
+// Pulse a node's outline forever
+gjs.tween({
+  set: w => gjs.renderer.setNodeConfig("alice", { outlineWidth: w }),
+  from: 1, to: 5, duration: 500,
+  repeat: Infinity, yoyo: true,
+  key: "alice:outline",
+});
+```
+
+| Option | Default | |
+|---|---|---|
+| `set` | | called with each new value |
+| `from` | | start value: a number, an array of numbers, or a function returning one. A function is called once, when the tween starts moving. |
+| `to` | | end value, the same shape as `from` |
+| `duration` | | length of one play |
+| `unit` | `"ms"` | `"ms"` or `"frames"`: what `duration` and `delay` count. Set the default for every tween with the `tweenUnit` option of `new GraphJS()`. |
+| `ease` | `"linear"` | `"linear"`, `"inQuad"`, `"outQuad"`, `"inOutQuad"`, `"inCubic"`, `"outCubic"`, `"inOutCubic"`, `"outBack"`, or your own function from progress (0 to 1) to eased progress |
+| `delay` | `0` | wait before the first play |
+| `repeat` | `0` | extra plays after the first; `Infinity` loops |
+| `yoyo` | `false` | every other play runs backwards |
+| `onFinish` | | called when the tween finishes, but not when it's cancelled |
+| `key` | | names the tween, so it can be looked up, cancelled or replaced |
+
+`tween()` returns the tween. To stop it:
+
+```js
+const pulse = gjs.tween({ /* ... */ });
+pulse.cancel();                   // stop where it is
+pulse.finish();                   // jump to the end (of the current play, if it loops forever)
+await pulse.finished;             // true if it finished, false if it was cancelled
+
+gjs.cancelTween("zoom");          // by key; true if there was one
+gjs.cancelAllTweens();
+gjs.getTween("zoom");             // the active tween with that key, or null
+gjs.isTweening();                 // true while any tween is active
+```
+
+Starting a tween with the key of an active one cancels the old one, so two tweens never fight over the same value. A `from` function then picks up wherever the old one stopped.
+
+- **When they run:** tweens are advanced at the start of each frame of `start()` and each `step()`, before the `"preTick"` hooks. Time only counts while frames run, so a tween doesn't jump ahead after `stop()` and `start()`.
+- **Without the loop:** if you draw only when something changes, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true. It advances tweens without ticking the simulation.
+- **Errors:** a `set` function that throws is logged and the tween is cancelled. Cancel tweens whose node or edge you remove: `setEdgeConfig()` throws for a missing edge.
+- **Speed:** each change to a node or edge config makes the renderer re-read every node's and edge's settings on the next frame, so style tweens get expensive on large graphs. Tweening the view or node positions doesn't have this cost.
+- **Without GraphJS:** `Tween` is also exported from the package root and from `@tang0226/graph-js/tween`. `new Tween(opts)` takes the same options except `key`, and you advance it with `tween.step(ms)` from your own loop.
 
 ### Settling
 
