@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
-import { Simulation } from "../src/simulation.js";
+import { Simulation, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/simulation.js";
 
 const RECORD_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
 
@@ -61,7 +61,7 @@ describe("Simulation: config cascade", () => {
     g.addNode({ id: "a", w: 7 });
     const sim = new Simulation(g, {});
     sim.setDefaultNodeConfig({ mass: n => n.data.w, radius: 20, fixed: false });
-    const resolve = () => { sim._configDirty = true; sim.sync(); return sim.nodes.get("a"); };
+    const resolve = () => { sim._nodeConfigDirty = true; sim.sync(); return sim.nodes.get("a"); };
     return [sim, resolve];
   }
 
@@ -120,7 +120,7 @@ describe("Simulation: config cascade", () => {
     sim.sync();
     g.removeNode("n1");
     sim.sync();
-    assert.equal(sim._overrides.has("n1"), false, "a stale override would reapply if n1 returns");
+    assert.equal(sim._nodeOverrides.has("n1"), false, "a stale override would reapply if n1 returns");
   });
 });
 
@@ -139,21 +139,21 @@ describe("Simulation: validation", () => {
   });
 
   test("non-finite params fall back to defaults", () => {
-    assert.equal(resolved({ mass: NaN }).mass, 1);
-    assert.equal(resolved({ radius: undefined }).radius, 20);
-    assert.equal(resolved({ radius: () => "big" }).radius, 20);
+    assert.equal(resolved({ mass: NaN }).mass, SIM_NODE_DEFAULTS.mass);
+    assert.equal(resolved({ radius: undefined }).radius, SIM_NODE_DEFAULTS.radius);
+    assert.equal(resolved({ radius: () => "big" }).radius, SIM_NODE_DEFAULTS.radius);
   });
 
   test("radius cannot go negative", () => {
     assert.equal(resolved({ radius: -5 }).radius, 0);
   });
 
-  test("charge defaults to 1, cannot go negative, and falls back when non-finite", () => {
-    assert.equal(resolved({}).charge, 1);
+  test("charge has a default, cannot go negative, and falls back when non-finite", () => {
+    assert.equal(resolved({}).charge, SIM_NODE_DEFAULTS.charge);
     assert.equal(resolved({ charge: 0 }).charge, 0);
     assert.equal(resolved({ charge: -2 }).charge, 0);
-    assert.equal(resolved({ charge: NaN }).charge, 1);
-    assert.equal(resolved({ charge: () => "lots" }).charge, 1);
+    assert.equal(resolved({ charge: NaN }).charge, SIM_NODE_DEFAULTS.charge);
+    assert.equal(resolved({ charge: () => "lots" }).charge, SIM_NODE_DEFAULTS.charge);
   });
 
   test("fixed is coerced to a real boolean", () => {
@@ -525,8 +525,10 @@ describe("Simulation: temperature", () => {
 
     test("a config change that resolves to the same values does not", () => {
       const sim = frozen();
-      sim.setDefaultNodeConfig({ radius: 20, mass: 1, fixed: false });
-      sim.setNodeConfig("n0", { radius: 20 });
+      sim.setDefaultNodeConfig({
+        radius: SIM_NODE_DEFAULTS.radius, mass: SIM_NODE_DEFAULTS.mass, fixed: SIM_NODE_DEFAULTS.fixed,
+      });
+      sim.setNodeConfig("n0", { radius: SIM_NODE_DEFAULTS.radius });
       assert.equal(sim.sync(), true, "config was re-resolved");
       assert.equal(sim.temp, 0);
     });
@@ -565,7 +567,7 @@ describe("Simulation: temperature", () => {
       sim.heat(0);
       sim.clearNodeConfig("n0");
       sim.sync();
-      assert.equal(sim.nodes.get("n0").mass, 1);
+      assert.equal(sim.nodes.get("n0").mass, SIM_NODE_DEFAULTS.mass);
       assert.equal(sim.temp, 1);
     });
   });
@@ -597,7 +599,7 @@ describe("Simulation: temperature", () => {
       sim.heat(0);
       sim.unpin("n0");
       sim.sync();
-      assert.equal(sim.nodes.get("n0").fixed, false);
+      assert.equal(sim.nodes.get("n0").fixed, SIM_NODE_DEFAULTS.fixed);
       assert.equal(sim.temp, 1);
     });
 
@@ -700,7 +702,7 @@ describe("Simulation: Barnes-Hut", () => {
     });
 
     test("turning it on after construction still applies repulsion and collisions", () => {
-      const sim = grid(2, { useBarnesHut: false, gravity: 0, springStiffness: 0 });
+      const sim = grid(2, { useBarnesHut: false, gravity: 0, edgeConfig: { stiffness: 0 } });
       const [a, b] = sim.nodeList;
       a.x = 0; a.y = 0; b.x = 10; b.y = 0;
 
@@ -854,7 +856,7 @@ describe("Simulation: Barnes-Hut", () => {
       });
 
       test("a pinned node holds still through a crowded run", () => {
-        const sim = grid(40, { collision, springLength: 0, gravity: 0.05 });
+        const sim = grid(40, { collision, edgeConfig: { length: 0 }, gravity: 0.05 });
         sim.pin("n0", 100, 100);
         for (let t = 0; t < 60; t++) {
           sim.tick();
@@ -930,7 +932,7 @@ describe("Simulation: Barnes-Hut", () => {
         return d;
       };
       const settled = collision => {
-        const sim = grid(60, { collision, springLength: 0, gravity: 0.05, repulsion: 0 });
+        const sim = grid(60, { collision, edgeConfig: { length: 0 }, gravity: 0.05, repulsion: 0 });
         sim.setDefaultNodeConfig({ radius: n => (n.id === "n7" ? 90 : 15) });
         while (sim.temp > 0) sim.tick();
         return depth(sim);
@@ -1036,5 +1038,194 @@ describe("Simulation: Barnes-Hut", () => {
     g.addEdge("a", "b");
     for (let t = 0; t < 5; t++) sim.tick();
     for (const r of sim.nodeList) assert.ok(Number.isFinite(r.x) && Number.isFinite(r.y));
+  });
+});
+
+describe("Simulation: edge config", () => {
+  function edgeSim({ directed = false, edges = [["a", "b"]], opts = {} } = {}) {
+    const g = new Graph({ directed });
+    for (const id of ["a", "b", "c"]) g.addNode({ id });
+    for (const [s, d, data] of edges) g.addEdge(s, d, data);
+    const sim = new Simulation(g, opts);
+    return [g, sim];
+  }
+
+  /** [length, stiffness] of the spring between two nodes, synced first */
+  function spring(sim, a, b) {
+    sim.sync();
+    const i = sim.nodeIndex.get(a), j = sim.nodeIndex.get(b), s = sim.springs;
+    for (let k = 0; k < s.length; k += 2) {
+      if ((s[k] === i && s[k + 1] === j) || (s[k] === j && s[k + 1] === i))
+        return [sim.springLength[k / 2], sim.springStiffness[k / 2]];
+    }
+    return null;
+  }
+
+  test("springs use the global default length and stiffness", () => {
+    const [, sim] = edgeSim();
+    assert.deepEqual(spring(sim, "a", "b"), [SIM_EDGE_DEFAULTS.length, SIM_EDGE_DEFAULTS.stiffness]);
+    assert.deepEqual(sim.defaultEdgeConfig, SIM_EDGE_DEFAULTS);
+  });
+
+  test("spring settings are no longer simulation opts", () => {
+    const [, sim] = edgeSim();
+    assert.equal("springLength" in sim.opts, false);
+    assert.equal("springStiffness" in sim.opts, false);
+  });
+
+  test("edgeConfig is accepted by the constructor and setOpts", () => {
+    const [, sim] = edgeSim({ opts: { edgeConfig: { length: 80 } } });
+    assert.deepEqual(spring(sim, "a", "b"), [80, SIM_EDGE_DEFAULTS.stiffness]);
+    sim.setOpts({ edgeConfig: { stiffness: 0.4 } });
+    assert.deepEqual(spring(sim, "a", "b"), [80, 0.4], "defaults merge across calls");
+  });
+
+  test("function defaults read the edge, and setEdgeData re-resolves them", () => {
+    const [g, sim] = edgeSim({ edges: [["a", "b", { d: 120 }]] });
+    sim.setDefaultEdgeConfig({ length: e => e.data.d });
+    assert.equal(spring(sim, "a", "b")[0], 120);
+    g.setEdgeData("a", "b", { d: 30 });
+    assert.equal(spring(sim, "a", "b")[0], 30);
+  });
+
+  test("function defaults re-resolve after structural changes", () => {
+    const [g, sim] = edgeSim();
+    sim.setDefaultEdgeConfig({ length: (e, graph) => 10 * graph.degree(e.src.id) });
+    assert.equal(spring(sim, "a", "b")[0], 10);
+    g.addEdge("a", "c");
+    assert.equal(spring(sim, "a", "b")[0], 20);
+  });
+
+  test("overrides win, merge, revert per field, and keep falsy values", () => {
+    const [, sim] = edgeSim();
+    sim.setDefaultEdgeConfig({ length: 70 });
+    sim.setEdgeConfig("a", "b", { length: 200 });
+    sim.setEdgeConfig("a", "b", { stiffness: 0 });
+    assert.deepEqual(spring(sim, "a", "b"), [200, 0], "a 0 override must not fall through");
+    sim.setEdgeConfig("a", "b", { length: undefined });
+    assert.deepEqual(spring(sim, "a", "b"), [70, 0]);
+  });
+
+  test("function-valued overrides are supported", () => {
+    const [, sim] = edgeSim({ edges: [["a", "b", { d: 9 }]] });
+    sim.setEdgeConfig("a", "b", { length: e => e.data.d * 10 });
+    assert.equal(spring(sim, "a", "b")[0], 90);
+  });
+
+  test("clearEdgeConfig drops every override for that edge", () => {
+    const [, sim] = edgeSim();
+    sim.setEdgeConfig("a", "b", { length: 200, stiffness: 0.9 });
+    sim.clearEdgeConfig("a", "b");
+    assert.deepEqual(spring(sim, "a", "b"), [SIM_EDGE_DEFAULTS.length, SIM_EDGE_DEFAULTS.stiffness]);
+    assert.doesNotThrow(() => sim.clearEdgeConfig("a", "nope"));
+  });
+
+  test("setEdgeConfig throws for a missing edge", () => {
+    const [, sim] = edgeSim({ directed: true });
+    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: 1 }), /Simulation:/);
+    assert.throws(() => sim.setEdgeConfig("b", "a", { length: 1 }), /Simulation:/,
+      "direction matters in a directed graph");
+  });
+
+  test("setEdgeConfig accepts either id order in an undirected graph", () => {
+    const [, sim] = edgeSim();
+    sim.setEdgeConfig("b", "a", { length: 123 });
+    assert.equal(spring(sim, "a", "b")[0], 123);
+  });
+
+  test("negative values clamp to 0 and non-finite values use the global default", () => {
+    const [, sim] = edgeSim();
+    sim.setDefaultEdgeConfig({ length: 99, stiffness: 0.5 });
+    sim.setEdgeConfig("a", "b", { length: -5, stiffness: NaN });
+    assert.deepEqual(spring(sim, "a", "b"), [0, SIM_EDGE_DEFAULTS.stiffness]);
+  });
+
+  test("changing a resolved value reheats; a no-op change does not", () => {
+    const [, sim] = edgeSim();
+    sim.sync();
+    sim.heat(0);
+    sim.setEdgeConfig("a", "b", { length: SIM_EDGE_DEFAULTS.length }).sync();
+    assert.equal(sim.temp, 0, "same resolved value should not wake the layout");
+    sim.setEdgeConfig("a", "b", { length: 90 }).sync();
+    assert.equal(sim.temp, 1);
+  });
+
+  test("a directed reciprocal pair shares one spring combining both edges", () => {
+    const [, sim] = edgeSim({ directed: true, edges: [["a", "b"], ["b", "a"]] });
+    assert.equal(sim.springs.length, 2, "one spring for the pair");
+    assert.deepEqual(spring(sim, "a", "b"), [SIM_EDGE_DEFAULTS.length, SIM_EDGE_DEFAULTS.stiffness], "identical twins match a single edge");
+
+    sim.setEdgeConfig("a", "b", { length: 100, stiffness: 0.1 });
+    sim.setEdgeConfig("b", "a", { length: 40, stiffness: 0.3 });
+    const [len, k] = spring(sim, "a", "b");
+    assert.ok(Math.abs(k - 0.2) < 1e-12, "stiffness is averaged");
+    assert.ok(Math.abs(len - 55) < 1e-9, "length is weighted by stiffness");
+  });
+
+  test("a reciprocal pair with zero stiffness averages lengths", () => {
+    const [, sim] = edgeSim({ directed: true, edges: [["a", "b"], ["b", "a"]] });
+    sim.setDefaultEdgeConfig({ stiffness: 0 });
+    sim.setEdgeConfig("a", "b", { length: 100 });
+    assert.deepEqual(spring(sim, "a", "b"), [75, 0]);
+  });
+
+  test("overrides are pruned when the edge is removed", () => {
+    const [g, sim] = edgeSim();
+    sim.setEdgeConfig("a", "b", { length: 200 }).sync();
+    g.removeEdge("a", "b");
+    sim.sync();
+    assert.equal(sim._edgeOverrides.size, 0);
+    g.addEdge("a", "b");
+    assert.equal(spring(sim, "a", "b")[0], SIM_EDGE_DEFAULTS.length, "a re-added edge must not inherit old overrides");
+  });
+
+  describe("getEdgeSpring", () => {
+    test("returns the resolved settings in either id order when undirected", () => {
+      const [, sim] = edgeSim();
+      sim.setEdgeConfig("a", "b", { length: 120 });
+      assert.deepEqual(sim.getEdgeSpring("a", "b"), { length: 120, stiffness: SIM_EDGE_DEFAULTS.stiffness });
+      assert.deepEqual(sim.getEdgeSpring("b", "a"), { length: 120, stiffness: SIM_EDGE_DEFAULTS.stiffness });
+    });
+
+    test("reflects config changes before the next sync", () => {
+      const [, sim] = edgeSim();
+      sim.sync();
+      sim.setDefaultEdgeConfig({ stiffness: 0.7 });
+      assert.equal(sim.getEdgeSpring("a", "b").stiffness, 0.7);
+    });
+
+    test("is null for a missing edge or a self-loop", () => {
+      const [, sim] = edgeSim({ directed: true, edges: [["a", "b"], ["c", "c"]] });
+      assert.equal(sim.getEdgeSpring("b", "a"), null, "direction matters in a directed graph");
+      assert.equal(sim.getEdgeSpring("a", "nope"), null);
+      assert.equal(sim.getEdgeSpring("c", "c"), null);
+    });
+
+    test("a one-way directed edge returns its own settings", () => {
+      const [, sim] = edgeSim({ directed: true });
+      sim.setEdgeConfig("a", "b", { length: 90, stiffness: 0.3 });
+      assert.deepEqual(sim.getEdgeSpring("a", "b"), { length: 90, stiffness: 0.3 });
+    });
+
+    test("both edges of a reciprocal pair return the packed shared spring", () => {
+      const [, sim] = edgeSim({ directed: true, edges: [["a", "b"], ["b", "a"]] });
+      sim.setEdgeConfig("a", "b", { length: 100, stiffness: 0.1 });
+      sim.setEdgeConfig("b", "a", { length: 40, stiffness: 0.3 });
+      const [len, k] = spring(sim, "a", "b");
+      assert.deepEqual(sim.getEdgeSpring("a", "b"), { length: len, stiffness: k });
+      assert.deepEqual(sim.getEdgeSpring("b", "a"), { length: len, stiffness: k });
+    });
+  });
+
+  test("springs settle near their configured length", () => {
+    const g = new Graph();
+    g.addNode({ id: "a" }); g.addNode({ id: "b" });
+    g.addEdge("a", "b");
+    const sim = new Simulation(g, { gravity: 0, repulsion: 0, edgeConfig: { length: 200 } });
+    const [a, b] = sim.nodeList;
+    a.x = 0; a.y = 0; b.x = 10; b.y = 0;
+    while (sim.temp > 0) sim.tick();
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    assert.ok(Math.abs(d - 200) < 5, `settled at ${d}`);
   });
 });

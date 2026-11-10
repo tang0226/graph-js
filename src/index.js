@@ -28,6 +28,8 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/simulation.js").CollisionMethod} CollisionMethod */
 /** @typedef {import("./typedefs/simulation.js").SimNode} SimNode */
 /** @typedef {import("./typedefs/simulation.js").SimNodeConfig} SimNodeConfig */
+/** @typedef {import("./typedefs/simulation.js").SimEdge} SimEdge */
+/** @typedef {import("./typedefs/simulation.js").SimEdgeConfig} SimEdgeConfig */
 /** @typedef {import("./typedefs/simulation.js").BarnesHutOpts} BarnesHutOpts */
 /** @typedef {import("./typedefs/simulation.js").BarnesHutOptsInput} BarnesHutOptsInput */
 

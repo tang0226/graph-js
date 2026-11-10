@@ -446,14 +446,13 @@ function applySimConfig() {
   gjs.simulation.setOpts({
     friction:        ui.friction,
     repulsion:       ui.repulsion,
-    springStiffness: ui.springStiffness,
-    springLength:    ui.springLength,
     gravity:         ui.gravity,
     cooling:         ui.cooling,
     maxSpeed:        ui.maxSpeed,
     dt:              ui.dt,
     useBarnesHut:    ui.useBarnesHut,
     barnesHut:       { theta: ui.theta, maxDepth: ui.maxDepth },
+    edgeConfig:      { length: ui.springLength, stiffness: ui.springStiffness },
   });
   $("theta").disabled = $("maxDepth").disabled = !ui.useBarnesHut;
 }

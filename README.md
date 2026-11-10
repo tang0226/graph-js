@@ -43,8 +43,6 @@ const gjs = new GraphJS({
   simulation: {                     // the following are the same as the default values
     friction: 0.9,                  // fraction of velocity kept each tick
     repulsion: 1000,                // how strongly nodes push apart
-    springLength: 50,               // resting length of edges
-    springStiffness: 0.15,          // how strongly edges hold their resting length
     gravity: 0.002,                 // pull toward the center
     minDistSq: 100,                 // squared distance below which repulsion stops growing
     maxSpeed: 100,                  // speed limit per tick
@@ -55,6 +53,7 @@ const gjs = new GraphJS({
     barnesHut: { theta: 0.9, maxDepth: 20, capacity: 1024 },  // tuning for Barnes-Hut
     collision: "grid",              // how overlapping nodes are found (see "Collisions")
     nodeConfig: { radius: 20 },     // default physical settings for nodes
+    edgeConfig: { length: 50, stiffness: 0.015 },  // default spring settings for edges
   },
 
   renderer: {                       // the following are the same as the default values
@@ -90,7 +89,7 @@ gjs.simulation.setOpts({ repulsion: 2000, gravity: 0.005 });  // also wakes the 
 gjs.renderer.setOpts({ background: "#15171c", renderEdges: false });
 ```
 
-`setOpts()` also accepts `nodeConfig` (and `edgeConfig` on the renderer), which are passed on to `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. The `opts` objects themselves are read-only: assigning to `gjs.simulation.opts.repulsion` directly won't wake a settled layout.
+`setOpts()` also accepts `nodeConfig` and `edgeConfig`, which are passed on to `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. The `opts` objects themselves are read-only: assigning to `gjs.simulation.opts.repulsion` directly won't wake a settled layout.
 
 ### Attaching a canvas
 
@@ -140,6 +139,10 @@ gjs.simulation.setDefaultNodeConfig({
   mass: 1,
 });
 
+gjs.simulation.setDefaultEdgeConfig({
+  length: edge => edge.data.distance ?? 50,             // resting length per edge
+});
+
 // Style settings belong to the renderer.
 gjs.renderer.setDefaultNodeConfig({
   color: node => (node.data.group === 1 ? "#e06c75" : "#61afef"),
@@ -161,6 +164,8 @@ All the available settings:
 | | `mass` | `1` | heavier nodes are pushed around less |
 | | `charge` | `1` | how strongly the node repels and is repelled; `0` for neither (see below) |
 | | `fixed` | `false` | `true` holds the node in place |
+| Simulation (edges) | `length` | `50` | resting length of the edge |
+| | `stiffness` | `0.015` | how strongly the edge holds its length; `0` for a loose edge |
 | Renderer (nodes) | `color` | `"#ffffff"` | fill color |
 | | `outlineColor` | `"#000000"` | |
 | | `outlineWidth` | `1` | in simulation units; `0` for no outline |
@@ -196,11 +201,16 @@ gjs.renderer.setNodeConfig("alice", { color: "gold", outlineWidth: 4 });
 gjs.simulation.setNodeConfig("alice", { mass: 5 });
 
 gjs.renderer.setEdgeConfig("alice", "bob", { color: "red" });
+gjs.simulation.setEdgeConfig("alice", "bob", { length: 120, stiffness: 0.5 });
 
 gjs.renderer.clearNodeConfig("alice");   // reset to defaults
 ```
 
 Setting config properties merges them with previously set config. `setEdgeConfig` throws when the edge doesn't exist (in a directed graph, node id order matters).
+
+In a directed graph, a pair of opposite edges (`"a"` to `"b"` and `"b"` to `"a"`) pulls on its nodes through a single spring. Its stiffness is the average of the two edges' stiffnesses, and its length is the average of their lengths, weighted by stiffness.
+
+To read the spring settings an edge ends up with, use `gjs.simulation.getEdgeSpring(srcId, destId)`. It returns `{ length, stiffness }` (the combined settings for a pair of opposite directed edges), or `null` if the edge doesn't exist or connects a node to itself.
 
 ### Node images
 

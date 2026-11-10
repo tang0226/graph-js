@@ -6,6 +6,8 @@
  * @import {
  *  SimNode, SimNodeConfig, SimNodeAccessors,
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
+ *  SimEdge, SimEdgeConfig, SimEdgeAccessors,
+ *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
  *  SimOpts, SimOptsInput,
  * } from './typedefs/simulation.js'
  */
@@ -16,17 +18,30 @@ import { CollisionGrid } from "./collision-grid.js";
 
 
 /** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
-const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
+export const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
 
 /**
  * @param {ResolvedSimNodeConfig} config
  * @returns {ResolvedSimNodeAccessors}
  */
-const toAccessors = config => ({
+const toNodeAccessors = config => ({
   mass: asFn(config.mass),
   radius: asFn(config.radius),
   charge: asFn(config.charge),
   fixed: asFn(config.fixed),
+});
+
+
+/** @type {{ length: number, stiffness: number }} */
+export const SIM_EDGE_DEFAULTS = { length: 50, stiffness: 0.015 };
+
+/**
+ * @param {ResolvedSimEdgeConfig} config
+ * @returns {ResolvedSimEdgeAccessors}
+ */
+const toEdgeAccessors = config => ({
+  length: asFn(config.length),
+  stiffness: asFn(config.stiffness),
 });
 
 
@@ -157,6 +172,36 @@ export class Simulation {
    */
   get springs() { return this._springs; }
 
+
+  /**
+   * Edge indices (into `edgeList`) behind each spring, two slots per spring:
+   * the spring's edge, and its reverse twin in a directed graph (or -1).
+   * Recreated in effective `sync()` calls.
+   * @type {Int32Array}
+   * @private
+   */
+  _springEdges = new Int32Array(0);
+
+
+  /** @private @type {Float64Array} */
+  _springLength = new Float64Array(0);
+  /**
+   * Cached resolved resting length of each spring, parallel to the pairs in
+   * `springs`. Updated in effective `sync()` calls.
+   * @returns {Readonly<Float64Array>}
+   */
+  get springLength() { return this._springLength; }
+
+
+  /** @private @type {Float64Array} */
+  _springStiffness = new Float64Array(0);
+  /**
+   * Cached resolved stiffness of each spring, parallel to the pairs in
+   * `springs`. Updated in effective `sync()` calls.
+   * @returns {Readonly<Float64Array>}
+   */
+  get springStiffness() { return this._springStiffness; }
+
   
   /** @private @type {Int32Array} */
   _edgePairs = new Int32Array(0);
@@ -189,13 +234,13 @@ export class Simulation {
 
 
   /**
-   * Node-specific config overrides.
+   * Node-specific config overrides, keyed by node id.
    * Node props specified here get first priority over the simulation's current
-   * default config and the global default config.
+   * default node config and the global default node config.
    * @type {Map<NodeId, SimNodeAccessors>}
    * @private
    */
-  _overrides = new Map();
+  _nodeOverrides = new Map();
 
 
   /** @private @type {ResolvedSimNodeConfig} */
@@ -211,11 +256,11 @@ export class Simulation {
 
   /**
    * `defaultNodeConfig` as cached functions. Used to apply the simulation's
-   * default config when resolving a `SimNode`'s raw configuration.
+   * default node config when resolving a `SimNode`'s raw configuration.
    * @type {ResolvedSimNodeAccessors}
    * @private
    */
-  _accessors = toAccessors(SIM_NODE_DEFAULTS);
+  _nodeAccessors = toNodeAccessors(SIM_NODE_DEFAULTS);
 
 
   /**
@@ -223,7 +268,45 @@ export class Simulation {
    * Set back to `false` once those changes are applied in `sync()`.
    * @private
    * @type {boolean} */
-  _configDirty = false;
+  _nodeConfigDirty = false;
+
+
+  /**
+   * Edge-specific config overrides, keyed by edge object.
+   * Edge props specified here get first priority over the simulation's current
+   * default edge config and the global default edge config.
+   * @type {Map<GraphEdge, SimEdgeAccessors>}
+   * @private
+   */
+  _edgeOverrides = new Map();
+
+
+  /** @private @type {ResolvedSimEdgeConfig} */
+  _defaultEdgeConfig = {...SIM_EDGE_DEFAULTS};
+  /**
+   * [read-only, set with `setDefaultEdgeConfig()` or `setOpts()`]
+   * Current default edge config. Takes precedence over the global default
+   * config, but can be overridden for specific edges using `setEdgeConfig()`.
+   * @returns {Readonly<ResolvedSimEdgeConfig>}
+   */
+  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
+
+
+  /**
+   * `defaultEdgeConfig` as cached functions. Used to apply the simulation's
+   * default edge config when resolving an edge's spring settings.
+   * @type {ResolvedSimEdgeAccessors}
+   * @private
+   */
+  _edgeAccessors = toEdgeAccessors(SIM_EDGE_DEFAULTS);
+
+
+  /**
+   * Set to `true` whenever any edge config (default or override) is changed.
+   * Set back to `false` once those changes are applied in `sync()`.
+   * @private
+   * @type {boolean} */
+  _edgeConfigDirty = false;
 
 
   /** @private @type {number} */
@@ -292,8 +375,6 @@ export class Simulation {
       friction:        opts.friction ?? 0.9,
       gravity:         opts.gravity ?? 0.002,
       repulsion:       opts.repulsion ?? 1000,
-      springStiffness: opts.springStiffness ?? 0.15,
-      springLength:    opts.springLength ?? 50,
       minDistSq:       opts.minDistSq ?? 100,
       maxSpeed:        opts.maxSpeed ?? 100,
       dt:              opts.dt ?? 1,
@@ -304,6 +385,7 @@ export class Simulation {
     };
 
     this.setDefaultNodeConfig(opts.nodeConfig ?? {});
+    this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
     this._barnesHutCtx = new BarnesHutContext(opts.barnesHut ?? {});
     this.sync();
   }
@@ -314,9 +396,10 @@ export class Simulation {
    * @param {SimOptsInput} [optsInput={}] - options to set
    * @returns {this} self reference
    */
-  setOpts({nodeConfig, barnesHut, ...opts} = {}) {
+  setOpts({nodeConfig, edgeConfig, barnesHut, ...opts} = {}) {
     Object.assign(this._opts, opts);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
+    if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
     if (barnesHut) this._barnesHutCtx.setOpts(barnesHut);
     this.heat();
     return this;
@@ -348,8 +431,8 @@ export class Simulation {
       ...this._defaultNodeConfig,
       ...config
     };
-    this._accessors = toAccessors(this._defaultNodeConfig);
-    this._configDirty = true;
+    this._nodeAccessors = toNodeAccessors(this._defaultNodeConfig);
+    this._nodeConfigDirty = true;
     return this;
   }
 
@@ -362,14 +445,14 @@ export class Simulation {
    */
   setNodeConfig(id, config = {}) {
     /** @type {Record<string, any>} */
-    const merged = { ...this._overrides.get(id), ...config };
+    const merged = { ...this._nodeOverrides.get(id), ...config };
     for (const k in merged) merged[k] = asFn(merged[k]);
-    this._overrides.set(
+    this._nodeOverrides.set(
       id,
       /** @type {SimNodeAccessors} */
       merged,
     );
-    this._configDirty = true;
+    this._nodeConfigDirty = true;
     return this;
   }
 
@@ -380,8 +463,66 @@ export class Simulation {
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
-    this._overrides.delete(id);
-    this._configDirty = true;
+    this._nodeOverrides.delete(id);
+    this._nodeConfigDirty = true;
+    return this;
+  }
+
+
+  /**
+   * Sets the default spring settings for all edges.
+   * `sync()` will update all edges with the new defaults, except for
+   * specific overrides
+   * @param {SimEdgeConfig} config
+   * @returns {this} self reference
+   */
+  setDefaultEdgeConfig(config = {}) {
+    this._defaultEdgeConfig = {
+      ...SIM_EDGE_DEFAULTS,
+      ...this._defaultEdgeConfig,
+      ...config
+    };
+    this._edgeAccessors = toEdgeAccessors(this._defaultEdgeConfig);
+    this._edgeConfigDirty = true;
+    return this;
+  }
+
+
+  /**
+   * Merges new config data into the current overrides of a specific edge
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
+   * @param {SimEdgeConfig} [config] - edge config
+   * @returns {this} self reference
+   * @throws {Error} throws if edge not found
+   */
+  setEdgeConfig(srcId, destId, config = {}) {
+    const gEdge = this._graph.getEdge(srcId, destId);
+    if (!gEdge) throw new Error(`Simulation: no edge from "${srcId}" to "${destId}"`);
+    /** @type {Record<string, any>} */
+    const merged = { ...this._edgeOverrides.get(gEdge), ...config };
+    for (const k in merged) merged[k] = asFn(merged[k]);
+    this._edgeOverrides.set(
+      gEdge,
+      /** @type {SimEdgeAccessors} */
+      merged,
+    );
+    this._edgeConfigDirty = true;
+    return this;
+  }
+
+
+  /**
+   * Clears all config overrides for a specific edge
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
+   * @returns {this} self reference
+   */
+  clearEdgeConfig(srcId, destId) {
+    const gEdge = this._graph.getEdge(srcId, destId);
+    if (!gEdge) return this;
+    this._edgeOverrides.delete(gEdge);
+    this._edgeConfigDirty = true;
     return this;
   }
 
@@ -393,10 +534,10 @@ export class Simulation {
    * @returns {boolean} whether resolved physical values changed
    * @private
    */
-  _resolve(gNode, sNode) {
-    const acc = this._accessors,
+  _resolveNode(gNode, sNode) {
+    const acc = this._nodeAccessors,
           g = this._graph,
-          o = this._overrides.get(gNode.id);
+          o = this._nodeOverrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
     const charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
@@ -417,21 +558,101 @@ export class Simulation {
 
 
   /**
-   * Creates a sim-node object based on the given graph node
+   * Resolves an edge's spring settings from its overrides and the defaults.
+   * @param {GraphEdge} gEdge - graph edge
+   * @returns {[number, number]} resolved `[length, stiffness]`
+   * @private
+   */
+  _resolveEdge(gEdge) {
+    const acc = this._edgeAccessors,
+          g = this._graph,
+          o = this._edgeOverrides.get(gEdge);
+    const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
+    const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
+    return [
+      Number.isFinite(length)    ? Math.max(length, 0)    : SIM_EDGE_DEFAULTS.length,
+      Number.isFinite(stiffness) ? Math.max(stiffness, 0) : SIM_EDGE_DEFAULTS.stiffness,
+    ];
+  }
+
+
+  /**
+   * Resolves every sim-node's config, and copies node radii, charges, and
+   * fixed flags into their typed arrays.
+   * @returns {boolean} whether any resolved value changed
+   * @private
+   */
+  _packNodeConfig() {
+    const list = this._nodeList, gNodes = this._graph.nodes;
+    let changed = false;
+    for (let i = 0; i < list.length; i++) {
+      const sNode = list[i];
+      const gNode = /** @type {GraphNode} */ (gNodes.get(sNode.id));
+      if (this._resolveNode(gNode, sNode)) changed = true;
+      this._nodeRadius[i] = sNode.radius;
+      this._nodeCharge[i] = sNode.charge;
+      this._nodeFixed[i] = sNode.fixed ? 1 : 0;
+    }
+    this._nodeConfigDirty = false;
+    return changed;
+  }
+
+
+  /**
+   * Resolves the settings of the spring behind an edge. A spring shared by a
+   * directed edge and its reverse twin acts as both edges' springs at half
+   * strength: their stiffnesses are averaged, and their lengths averaged
+   * weighted by stiffness.
+   * @param {GraphEdge} gEdge - graph edge
+   * @param {GraphEdge} [twin] - the edge's reverse twin, if it has one
+   * @returns {[number, number]} resolved `[length, stiffness]`
+   * @private
+   */
+  _resolveSpring(gEdge, twin) {
+    const [len, k] = this._resolveEdge(gEdge);
+    if (!twin) return [len, k];
+    const [len2, k2] = this._resolveEdge(twin);
+    const kSum = k + k2;
+    return [kSum > 0 ? (k * len + k2 * len2) / kSum : (len + len2) / 2, kSum / 2];
+  }
+
+
+  /**
+   * Resolves every spring's length and stiffness into `_springLength` and
+   * `_springStiffness`.
+   * @returns {boolean} whether any resolved value changed
+   * @private
+   */
+  _packEdgeConfig() {
+    const edges = this._edgeList, se = this._springEdges;
+    const lens = this._springLength, ks = this._springStiffness;
+    let changed = false;
+    for (let s = 0; s < lens.length; s++) {
+      const twin = se[2 * s + 1];
+      const [len, k] = this._resolveSpring(
+        edges[se[2 * s]], twin >= 0 ? edges[twin] : undefined);
+      if (lens[s] !== len || ks[s] !== k) changed = true;
+      lens[s] = len; ks[s] = k;
+    }
+    this._edgeConfigDirty = false;
+    return changed;
+  }
+
+
+  /**
+   * Creates a sim-node object based on the given graph node. Its config
+   * starts at the global defaults, and is resolved by `_packNodeConfig()`.
    * @param {GraphNode} gNode - graph node to seed sim-node from
    * @returns {SimNode} resulting sim-node
    * @private
    */
   _seedNode(gNode) {
-    const pos = this._seedPos(gNode);
-    const sNode = {
+    return {
       id: gNode.id,
       ...SIM_NODE_DEFAULTS,
-      ...pos,
+      ...this._seedPos(gNode),
       fx: 0, fy: 0,
     };
-    this._resolve(gNode, sNode);
-    return sNode;
   }
 
 
@@ -465,40 +686,49 @@ export class Simulation {
   // Update physics tables to match graph
   /**
    * Updates internal node and edge storage to match the shape of `this.graph`.
-   * Also resolves node configs to apply new overrides or defaults.
+   * Also resolves node and edge configs to apply new overrides or defaults.
    * Gates on config changes, graph data changes, and graph shape changes.
-   * @returns {boolean} whether graph shape or node configs were updated
+   * Reheats on shape changes, and on config changes that alter resolved values.
+   * @returns {boolean} whether graph shape or node or edge configs were updated
    */
   sync() {
     if (this._syncedGraphDataVersion !== this._graph.dataVersion) {
-      this._configDirty = true;
+      this._nodeConfigDirty = true;
+      this._edgeConfigDirty = true;
       this._syncedGraphDataVersion = this._graph.dataVersion;
     }
-    if (this._syncedGraphVersion === this._graph.version && !this._configDirty)
+    const structural = this._syncedGraphVersion !== this._graph.version;
+    if (!structural && !this._nodeConfigDirty && !this._edgeConfigDirty)
       return false;
 
-    // Update and add nodes
-    let changed = false;
+    if (structural) this._syncStructure();
+
+    const nodesChanged = this._nodeConfigDirty && this._packNodeConfig();
+    const edgesChanged = this._edgeConfigDirty && this._packEdgeConfig();
+    if (structural || nodesChanged || edgesChanged) this.heat();
+    return true;
+  }
+
+
+  /**
+   * Rebuilds node, edge, and spring tables to match the shape of `this.graph`,
+   * seeding new sim-nodes and pruning the overrides of removed nodes and edges.
+   * Marks node and edge config dirty, since new slots need resolving and
+   * accessors may depend on graph shape.
+   * @returns {void}
+   * @private
+   */
+  _syncStructure() {
+    // Add new nodes
     for (const [id, gNode] of this._graph.nodes) {
-      const sNode = this._nodes.get(id);
-      if (sNode) changed = this._resolve(gNode, sNode) || changed;
-      else { this._nodes.set(id, this._seedNode(gNode)); changed = true; }
-    }
-    this._configDirty = false;
-    if (changed) this.heat();
-
-    if (this._syncedGraphVersion === this._graph.version) {
-      if (changed) this._packNodeConfig();
-      return true;
+      if (!this._nodes.has(id)) this._nodes.set(id, this._seedNode(gNode));
     }
 
-    this.heat(); // Structural change
-
-    // Delete old nodes
+    // Delete old nodes and their overrides
     for (const id of this._nodes.keys()) {
       if (!this._graph.nodes.has(id)) {
         this._nodes.delete(id);
-        this._overrides.delete(id);
+        this._nodeOverrides.delete(id);
       }
     }
 
@@ -521,38 +751,50 @@ export class Simulation {
       this._nodeFx = new Float64Array(nodeCount);
       this._nodeFy = new Float64Array(nodeCount);
     }
-    this._packNodeConfig();
 
-    const pairs = [], springs = [], n = this._nodes.size;
+    // Delete overrides of old edges
+    for (const gEdge of this._edgeOverrides.keys()) {
+      if (!this._graph.edges.has(gEdge)) this._edgeOverrides.delete(gEdge);
+    }
+
+    const pairs = [], springs = [], springEdges = [], n = this._nodes.size;
     this._edgeList = [], this._edgeIndex = new Map();
-    const seen = this._graph.directed ? new Set() : null;
+    /** @type {Map<number, number> | null} spring index by node pair key */
+    const seen = this._graph.directed ? new Map() : null;
 
     for (const edge of this._graph.edges) {
       const i = this._nodeIndex.get(edge.src.id);
       const j = this._nodeIndex.get(edge.dest.id);
       if (i === undefined || j === undefined) continue;
+      const e = this._edgeList.length;
       pairs.push(i, j);
-      this._edgeIndex.set(edge, this._edgeList.length);
+      this._edgeIndex.set(edge, e);
       this._edgeList.push(edge);
 
+      // Undirected: springs are edgePairs (self-loops included), one per edge
+      if (!seen) { springEdges.push(e, -1); continue; }
+
       if (i === j) continue;
-      if (seen) {
-        const key = i < j ? i * n + j : j * n + i;
-        if (seen.has(key)) continue;
-        seen.add(key);
-      }
+      const key = i < j ? i * n + j : j * n + i;
+      const s = seen.get(key);
+      if (s !== undefined) { springEdges[2 * s + 1] = e; continue; } // reverse twin
+      seen.set(key, springs.length / 2);
       springs.push(i, j);
+      springEdges.push(e, -1);
     }
 
     this._edgePairs = Int32Array.from(pairs);
     this._springs   = this._graph.directed ?
       Int32Array.from(springs) :
       this._edgePairs;
+    this._springEdges = Int32Array.from(springEdges);
+    this._springLength = new Float64Array(this._springs.length / 2);
+    this._springStiffness = new Float64Array(this._springs.length / 2);
 
+    this._nodeConfigDirty = true;
+    this._edgeConfigDirty = true;
     this._syncedGraphVersion = this._graph.version;
     this._version++;
-
-    return true;
   }
 
 
@@ -595,11 +837,12 @@ export class Simulation {
   _applySprings() {
     const list = this._nodeList;
     const springs = this._springs;
-    for (let i = 0; i < springs.length; i += 2) {
+    const lens = this._springLength, ks = this._springStiffness;
+    for (let i = 0, k = 0; i < springs.length; i += 2, k++) {
       const n1 = list[springs[i]], n2 = list[springs[i + 1]];
       const dx = n1.x - n2.x, dy = n1.y - n2.y;
       const d = Math.hypot(dx, dy) || 1e-6;
-      const s = -this._opts.springStiffness * (d - this._opts.springLength) / d;
+      const s = -ks[k] * (d - lens[k]) / d;
       const fx = s * dx, fy = s * dy;
       n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
     }
@@ -697,21 +940,6 @@ export class Simulation {
     for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
   }
 
-
-  /**
-   * Copies node radii and fixed flags into their typed arrays. Called from
-   * `sync()`, since these values only change through node config.
-   * @returns {void}
-   * @private
-   */
-  _packNodeConfig() {
-    for (let i = 0; i < this._nodeList.length; i++) {
-      this._nodeRadius[i] = this._nodeList[i].radius;
-      this._nodeCharge[i] = this._nodeList[i].charge;
-      this._nodeFixed[i] = this._nodeList[i].fixed ? 1 : 0;
-    }
-  }
-
   
   /**
    * Simulates the graph's physics for one tick, after syncing graph shape and
@@ -771,6 +999,25 @@ export class Simulation {
     const node = this._nodes.get(id);
     if (node) return [node.x, node.y];
     return null;
+  }
+
+
+  /**
+   * Gets the settings of the spring acting along an edge, resolved from the
+   * current config (even before the next `sync()`). In a directed graph, an
+   * edge and its reverse share one spring, so both return the same combined
+   * settings. Self-loops have no spring.
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
+   * @returns {SimEdge | null} the spring's length and stiffness, or `null` if
+   *    the edge was not found or is a self-loop
+   */
+  getEdgeSpring(srcId, destId) {
+    const g = this._graph, gEdge = g.getEdge(srcId, destId);
+    if (!gEdge || gEdge.src === gEdge.dest) return null;
+    const twin = g.directed ? g.getEdge(destId, srcId) : undefined;
+    const [length, stiffness] = this._resolveSpring(gEdge, twin);
+    return { length, stiffness };
   }
 
 

@@ -1,6 +1,6 @@
 // SIMULATION LAYER
 // Types only. No DOM types here: the headless entry points depend on this file.
-/** @import { NodeOption, NodeAccessor } from './graph.js' */
+/** @import { NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
 
 /**
  * @typedef {object} SimOpts
@@ -10,8 +10,6 @@
  *    force proportional to distance
  * @property {number} repulsion - coefficient for inverse-square repulsion
  *    calculations
- * @property {number} springStiffness - coefficient for spring forces
- * @property {number} springLength - target length of edges/springs between nodes
  * @property {number} minDistSq - minimum distance to clamp to before applying
  *    repulsive force between two nodes (to avoid extreme velocities from the
  *    inverse-square law)
@@ -34,7 +32,13 @@
  * @typedef {"grid" | "barnesHut" | "pairs"} CollisionMethod
  */
 
-/** @typedef {Partial<SimOpts> & { nodeConfig?: SimNodeConfig, barnesHut?: BarnesHutOptsInput }} SimOptsInput */
+/**
+ * @typedef {Partial<SimOpts> & {
+ *    nodeConfig?: SimNodeConfig,
+ *    edgeConfig?: SimEdgeConfig,
+ *    barnesHut?: BarnesHutOptsInput,
+ * }} SimOptsInput
+ */
 
 /**
  * Full simulation node object. Position and velocity props can be set directly,
@@ -79,6 +83,42 @@
 /**
  * Fully populated config accessors
  * @typedef {Required<SimNodeAccessors>} ResolvedSimNodeAccessors
+ */
+
+
+/**
+ * Physical spring settings of an edge.
+ * @typedef {object} SimEdge
+ * @property {number} length - resting length of the edge's spring
+ * @property {number} stiffness - how strongly the spring holds its length
+ */
+
+/**
+ * @typedef { "length" | "stiffness" } ConfigurableSimEdgeProps
+ */
+
+/**
+ * Partial edge config specifier
+ * @typedef {{
+ *    [K in keyof Pick<SimEdge, ConfigurableSimEdgeProps>]?: EdgeOption<SimEdge[K]>
+ * }} SimEdgeConfig
+ */
+
+/**
+ * Fully populated edge config after merging with defaults.
+ * @typedef {Required<SimEdgeConfig>} ResolvedSimEdgeConfig
+ */
+
+/**
+ * Edge options collapsed into functions
+ * @typedef {{
+ *    [K in keyof Pick<SimEdge, ConfigurableSimEdgeProps>]?: EdgeAccessor<SimEdge[K]>
+ * }} SimEdgeAccessors
+ */
+
+/**
+ * Fully populated edge config accessors
+ * @typedef {Required<SimEdgeAccessors>} ResolvedSimEdgeAccessors
  */
 
 

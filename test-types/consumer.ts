@@ -13,7 +13,7 @@ import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpat
 import type {
   NodeId, NodeData, GraphNode, GraphEdge, GraphOpts,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
-  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig,
+  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
   BarnesHutOpts, BarnesHutOptsInput,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
   RendererOptsInput, RendererOpts, Size, View,
@@ -70,6 +70,16 @@ if (p) { const [x, y]: [number, number] = p; }
 // Config cascade: constants or accessors receiving the graph element
 gjs.simulation.setDefaultNodeConfig({ mass: 2, radius: n => 5 + n.data.group, fixed: false });
 gjs.simulation.setNodeConfig("b", { fixed: true });
+gjs.simulation.setDefaultEdgeConfig({ length: e => 30 + e.data.weight, stiffness: 0.3 });
+gjs.simulation.setEdgeConfig("a", "b", { stiffness: 0.5 });
+const edgeSpring = gjs.simulation.getEdgeSpring("a", "b");
+// @ts-expect-error -- possibly null
+edgeSpring.length;
+if (edgeSpring) { const { length, stiffness }: SimEdge = edgeSpring; }
+gjs.simulation.setOpts({ edgeConfig: { length: 80 } });
+const springLen: EdgeOption<number> = gjs.simulation.defaultEdgeConfig.length;
+// @ts-expect-error -- spring settings moved from opts to edgeConfig
+gjs.simulation.setOpts({ springLength: 80 });
 gjs.renderer.setDefaultNodeConfig({ color: n => (n.data.group === 1 ? "#f00" : "#0f0") });
 gjs.renderer.setDefaultEdgeConfig({ width: e => (e.src.id === "a" ? 2 : 1) });
 
@@ -122,6 +132,7 @@ const badCollision: CollisionMethod = "quadtree";
 const radius: NodeOption<number> = n => n.data.size;
 const width: EdgeOption<number> = 2;
 const nodeConfig: SimNodeConfig = { radius, fixed: false };
+const edgeConfig: SimEdgeConfig = { length: e => e.data.distance, stiffness: 0.2 };
 const style: NodeStyleConfig = { color: "red" };
 const edgeStyle: EdgeStyleConfig = { width };
 const simOpts: Readonly<SimOpts> = gjs.simulation.opts;
