@@ -81,18 +81,29 @@ export class BarnesHutContext {
   _halfSize = new Float64Array();
 
   /**
-   * Centroid x of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
+   * Charge-weighted centroid x of a cell's bodies, or the cell's center x if
+   * their total charge is 0. While `_build()` runs, it holds the sum of
+   * charge * x, which is divided by total charge at the end.
    * @type {Float64Array}
    * @private
    */
   _centroidX = new Float64Array();
 
   /**
-   * Centroid y of a cell's bodies. In `build()`, it accumulates sums before division based on body count.
+   * Charge-weighted centroid y of a cell's bodies, or the cell's center y if
+   * their total charge is 0. While `_build()` runs, it holds the sum of
+   * charge * y, which is divided by total charge at the end.
    * @type {Float64Array}
    * @private
    */
   _centroidY = new Float64Array();
+
+  /**
+   * Total charge of a cell's bodies.
+   * @type {Float64Array}
+   * @private
+   */
+  _centroidCharge = new Float64Array();
 
   /**
    * Number of bodies contained in a cell
@@ -128,20 +139,6 @@ export class BarnesHutContext {
    * @private
    */
   _nextBody = new Int32Array();
-
-  /**
-   * x coordinates of bodies
-   * @type {ArrayLike<number>}
-   * @private
-   */
-  _bodyX = [];
-
-  /**
-   * y coordinates of bodies
-   * @type {ArrayLike<number>}
-   * @private
-   */
-  _bodyY = [];
 
   /**
    * Stack of cells to explore; used in `repel()` and `collide()`
@@ -192,6 +189,7 @@ export class BarnesHutContext {
     this._halfSize = new Float64Array(c);
     this._centroidX = new Float64Array(c);
     this._centroidY = new Float64Array(c);
+    this._centroidCharge = new Float64Array(c);
     this._bodyCount = new Int32Array(c);
     this._childIndex = new Int32Array(c);
     this._bodyIndex = new Int32Array(c);
@@ -211,6 +209,7 @@ export class BarnesHutContext {
     this._halfSize = growF64(this._halfSize, n);
     this._centroidX = growF64(this._centroidX, n);
     this._centroidY = growF64(this._centroidY, n);
+    this._centroidCharge = growF64(this._centroidCharge, n);
     this._bodyCount = growI32(this._bodyCount, n);
     this._childIndex = growI32(this._childIndex, n);
     this._bodyIndex = growI32(this._bodyIndex, n);
@@ -224,29 +223,23 @@ export class BarnesHutContext {
    * @param {number} centerX
    * @param {number} centerY
    * @param {number} halfSize
-   * @param {number} sumX 
-   * @param {number} sumY
-   * @param {number} bodyCount
-   * @param {number} childIndex
-   * @param {number} bodyIndex
    * @returns {number} the index of the new cell
    * @private
    */
   _addCell(
     centerX, centerY, halfSize,
-    sumX, sumY, bodyCount,
-    childIndex, bodyIndex
   ) {
     if (this._cellCount == this._capacity) this._doubleCapacity();
     const i = this._cellCount;
     this._centerX[i] = centerX;
     this._centerY[i] = centerY;
     this._halfSize[i] = halfSize;
-    this._centroidX[i] = sumX;
-    this._centroidY[i] = sumY;
-    this._bodyCount[i] = bodyCount;
-    this._childIndex[i] = childIndex;
-    this._bodyIndex[i] = bodyIndex;
+    this._centroidX[i] = 0;
+    this._centroidY[i] = 0;
+    this._centroidCharge[i] = 0;
+    this._bodyCount[i] = 0;
+    this._childIndex[i] = -1;
+    this._bodyIndex[i] = -1;
     this._cellCount++;
     return i;
   }
@@ -273,26 +266,32 @@ export class BarnesHutContext {
    * @param {number} i - cell to split
    * @param {number} x - x coordinate of new body
    * @param {number} y - y coordinate of new body
+   * @param {ArrayLike<number>} xs - x coordinates of all bodies
+   * @param {ArrayLike<number>} ys - y coordinates of all bodies
    * @returns {number} cell to insert the body into
    * @private
    */
-  _splitCell(i, x, y) {
+  _splitCell(i, x, y, xs, ys) {
     const cx = this._centerX[i],
           cy = this._centerY[i],
           half = this._halfSize[i] / 2;
 
-    const childI = this._addCell(cx - half, cy - half, half, 0, 0, 0, -1, -1);
-    this._addCell(cx + half, cy - half, half, 0, 0, 0, -1, -1);
-    this._addCell(cx - half, cy + half, half, 0, 0, 0, -1, -1);
-    this._addCell(cx + half, cy + half, half, 0, 0, 0, -1, -1);
+    const childI = this._addCell(cx - half, cy - half, half);
+    this._addCell(cx + half, cy - half, half);
+    this._addCell(cx - half, cy + half, half);
+    this._addCell(cx + half, cy + half, half);
 
     this._childIndex[i] = childI;
-    
-    // subcell for the body that was already already present in the original cell
-    const otherI = childI + this._getQuadrant(this._centroidX[i], this._centroidY[i], i);
+
+    // Subcell for the body already in the original cell. Its position is read
+    // from the input: the cell's sums are weighted by charge, so they only
+    // give the position back when its charge is 1.
+    const b = this._bodyIndex[i];
+    const otherI = childI + this._getQuadrant(xs[b], ys[b], i);
     this._bodyCount[otherI] = 1;
     this._centroidX[otherI] = this._centroidX[i];
     this._centroidY[otherI] = this._centroidY[i];
+    this._centroidCharge[otherI] = this._centroidCharge[i];
 
     this._bodyIndex[otherI] = this._bodyIndex[i];
     this._bodyIndex[i] = -1;
@@ -303,13 +302,15 @@ export class BarnesHutContext {
 
   /**
    * Adds a body to the quadtree, splitting cells as necessary
-   * @param {number} x - body x coordinate
-   * @param {number} y - body y coordinate
    * @param {number} b - body index
+   * @param {ArrayLike<number>} xs - x coordinates of all bodies
+   * @param {ArrayLike<number>} ys - y coordinates of all bodies
+   * @param {number} c - body charge
    * @returns {void}
    * @private
    */
-  _addBody(x, y, b) {
+  _addBody(b, xs, ys, c) {
+    const x = xs[b], y = ys[b];
     let depth = 0;
     let i = 0;
     // Walk to leaf node
@@ -320,12 +321,13 @@ export class BarnesHutContext {
 
     // Split cells until the two bodies are separate, or until max depth.
     while (depth < this._maxDepth && this._bodyCount[i] !== 0) {
-      i = this._splitCell(i, x, y);
+      i = this._splitCell(i, x, y, xs, ys);
       depth++;
     }
 
-    this._centroidX[i] += x;
-    this._centroidY[i] += y;
+    this._centroidX[i] += c * x;
+    this._centroidY[i] += c * y;
+    this._centroidCharge[i] += c;
     this._bodyCount[i]++;
     this._nextBody[b] = this._bodyIndex[i];
     this._bodyIndex[i] = b;
@@ -333,16 +335,18 @@ export class BarnesHutContext {
 
 
   /**
-   * Builds a quadtree from coordinate lists.
+   * Builds a quadtree from coordinate and charge lists. Each cell gets its
+   * body count, total charge, and charge-weighted centroid.
    * @param {ArrayLike<number>} xs - x coordinates
    * @param {ArrayLike<number>} ys - y coordinates
-   * @throws {Error} throws when x and y arrays are not the same length
+   * @param {ArrayLike<number>} [cs] - non-negative charges; each defaults to 1
+   * @throws {Error} throws when x, y, and charge arrays are not the same length
    * @returns {void}
    * @private
    */
-  _build(xs, ys) {
-    if (xs.length !== ys.length) {
-      throw new Error("BarnesHutContext: mismatching x- and y-coordinate array lengths");
+  _build(xs, ys, cs) {
+    if (xs.length !== ys.length || (cs && xs.length !== cs.length)) {
+      throw new Error("BarnesHutContext: mismatching x, y, and/or charge array lengths");
     }
 
     this._cellCount = 0;
@@ -356,8 +360,6 @@ export class BarnesHutContext {
     if (this._cellStack.length !== stackSize) {
       this._cellStack = new Int32Array(stackSize);
     }
-    this._bodyX = xs;
-    this._bodyY = ys;
 
 
     let minX, maxX, minY, maxY;
@@ -371,35 +373,42 @@ export class BarnesHutContext {
 
     // Seed depth-0 cell
     const halfSize = Math.max(maxX - minX, maxY - minY, 1) / 2;
-    this._addCell(minX + halfSize, minY + halfSize, halfSize, 0, 0, 0, -1, -1);
+    this._addCell(minX + halfSize, minY + halfSize, halfSize);
 
 
     // Add bodies and create the quadtree structure
     for (let i = 0; i < xs.length; i++) {
-      this._addBody(xs[i], ys[i], i);
+      this._addBody(i, xs, ys, cs?.[i] ?? 1);
     }
 
     // Bottom-up sums
     for (let c = this._cellCount - 1; c >= 0; c--) {
       const k = this._childIndex[c];
       if (k === -1) continue;
-      let n = 0, sx = 0, sy = 0;
+      let n = 0, sx = 0, sy = 0, sc = 0;
       for (let q = k; q < k + 4; q++) {
         n += this._bodyCount[q];
         sx += this._centroidX[q];
         sy += this._centroidY[q];
+        sc += this._centroidCharge[q];
       }
       this._bodyCount[c] = n;
       this._centroidX[c] = sx;
       this._centroidY[c] = sy;
+      this._centroidCharge[c] = sc;
     }
 
-    // Average coordinate sums to get true centroid coordinates
+    /* Divide weighted sums by total charge to get centroids. A cell with no
+       charge exerts no far-field force, so any point inside it works for the
+       theta test; its center is always defined. */
     for (let c = 0; c < this._cellCount; c++) {
-      const n = this._bodyCount[c];
-      if (n > 0) {
-        this._centroidX[c] /= n;
-        this._centroidY[c] /= n;
+      const q = this._centroidCharge[c];
+      if (q > 0) {
+        this._centroidX[c] /= q;
+        this._centroidY[c] /= q;
+      } else {
+        this._centroidX[c] = this._centerX[c];
+        this._centroidY[c] = this._centerY[c];
       }
     }
   }
@@ -409,25 +418,27 @@ export class BarnesHutContext {
    * Adds to force values for a series of bodies
    * @param {ArrayLike<number>} xs - x coordinates
    * @param {ArrayLike<number>} ys - y coordinates
+   * @param {ArrayLike<number>} cs - non-negative charges
    * @param {Float64Array} fx - x force array to write to
    * @param {Float64Array} fy - y force array to write to
    * @param {object} params - parameters
    * @param {number} params.strength - repulsion strength
    * @param {number} params.minDistSq - min distance-squared clamp
    */
-  repel(xs, ys, fx, fy, { strength, minDistSq }) {
-    this._build(xs, ys);
+  repel(xs, ys, cs, fx, fy, { strength, minDistSq }) {
+    this._build(xs, ys, cs);
     if (this._cellCount === 0) return;
 
     const cx = this._centerX, cy = this._centerY, hs = this._halfSize,
-      cnx = this._centroidX, cny = this._centroidY, bc = this._bodyCount,
-      ci = this._childIndex, bi = this._bodyIndex, nb = this._nextBody;
+      cnx = this._centroidX, cny = this._centroidY, cnc = this._centroidCharge,
+      bc = this._bodyCount, ci = this._childIndex, bi = this._bodyIndex,
+      nb = this._nextBody;
     // Cached theta-comparison value that saves half-size calculations
     const th = (this._theta / 2) ** 2;
     const stack = this._cellStack;
 
     for (let i = 0; i < xs.length; i++) {
-      const x = xs[i], y = ys[i];
+      const x = xs[i], y = ys[i], ch = cs[i];
       let fxi = 0, fyi = 0;
       let top = 0;
       stack[top++] = 0;
@@ -443,7 +454,7 @@ export class BarnesHutContext {
           // Barnes-Hut criterion
           if (hs[c] ** 2 < th * dSq) {
             const d2 = Math.max(dSq, minDistSq);
-            const s = strength * bc[c] / (d2 * Math.sqrt(d2));
+            const s = ch * cnc[c] * strength / (d2 * Math.sqrt(d2));
             fxi += s * dx;
             fyi += s * dy;
             continue;
@@ -470,7 +481,7 @@ export class BarnesHutContext {
             dSq = dx * dx + dy * dy;
           }
           dSq = Math.max(dSq, minDistSq);
-          const s = strength / (dSq * Math.sqrt(dSq));
+          const s = ch * cs[j] * strength / (dSq * Math.sqrt(dSq));
           fxi += s * dx; fyi += s * dy;
         }
       }

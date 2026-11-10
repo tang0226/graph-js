@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
 import { Simulation } from "../src/simulation.js";
 
-const RECORD_FIELDS = ["id", "mass", "radius", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
+const RECORD_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
 
 function chain(n, { directed = false, extra = [] } = {}) {
   const g = new Graph({ directed });
@@ -146,6 +146,14 @@ describe("Simulation: validation", () => {
 
   test("radius cannot go negative", () => {
     assert.equal(resolved({ radius: -5 }).radius, 0);
+  });
+
+  test("charge defaults to 1, cannot go negative, and falls back when non-finite", () => {
+    assert.equal(resolved({}).charge, 1);
+    assert.equal(resolved({ charge: 0 }).charge, 0);
+    assert.equal(resolved({ charge: -2 }).charge, 0);
+    assert.equal(resolved({ charge: NaN }).charge, 1);
+    assert.equal(resolved({ charge: () => "lots" }).charge, 1);
   });
 
   test("fixed is coerced to a real boolean", () => {
@@ -542,6 +550,14 @@ describe("Simulation: temperature", () => {
       assert.equal(sim.temp, 1);
     });
 
+    test("a charge change reheats", () => {
+      const sim = frozen();
+      sim.setNodeConfig("n0", { charge: 3 });
+      sim.sync();
+      assert.equal(sim.nodes.get("n0").charge, 3);
+      assert.equal(sim.temp, 1);
+    });
+
     test("clearNodeConfig reheats when it changes resolved values", () => {
       const sim = frozen();
       sim.setNodeConfig("n0", { mass: 9 });
@@ -641,10 +657,11 @@ describe("Simulation: Barnes-Hut", () => {
 
   function assertPacked(sim) {
     const list = sim.nodeList;
-    for (const name of ["_nodeRadius", "_nodeFixed", "_nodeX", "_nodeY", "_nodeFx", "_nodeFy"])
+    for (const name of ["_nodeRadius", "_nodeCharge", "_nodeFixed", "_nodeX", "_nodeY", "_nodeFx", "_nodeFy"])
       assert.equal(sim[name].length, list.length, name);
     list.forEach((r, i) => {
       assert.equal(sim._nodeRadius[i], r.radius, `radius of ${r.id}`);
+      assert.equal(sim._nodeCharge[i], r.charge, `charge of ${r.id}`);
       assert.equal(sim._nodeFixed[i], r.fixed ? 1 : 0, `fixed flag of ${r.id}`);
     });
   }
@@ -721,6 +738,39 @@ describe("Simulation: Barnes-Hut", () => {
         assert.ok(Math.abs(r.fx - exact.nodeList[i].fx) < 1e-9);
         assert.ok(Math.abs(r.fy - exact.nodeList[i].fy) < 1e-9);
       });
+    });
+
+    test("theta 0 matches the exact path with uneven charges", () => {
+      const nodeConfig = { charge: n => (n.data.w % 4) * 0.75 };   // 0, 0.75, 1.5, 2.25
+      const exact = grid(60, { useBarnesHut: false, nodeConfig });
+      const tree = grid(60, { barnesHut: { theta: 0 }, nodeConfig });
+      exact._applyRepulsion();
+      tree._applyRepulsion();
+      tree.nodeList.forEach((r, i) => {
+        assert.ok(Math.abs(r.fx - exact.nodeList[i].fx) < 1e-9);
+        assert.ok(Math.abs(r.fy - exact.nodeList[i].fy) < 1e-9);
+      });
+    });
+
+    for (const useBarnesHut of [true, false]) {
+      test(`repulsion scales with the product of charges (useBarnesHut: ${useBarnesHut})`, () => {
+        const force = (ca, cb) => {
+          const sim = grid(2, { useBarnesHut });
+          sim.setNodeConfig("n0", { charge: ca }).setNodeConfig("n1", { charge: cb }).sync();
+          sim._applyRepulsion();
+          return sim.nodeList[0].fx;
+        };
+        const base = force(1, 1);
+        assert.ok(base !== 0);
+        assert.ok(Math.abs(force(2, 3) - 6 * base) < 1e-12);
+        assert.equal(force(0, 5), 0, "an uncharged node feels and exerts nothing");
+      });
+    }
+
+    test("packed charges follow config changes", () => {
+      const sim = grid(5);
+      sim.setNodeConfig("n2", { charge: 4 }).sync();
+      assertPacked(sim);
     });
 
     test("forces add to what nodes already carry", () => {

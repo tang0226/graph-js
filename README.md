@@ -159,6 +159,7 @@ All the available settings:
 |---|---|---|---|
 | Simulation (nodes) | `radius` | `20` | physical and drawn radius |
 | | `mass` | `1` | heavier nodes are pushed around less |
+| | `charge` | `1` | how strongly the node repels and is repelled; `0` for neither (see below) |
 | | `fixed` | `false` | `true` holds the node in place |
 | Renderer (nodes) | `color` | `"#ffffff"` | fill color |
 | | `outlineColor` | `"#000000"` | |
@@ -177,6 +178,16 @@ All the available settings:
 A function receives the node or edge object with custom data stored in `.data`. Whenever the graph changes, the function is re-run and the results are cached. That keeps the `radius` above in step as connections are added.
 
 To change a node's data, use `gjs.graph.setNodeData(id, data)` rather than editing `node.data` directly. Direct edits will not trigger a cache refresh, so the functions won't re-run. Same applies to `gjs.graph.setEdgeData(srcId, destId, data)`.
+
+### Node charge
+
+The repulsion between two nodes is multiplied by both of their charges, so two nodes with a charge of `2` push each other apart 4 times as hard as two with the default of `1`. Giving hubs a higher charge spreads their neighbourhoods out:
+
+```js
+gjs.simulation.setDefaultNodeConfig({ charge: node => 1 + gjs.graph.degree(node.id) / 4 });
+```
+
+A node with a charge of `0` neither repels nor is repelled, so only its edges, gravity and collisions place it. Negative charges are treated as `0`; nodes can't attract each other through charge.
 
 ### Individual node and edge settings
 
@@ -253,11 +264,11 @@ gjs.graph.nodes;             // Map: id -> { id, data }
 gjs.graph.edges;             // Set of { src, dest, data }
 gjs.graph.directed;
 
-gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, fixed, ... }
+gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, charge, fixed, ... }
 gjs.simulation.nodeList;     // the same nodes as an array
 ```
 
-These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
 
 ## Dragging nodes
 
@@ -545,7 +556,7 @@ The layout cools as it runs. Each tick, the simulation's temperature is multipli
 The layout wakes on its own when:
 
 - nodes or edges are added or removed
-- a config or data change alters a node's `radius`, `mass` or `fixed`
+- a config or data change alters a node's `radius`, `mass`, `charge` or `fixed`
 - options are changed with `setOpts()`
 - a node is pinned somewhere new
 
@@ -564,7 +575,7 @@ To cover more ground in each tick, raise `dt`. Temperature still falls once per 
 
 ## Barnes-Hut
 
-Every node repels every other node, so checking each pair takes 100 times as long when a graph gets 10 times larger. Barnes-Hut avoids most of that work: each tick, nodes are sorted into a quadtree (a tree of nested squares), and a distant group of nodes is treated as a single point. It's on by default, and at 20,000 nodes it calculates repulsion about 40 times faster than checking every pair.
+Every node repels every other node, so checking each pair takes 100 times as long when a graph gets 10 times larger. Barnes-Hut avoids most of that work: each tick, nodes are sorted into a quadtree (a tree of nested squares), and a distant group of nodes is treated as a single point, carrying the group's total charge at its charge-weighted center. It's on by default, and at 20,000 nodes it calculates repulsion about 40 times faster than checking every pair.
 
 It's controlled by two simulation options:
 

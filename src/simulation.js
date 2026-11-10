@@ -15,8 +15,8 @@ import { BarnesHutContext } from "./barnes-hut.js";
 import { CollisionGrid } from "./collision-grid.js";
 
 
-/** @type {{ mass: number, radius: number, fixed: boolean }} */
-const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, fixed: false };
+/** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
+const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
 
 /**
  * @param {ResolvedSimNodeConfig} config
@@ -25,6 +25,7 @@ const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, fixed: false };
 const toAccessors = config => ({
   mass: asFn(config.mass),
   radius: asFn(config.radius),
+  charge: asFn(config.charge),
   fixed: asFn(config.fixed),
 });
 
@@ -89,6 +90,15 @@ export class Simulation {
    * @private
    */
   _nodeRadius = new Float64Array();
+
+
+  /**
+   * Cached array of resolved node charge values.
+   * Updated in effective `sync()` calls.
+   * @type {Float64Array}
+   * @private
+   */
+  _nodeCharge = new Float64Array();
 
   
   /**
@@ -387,18 +397,22 @@ export class Simulation {
     const acc = this._accessors,
           g = this._graph,
           o = this._overrides.get(gNode.id);
-    const mass   = o?.mass?.(gNode, g)   ??  acc.mass(gNode, g);
-    const radius = o?.radius?.(gNode, g) ??  acc.radius(gNode, g);
-
-    const prevMass = sNode.mass, prevRadius = sNode.radius, prevFixed = sNode.fixed;
+    const mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
+    const radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
+    const charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
+    const prevMass = sNode.mass, prevRadius = sNode.radius,
+      prevCharge = sNode.charge, prevFixed = sNode.fixed;
 
     sNode.mass   = Number.isFinite(mass)   ?
       Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
     sNode.radius = Number.isFinite(radius) ?
       Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
+    sNode.charge = Number.isFinite(charge) ?
+      Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
     sNode.fixed  = (o?.fixed?.(gNode, g) ??  acc.fixed(gNode, g)) === true;
 
-    return sNode.mass !== prevMass || sNode.radius !== prevRadius || sNode.fixed !== prevFixed;
+    return sNode.mass !== prevMass || sNode.radius !== prevRadius ||
+      sNode.charge !== prevCharge || sNode.fixed !== prevFixed;
   }
 
 
@@ -500,6 +514,7 @@ export class Simulation {
     const nodeCount = this._nodeList.length;
     if (nodeCount !== prevNodeCount) {
       this._nodeRadius = new Float64Array(nodeCount);
+      this._nodeCharge = new Float64Array(nodeCount);
       this._nodeFixed = new Uint8Array(nodeCount);
       this._nodeX = new Float64Array(nodeCount);
       this._nodeY = new Float64Array(nodeCount);
@@ -564,7 +579,7 @@ export class Simulation {
         }
         dSq = Math.max(dSq, this._opts.minDistSq); // short-range clamp
 
-        const s = this._opts.repulsion / (dSq * Math.sqrt(dSq));
+        const s = n1.charge * n2.charge * this._opts.repulsion / (dSq * Math.sqrt(dSq));
         const fx = s * dx, fy = s * dy;
         n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
       }
@@ -647,7 +662,7 @@ export class Simulation {
     this._packPositions();
     const list = this._nodeList, fx = this._nodeFx, fy = this._nodeFy;
     fx.fill(0); fy.fill(0);   // repel() adds to these
-    this._barnesHutCtx.repel(this._nodeX, this._nodeY, fx, fy, {
+    this._barnesHutCtx.repel(this._nodeX, this._nodeY, this._nodeCharge, fx, fy, {
       strength: this._opts.repulsion, minDistSq: this._opts.minDistSq,
     });
     for (let i = 0; i < list.length; i++) { list[i].fx += fx[i]; list[i].fy += fy[i]; }
@@ -692,6 +707,7 @@ export class Simulation {
   _packNodeConfig() {
     for (let i = 0; i < this._nodeList.length; i++) {
       this._nodeRadius[i] = this._nodeList[i].radius;
+      this._nodeCharge[i] = this._nodeList[i].charge;
       this._nodeFixed[i] = this._nodeList[i].fixed ? 1 : 0;
     }
   }

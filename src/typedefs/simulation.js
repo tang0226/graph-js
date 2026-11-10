@@ -43,6 +43,7 @@
  * @property {any} id - node id (matches corresponding `GraphNode`)
  * @property {number} mass - physical mass of the node
  * @property {number} radius - physical (and rendered) radius of the node
+ * @property {number} charge - charge of the node for electrostatic repulsion
  * @property {boolean} fixed - whether the node is immovable
  * @property {number} x - x coordinate
  * @property {number} y - y coordinate
@@ -53,7 +54,7 @@
  */
 
 /**
- * @typedef { "mass" | "radius" | "fixed" } ConfigurableSimNodeProps
+ * @typedef { "mass" | "radius" | "charge" | "fixed" } ConfigurableSimNodeProps
  */
 
 /**

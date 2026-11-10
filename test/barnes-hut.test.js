@@ -7,24 +7,33 @@ import {
 
 const STRENGTH = 1000, MIN_DIST_SQ = 1;
 const CELL_ARRAYS = [
-  "_centerX", "_centerY", "_halfSize", "_centroidX", "_centroidY",
+  "_centerX", "_centerY", "_halfSize", "_centroidX", "_centroidY", "_centroidCharge",
   "_bodyCount", "_childIndex", "_bodyIndex", "_maxRadius",
 ];
 
-function repelForces(ctx, xs, ys, params = {}) {
+const ones = n => new Float64Array(n).fill(1);
+
+// Uneven charges from 0 to 3, with every fifth body uncharged
+function charges(n, seed = 2) {
+  const r = rng(seed), cs = new Float64Array(n);
+  for (let i = 0; i < n; i++) cs[i] = i % 5 === 0 ? 0 : r() * 3;
+  return cs;
+}
+
+function repelForces(ctx, xs, ys, { cs = ones(xs.length), ...params } = {}) {
   const fx = new Float64Array(xs.length), fy = new Float64Array(xs.length);
-  ctx.repel(xs, ys, fx, fy, { strength: STRENGTH, minDistSq: MIN_DIST_SQ, ...params });
+  ctx.repel(xs, ys, cs, fx, fy, { strength: STRENGTH, minDistSq: MIN_DIST_SQ, ...params });
   return { fx, fy };
 }
 
-function bruteRepel(xs, ys, { strength = STRENGTH, minDistSq = MIN_DIST_SQ } = {}) {
+function bruteRepel(xs, ys, { cs = ones(xs.length), strength = STRENGTH, minDistSq = MIN_DIST_SQ } = {}) {
   const n = xs.length, fx = new Float64Array(n), fy = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
       const dx = xs[i] - xs[j], dy = ys[i] - ys[j];
       const dSq = Math.max(dx * dx + dy * dy, minDistSq);
-      const s = strength / (dSq * Math.sqrt(dSq));
+      const s = cs[i] * cs[j] * strength / (dSq * Math.sqrt(dSq));
       fx[i] += s * dx; fy[i] += s * dy;
     }
   }
@@ -90,6 +99,10 @@ describe("BarnesHutContext: tree", () => {
     assert.throws(() => new BarnesHutContext()._build([1, 2], [1]), /mismatching/);
   });
 
+  test("a mismatched charge length throws", () => {
+    assert.throws(() => new BarnesHutContext()._build([1, 2], [1, 2], [1]), /mismatching/);
+  });
+
   test("an empty build leaves no cells, even after a previous tree", () => {
     const ctx = new BarnesHutContext();
     const { xs, ys } = scatter(10);
@@ -119,10 +132,7 @@ describe("BarnesHutContext: tree", () => {
     }
   });
 
-  test("every body lands in exactly one leaf, inside that leaf's square", () => {
-    const ctx = new BarnesHutContext();
-    const { xs, ys } = scatter(500);
-    ctx._build(xs, ys);
+  function assertLeavesHoldTheirBodies(ctx, xs, ys) {
     const seen = new Array(xs.length).fill(0);
     for (let c = 0; c < ctx._cellCount; c++) {
       const bodies = bucket(ctx, c);
@@ -135,6 +145,22 @@ describe("BarnesHutContext: tree", () => {
       }
     }
     assert.ok(seen.every(count => count === 1));
+  }
+
+  test("every body lands in exactly one leaf, inside that leaf's square", () => {
+    const ctx = new BarnesHutContext();
+    const { xs, ys } = scatter(500);
+    ctx._build(xs, ys);
+    assertLeavesHoldTheirBodies(ctx, xs, ys);
+  });
+
+  // Splitting a leaf moves its body by position, which its weighted sums
+  // don't give back unless its charge is 1
+  test("bodies land in the right leaves whatever their charge", () => {
+    const ctx = new BarnesHutContext();
+    const { xs, ys } = scatter(500);
+    ctx._build(xs, ys, charges(500));
+    assertLeavesHoldTheirBodies(ctx, xs, ys);
   });
 
   test("each cell's count and centroid describe the bodies beneath it", () => {
@@ -145,8 +171,35 @@ describe("BarnesHutContext: tree", () => {
       const bodies = bodiesUnder(ctx, c);
       assert.equal(ctx._bodyCount[c], bodies.length);
       if (bodies.length === 0) continue;
+      assert.equal(ctx._centroidCharge[c], bodies.length, "a default charge of 1 each");
       assertClose(ctx._centroidX[c], bodies.reduce((s, b) => s + xs[b], 0) / bodies.length);
       assertClose(ctx._centroidY[c], bodies.reduce((s, b) => s + ys[b], 0) / bodies.length);
+    }
+  });
+
+  test("each cell holds its total charge and charge-weighted centroid", () => {
+    const ctx = new BarnesHutContext();
+    const { xs, ys } = scatter(500);
+    const cs = charges(500);
+    ctx._build(xs, ys, cs);
+    for (let c = 0; c < ctx._cellCount; c++) {
+      const bodies = bodiesUnder(ctx, c);
+      const q = bodies.reduce((s, b) => s + cs[b], 0);
+      assertClose(ctx._centroidCharge[c], q);
+      if (q === 0) continue;
+      assertClose(ctx._centroidX[c], bodies.reduce((s, b) => s + cs[b] * xs[b], 0) / q);
+      assertClose(ctx._centroidY[c], bodies.reduce((s, b) => s + cs[b] * ys[b], 0) / q);
+    }
+  });
+
+  test("a cell with no charge puts its centroid at its center", () => {
+    const ctx = new BarnesHutContext();
+    const { xs, ys } = scatter(50);
+    ctx._build(xs, ys, new Float64Array(50));
+    for (let c = 0; c < ctx._cellCount; c++) {
+      assert.equal(ctx._centroidCharge[c], 0);
+      assert.equal(ctx._centroidX[c], ctx._centerX[c]);
+      assert.equal(ctx._centroidY[c], ctx._centerY[c]);
     }
   });
 
@@ -221,6 +274,17 @@ describe("BarnesHutContext: repel", () => {
     });
   }
 
+  for (const n of [2, 5, 500]) {
+    test(`theta 0 matches brute force for ${n} bodies with uneven charges`, () => {
+      const { xs, ys } = scatter(n);
+      const cs = charges(n);
+      const { fx, fy } = repelForces(new BarnesHutContext({ theta: 0 }), xs, ys, { cs });
+      const brute = bruteRepel(xs, ys, { cs });
+      assertAllClose(fx, brute.fx);
+      assertAllClose(fy, brute.fy);
+    });
+  }
+
   test("a deep tree over few bodies fits the cell stack", () => {
     const xs = new Float64Array([0, 1e-3, 1000]), ys = new Float64Array([0, 1e-3, 1000]);
     const ctx = new BarnesHutContext({ theta: 0 });
@@ -257,6 +321,34 @@ describe("BarnesHutContext: repel", () => {
     assert.notEqual(fx[4], bruteRepel(xs, ys).fx[4], "this should be the approximation, not the exact sum");
   });
 
+  test("a distant group acts as one body at its charge-weighted centroid, with its total charge", () => {
+    const xs = new Float64Array([0, 1, 0, 1, 1000]), ys = new Float64Array([0, 0, 1, 1, 1000]);
+    const cs = new Float64Array([1, 1, 1, 5, 2]);
+    const { fx, fy } = repelForces(new BarnesHutContext({ theta: 0.5 }), xs, ys, { cs });
+
+    // Centroid (6 / 8, 6 / 8), total charge 8, acting on a body of charge 2
+    const dx = 1000 - 0.75, dSq = 2 * dx * dx;
+    const expected = 2 * 8 * STRENGTH * dx / (dSq * Math.sqrt(dSq));
+    assertClose(fx[4], expected, 1e-15);
+    assertClose(fy[4], expected, 1e-15);
+  });
+
+  test("an uncharged body neither pushes nor is pushed", () => {
+    const { xs, ys } = scatter(200);
+    const cs = ones(200);
+    cs[7] = 0;
+    const ctx = new BarnesHutContext({ theta: 0.9 });
+    const { fx, fy } = repelForces(ctx, xs, ys, { cs });
+    assert.equal(fx[7], 0);
+    assert.equal(fy[7], 0);
+
+    // Removing it outright gives everyone else the same forces
+    const keep = [...xs.keys()].filter(i => i !== 7);
+    const without = repelForces(ctx, Float64Array.from(keep, i => xs[i]), Float64Array.from(keep, i => ys[i]));
+    assertAllClose(keep.map(i => fx[i]), without.fx);
+    assertAllClose(keep.map(i => fy[i]), without.fy);
+  });
+
   test("a body is never repelled by a cell containing it, at any theta", () => {
     const xs = new Float64Array([0, 100, 40]), ys = new Float64Array([0, 100, 70]);
     const { fx, fy } = repelForces(new BarnesHutContext({ theta: 1000 }), xs, ys);
@@ -285,7 +377,7 @@ describe("BarnesHutContext: repel", () => {
   test("forces are added to the output arrays rather than replacing them", () => {
     const xs = new Float64Array([0, 10]), ys = new Float64Array([0, 0]);
     const fx = new Float64Array([5, 5]), fy = new Float64Array([-2, -2]);
-    new BarnesHutContext().repel(xs, ys, fx, fy, { strength: STRENGTH, minDistSq: MIN_DIST_SQ });
+    new BarnesHutContext().repel(xs, ys, ones(2), fx, fy, { strength: STRENGTH, minDistSq: MIN_DIST_SQ });
     const brute = bruteRepel(xs, ys);
     assertAllClose(fx, [5 + brute.fx[0], 5 + brute.fx[1]]);
     assertAllClose(fy, [-2, -2]);
