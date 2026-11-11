@@ -35,6 +35,7 @@ npm install @tang0226/graph-js
 - [Events](#events)
   - [Listening for events](#listening-for-events)
   - [Interaction events](#interaction-events)
+  - [Graph events](#graph-events)
   - [Simulation events](#simulation-events)
 - [Drawing](#drawing)
   - [Highlighting](#highlighting)
@@ -83,7 +84,7 @@ A `GraphJS` instance combines three layers, each of which can also be used on it
 | `Simulation` | `gjs.simulation` | the physics layout: positions, forces, and settling |
 | `Renderer` | `gjs.renderer` | drawing: styles, the view, highlighting, and drawing hooks |
 
-`GraphJS` adds the animation loop, tweens, and pointer interaction on top, along with shortcuts for common calls such as `addNode()` and `pin()`. Both `GraphJS` and the simulation emit [events](#events).
+`GraphJS` adds the animation loop, tweens, and pointer interaction on top, along with shortcuts for common calls such as `addNode()` and `pin()`. `GraphJS`, the graph and the simulation each emit [events](#events).
 
 ### Creating a GraphJS instance
 
@@ -624,7 +625,7 @@ Your own listeners can also run alongside built-in interaction, for input it doe
 
 ### Listening for events
 
-`GraphJS` and the simulation each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
+`GraphJS`, the graph and the simulation each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
 
 ```js
 function onClick(e) {
@@ -633,6 +634,7 @@ function onClick(e) {
 gjs.on("nodeclick", onClick);                    // an interaction event, on the GraphJS instance
 gjs.off("nodeclick", onClick);                   // true if it was added
 
+gjs.graph.on("nodeadd", e => console.log(`added ${e.id}`));   // a graph event, on the graph
 gjs.simulation.on("settle", () => gjs.stop());   // a simulation event, on the simulation
 ```
 
@@ -641,7 +643,7 @@ Each object only takes its own event names: `gjs.on("settle", ...)` throws, beca
 Every event has `type`, its name, and `target`, the object that emitted it, along with any data listed for that event. Every event also has `preventDefault()` and `defaultPrevented`, but what preventing does depends on where the event comes from:
 
 - **Interaction events** are emitted before GraphJS responds to the user, so calling `preventDefault()` stops the response listed in the [interaction events](#interaction-events) table. The other listeners still run, and can read `defaultPrevented`.
-- **Layer events,** such as the simulation's, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as calling `heat()` from a `settle` listener.
+- **Layer events,** from the graph and the simulation, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as removing a node from a `nodeadd` listener, or calling `heat()` from a `settle` listener.
 
 How listeners run is the same for every event:
 
@@ -689,6 +691,37 @@ gjs.on("nodedragend", e => e.preventDefault());
 gjs.on("panstart", () => gjs.cancelTween("camera"));
 gjs.on("zoom", () => gjs.cancelTween("camera"));
 ```
+
+### Graph events
+
+The graph emits these as nodes and edges change, whether through `gjs.addNode()` and the other shortcuts or on `gjs.graph` directly. Listen on `gjs.graph`, or on a `Graph` used on its own, including in Node.
+
+| Event | When | Data |
+|---|---|---|
+| `nodeadd` | a node is added | `id`, `node` |
+| `noderemove` | a node is removed, after an `edgeremove` for each of its edges | `id`, `node` |
+| `nodedatachange` | `setNodeData()` replaces a node's data | `id`, `node`, `prev` |
+| `edgeadd` | an edge is added | `srcId`, `destId`, `edge` |
+| `edgeremove` | an edge is removed, by `removeEdge()` or by removing one of its nodes | `srcId`, `destId`, `edge` |
+| `edgedatachange` | `setEdgeData()` replaces an edge's data | `srcId`, `destId`, `edge`, `prev` |
+
+- **`node`, `edge`:** the node or edge object, as in `gjs.graph.nodes` and `gjs.graph.edges`. A removed one is no longer in the graph, but its `data` is still there.
+- **`srcId`, `destId`:** the ids the edge is stored with. In an undirected graph, an edge always reports the same pair, whichever order it's named in.
+- **`prev`:** the data that was replaced. Setting the same object again still emits an event, so compare `prev` with the new data if that matters.
+
+```js
+// Keep a list of node names up to date
+const names = new Map();
+gjs.graph.on("nodeadd", e => names.set(e.id, e.node.data.name));
+gjs.graph.on("noderemove", e => names.delete(e.id));
+gjs.graph.on("nodedatachange", e => names.set(e.id, e.node.data.name));
+```
+
+- **Up to date:** each event is emitted once its change is complete, so the graph is current for listeners: `gjs.graph.nodes`, `degree()`, `hasEdge()` and the rest already reflect it.
+- **The other layers catch up later:** the simulation and renderer read graph changes on their next tick or frame, so in a `nodeadd` listener, `gjs.simulation.nodes.get(e.id)` is still `undefined`. To read them straight away, call `gjs.simulation.sync()` first. It does nothing if nothing has changed, but it rebuilds the simulation's tables when something has, so avoid calling it from every event while building a large graph.
+- **No-ops:** a change that doesn't happen emits nothing, such as adding an id that's already in use, adding an edge that exists, or removing something that doesn't.
+- **Changes in listeners:** a listener can change the graph, and those changes emit their own events straight away, inside the event that's running.
+- **Speed:** an event with no listeners costs almost nothing, so building a large graph isn't slowed down until you listen.
 
 ### Simulation events
 
@@ -928,7 +961,7 @@ function onSettle(e: SimEvent<"settle">) {
 gjs.simulation.on("settle", onSettle);
 ```
 
-The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types, including the simulation's events, don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
+The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types, including their events, don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
 
 ```ts
 import { Graph } from "@tang0226/graph-js/graph";

@@ -15,6 +15,13 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/graph.js").GraphNode} GraphNode */
 /** @typedef {import("./typedefs/graph.js").GraphEdge} GraphEdge */
 /** @typedef {import("./typedefs/graph.js").GraphOpts} GraphOpts */
+/** @typedef {import("./typedefs/graph.js").GraphNodeEventData} GraphNodeEventData */
+/** @typedef {import("./typedefs/graph.js").GraphEdgeEventData} GraphEdgeEventData */
+/** @typedef {import("./typedefs/graph.js").GraphDataChangeEventData} GraphDataChangeEventData */
+/** @typedef {import("./typedefs/graph.js").GraphEventMap} GraphEventMap */
+/** @typedef {import("./typedefs/graph.js").GraphEventType} GraphEventType */
+/** @template {GraphEventType} [K=GraphEventType] @typedef {import("./typedefs/graph.js").GraphEvent<K>} GraphEvent */
+/** @template {GraphEventType} [K=GraphEventType] @typedef {import("./typedefs/graph.js").GraphListener<K>} GraphListener */
 
 // CONFIG VALUES
 /** @template T @typedef {import("./typedefs/graph.js").NodeAccessor<T>} NodeAccessor */

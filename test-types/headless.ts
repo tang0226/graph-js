@@ -9,6 +9,15 @@ import { Tween, easings } from "@tang0226/graph-js/tween";
 import { Emitter } from "../types/emitter.js";
 
 const graph = new Graph({ directed: false });
+
+// Graph events work without the DOM, and are typed by name
+graph.on("nodeadd", e => { const n: number = e.target.nodes.size; e.node.data; })
+  .on("edgeremove", e => { e.srcId; e.destId; e.edge.src.id; })
+  .on("nodedatachange", e => { const before: unknown = e.prev; });
+// @ts-expect-error -- node events have no edge
+graph.on("noderemove", e => { e.edge; });
+// @ts-expect-error -- not a graph event
+graph.on("settle", () => {});
 graph.addNode({ id: "a" });
 graph.addNode({ id: "b" });
 graph.addEdge("a", "b");

@@ -1,6 +1,7 @@
 // GRAPH LAYER
 // Types only. No DOM types here: the headless entry points depend on this file.
 /** @import { Graph } from '../graph.js' */
+/** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /**
  * @typedef {any} NodeId
@@ -28,6 +29,68 @@
 /**
  * @typedef {object} GraphOpts
  * @property {boolean} [directed=false] - whether the graph is directed; fixed at instantiation
+ */
+
+
+
+// EVENTS
+
+/**
+ * Data of an event about a node
+ * @typedef {object} GraphNodeEventData
+ * @property {NodeId} id - id of the node
+ * @property {GraphNode} node - the node
+ */
+
+/**
+ * Data of an event about an edge. `srcId` and `destId` are the ids the edge
+ * is stored with, so an undirected edge always reports the same pair,
+ * whichever order it was added or removed with.
+ * @typedef {object} GraphEdgeEventData
+ * @property {NodeId} srcId - id of the edge's source node
+ * @property {NodeId} destId - id of the edge's destination node
+ * @property {GraphEdge} edge - the edge
+ */
+
+/**
+ * Data of an event about changed custom data
+ * @typedef {object} GraphDataChangeEventData
+ * @property {any} prev - the data that was replaced
+ */
+
+/**
+ * Graph event names, each mapped to the data its events carry on top of the
+ * fields every event has. Each is emitted once its change is complete, so the
+ * graph is up to date for listeners. These events report what happened, so
+ * calling `preventDefault()` on them has no effect.
+ * @typedef {object} GraphEventMap
+ * @property {GraphNodeEventData} nodeadd - a node was added
+ * @property {GraphNodeEventData} noderemove - a node was removed, after an
+ *    `edgeremove` for each of its edges
+ * @property {GraphNodeEventData & GraphDataChangeEventData} nodedatachange -
+ *    `setNodeData()` replaced a node's data
+ * @property {GraphEdgeEventData} edgeadd - an edge was added
+ * @property {GraphEdgeEventData} edgeremove - an edge was removed, by
+ *    `removeEdge()` or by removing one of its nodes
+ * @property {GraphEdgeEventData & GraphDataChangeEventData} edgedatachange -
+ *    `setEdgeData()` replaced an edge's data
+ */
+
+/**
+ * Name of a graph event
+ * @typedef {keyof GraphEventMap} GraphEventType
+ */
+
+/**
+ * Event passed to graph listeners
+ * @template {GraphEventType} [K=GraphEventType]
+ * @typedef {EmitterEvent<GraphEventMap, K, Graph>} GraphEvent
+ */
+
+/**
+ * Function called with each graph event of the type it was added for
+ * @template {GraphEventType} [K=GraphEventType]
+ * @typedef {EmitterListener<GraphEventMap, K, Graph>} GraphListener
  */
 
 

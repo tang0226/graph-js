@@ -1,9 +1,25 @@
-/** @import {NodeId, NodeData, GraphNode, GraphEdge} from './typedefs/graph.js' */
+/** @import {NodeId, NodeData, GraphNode, GraphEdge, GraphEventMap, GraphEventType} from './typedefs/graph.js' */
+
+import { Emitter } from "./emitter.js";
+
+
+/**
+ * Every graph event name, matching the keys of `GraphEventMap`
+ * @type {readonly GraphEventType[]}
+ */
+const GRAPH_EVENT_TYPES = Object.freeze([
+  "nodeadd", "noderemove", "nodedatachange",
+  "edgeadd", "edgeremove", "edgedatachange",
+]);
+
 
 /**
  * Represents the shape of a directed or undirected graph and stores custom data for nodes and edges.
+ * Emits the events in `GraphEventMap`, through `on()` and `off()`, once each
+ * change is complete.
+ * @extends {Emitter<GraphEventMap, Graph>}
  */
-export class Graph {
+export class Graph extends Emitter {
   /** @private @type {Map<NodeId, GraphNode>} */
   _nodes = new Map();
   /**
@@ -81,6 +97,7 @@ export class Graph {
    * @param {boolean} [opts.directed] - whether the graph is directed or undirected
    */
   constructor(opts = {}) {
+    super(GRAPH_EVENT_TYPES, "Graph");
     this._directed = opts.directed ?? false;
   }
 
@@ -97,21 +114,25 @@ export class Graph {
    * Adds a node to the graph if the id is not already in use.
    * If an id is not specified in the data object or id field, addNode will generate an id automatically using crypto.randomUUID().
    * If the id is already in use, no node is added and the existing id is returned.
+   * Emits `nodeadd` when a node is added.
    * @param {NodeData} [data] - custom data to associate with the node
    * @param {NodeId} [id] - id of the new node; defaults to `data.id`, then a random UUID
    * @returns {NodeId} id of the node
    */
   addNode(data = {}, id = data.id ?? crypto.randomUUID()) {
     if (this._nodes.has(id)) return id;
-    this._nodes.set(id, { id, data });
+    const node = { id, data };
+    this._nodes.set(id, node);
     this._adjacency.set(id, new Map());
     this._version++;
+    if (this._hasListeners("nodeadd")) this._emit("nodeadd", { id, node });
     return id;
   }
 
 
   /**
    * Removes a node from the graph by id and deletes all connected edges. Returns false if the node does not exist.
+   * Emits `edgeremove` for each of its edges, then `noderemove`.
    * @param {NodeId} id - id of target node
    * @returns {boolean} success of the removal
    */
@@ -122,15 +143,19 @@ export class Graph {
     if (this._directed) for (const [srcId, srcMap] of this._adjacency.entries()) {
       if (srcMap.has(id)) this.removeEdge(srcId, id);
     }
+    // An edgeremove listener may have removed this node already
+    if (this._adjacency.get(id) !== adj) return true;
+    const node = /** @type {GraphNode} */ (this._nodes.get(id));
     this._adjacency.delete(id);
     this._nodes.delete(id);
     this._version++;
+    if (this._hasListeners("noderemove")) this._emit("noderemove", { id, node });
     return true;
   }
 
 
   /**
-   * Sets the custom data of a node by id.
+   * Sets the custom data of a node by id. Emits `nodedatachange`.
    * @param {NodeId} id - id of target node
    * @param {any} data - data to set
    * @returns {this} self reference
@@ -139,14 +164,17 @@ export class Graph {
   setNodeData(id, data) {
     const node = this._nodes.get(id);
     if (!node) throw new ReferenceError(`Cannot find node with id "${id}"`);
+    const prev = node.data;
     node.data = data;
     this._dataVersion++;
+    if (this._hasListeners("nodedatachange")) this._emit("nodedatachange", { id, node, prev });
     return this;
   }
 
 
   /**
    * Adds an edge to the graph based on two node ids (order does not matter in an undirected graph).
+   * Emits `edgeadd` when an edge is added.
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @param {any} [data={}] - custom data to associate with the edge
@@ -164,6 +192,7 @@ export class Graph {
     this._adjacency.get(srcId)?.set(destId, edge);
     if (!this._directed) this._adjacency.get(destId)?.set(srcId, edge);
     this._version++;
+    if (this._hasListeners("edgeadd")) this._emit("edgeadd", { srcId, destId, edge });
     return true;
   }
 
@@ -171,6 +200,7 @@ export class Graph {
   /**
    * Removes an edge from the graph based on two node ids (order does not matter in an undirected graph).
    * Unknown node ids are treated as "no such edge" and return false (no throws).
+   * Emits `edgeremove` when an edge is removed.
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @returns {boolean} whether the edge was successfully removed
@@ -182,6 +212,8 @@ export class Graph {
     this._adjacency.get(srcId)?.delete(destId);
     if (!this._directed) this._adjacency.get(destId)?.delete(srcId);
     this._version++;
+    // The stored ids, so an undirected edge reports the same pair both ways
+    if (this._hasListeners("edgeremove")) this._emit("edgeremove", { srcId: edge.src.id, destId: edge.dest.id, edge });
     return true;
   }
 
@@ -205,7 +237,8 @@ export class Graph {
 
 
   /**
-   * Sets the custom data field of an edge, selected by node ids.
+   * Sets the custom data field of an edge, selected by node ids. Emits
+   * `edgedatachange`.
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @param {any} data - custom data to set
@@ -215,8 +248,10 @@ export class Graph {
   setEdgeData(srcId, destId, data) {
     const edge = this._adjacency.get(srcId)?.get(destId);
     if (!edge) throw new ReferenceError(`Cannot find edge with srcId "${srcId}" and destId "${destId}"`);
+    const prev = edge.data;
     edge.data = data;
     this._dataVersion++;
+    if (this._hasListeners("edgedatachange")) this._emit("edgedatachange", { srcId: edge.src.id, destId: edge.dest.id, edge, prev });
     return this;
   }
 }

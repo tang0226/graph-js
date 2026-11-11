@@ -12,6 +12,8 @@ import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpat
 // Public types, re-exported from the package root
 import type {
   NodeId, NodeData, GraphNode, GraphEdge, GraphOpts,
+  GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
+  GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
   SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
   BarnesHutOpts, BarnesHutOptsInput,
@@ -177,6 +179,18 @@ gjs.interactionOpts.zoom;
 const iInput: InteractionOptsInput = { pan: false };
 // @ts-expect-error -- the Interaction instance is internal
 gjs._interaction;
+
+// Graph events live on the graph, and are typed by name
+const onAdd = (e: GraphEvent<"nodeadd">) => { const id: NodeId = e.id; const node: GraphNode = e.node; const g: Graph = e.target; };
+const onEdge: GraphListener<"edgeadd" | "edgeremove"> = e => { const edge: GraphEdge = e.edge; const t: GraphEventType = e.type; };
+gjs.graph.on("nodeadd", onAdd).on("edgeadd", onEdge).on("edgeremove", onEdge);
+gjs.graph.on("edgedatachange", e => { const d: GraphEdgeEventData & GraphDataChangeEventData = e; });
+const nodeEventData: GraphNodeEventData = { id: "a", node: { id: "a", data: {} } };
+const graphMap: GraphEventMap["nodedatachange"] = { ...nodeEventData, prev: {} };
+// @ts-expect-error -- a removed node has no previous data
+gjs.graph.on("noderemove", e => { e.prev; });
+// @ts-expect-error -- graph events aren't on the facade
+gjs.on("nodeadd", () => {});
 
 // Simulation events live on the simulation, not the facade
 const onSettle = (e: SimEvent<"settle">) => { const s: Simulation = e.target; };

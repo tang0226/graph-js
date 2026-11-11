@@ -733,6 +733,33 @@ describe("GraphJS: events", () => {
   });
 });
 
+describe("GraphJS: graph events", () => {
+  test("the shortcuts emit graph events, on the graph", () => {
+    const gjs = new GraphJS();
+    const log = [];
+    for (const type of ["nodeadd", "edgeadd", "edgeremove", "noderemove"]) gjs.graph.on(type, e => log.push(type));
+    gjs.addNode({}, "a");
+    gjs.addNode({}, "b");
+    gjs.addEdge("a", "b");
+    gjs.removeNode("a");
+    assert.deepEqual(log, ["nodeadd", "nodeadd", "edgeadd", "edgeremove", "noderemove"]);
+    assert.throws(() => gjs.on("nodeadd", () => {}), TypeError, "graph events aren't on the facade");
+  });
+
+  test("in a listener the graph is current, the simulation catches up on sync()", () => {
+    const gjs = new GraphJS();
+    const seen = [];
+    gjs.graph.on("nodeadd", e => {
+      seen.push(gjs.graph.nodes.has(e.id));
+      seen.push(gjs.simulation.nodes.has(e.id));
+      gjs.simulation.sync();
+      seen.push(gjs.simulation.nodes.has(e.id));
+    });
+    gjs.addNode({}, "a");
+    assert.deepEqual(seen, [true, false, true]);
+  });
+});
+
 describe("GraphJS: simulation events", () => {
   test("stopping on settle and starting on wake runs the loop only while the layout moves", () => {
     const raf = installRaf();
