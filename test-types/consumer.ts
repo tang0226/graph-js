@@ -15,6 +15,7 @@ import type {
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
   SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
   BarnesHutOpts, BarnesHutOptsInput,
+  SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
   RendererOptsInput, RendererOpts, Size, View,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
@@ -176,6 +177,16 @@ gjs.interactionOpts.zoom;
 const iInput: InteractionOptsInput = { pan: false };
 // @ts-expect-error -- the Interaction instance is internal
 gjs._interaction;
+
+// Simulation events live on the simulation, not the facade
+const onSettle = (e: SimEvent<"settle">) => { const s: Simulation = e.target; };
+const simListener: SimListener<"wake"> = e => { const k: SimEventType = e.type; };
+gjs.simulation.on("settle", onSettle).on("wake", simListener);
+const simEvents: SimEventMap = { settle: {}, wake: {} };
+// @ts-expect-error -- the facade's events are interaction events
+gjs.on("settle", () => {});
+// @ts-expect-error -- emitting is internal to the simulation
+gjs.simulation._emit("settle", {});
 
 // Internal members are private, so consumers can't depend on them
 // @ts-expect-error -- private

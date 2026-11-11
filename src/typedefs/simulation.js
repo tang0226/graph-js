@@ -1,6 +1,8 @@
 // SIMULATION LAYER
 // Types only. No DOM types here: the headless entry points depend on this file.
 /** @import { NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
+/** @import { EmitterEvent, EmitterListener } from './emitter.js' */
+/** @import { Simulation } from '../simulation.js' */
 
 /**
  * @typedef {object} SimOpts
@@ -133,5 +135,39 @@
  */
 
 /** @typedef {Partial<BarnesHutOpts>} BarnesHutOptsInput */
+
+
+
+// EVENTS
+
+/**
+ * Simulation event names, each mapped to the data its events carry on top of
+ * the fields every event has. These events report what happened, so calling
+ * `preventDefault()` on them has no effect.
+ * @typedef {object} SimEventMap
+ * @property {{}} settle - the layout stopped moving: its temperature cooled
+ *    below `freezePoint` at the end of a tick, or `heat(0)` set it to 0.
+ *    Emitted after the tick has finished, so positions are final.
+ * @property {{}} wake - the layout started moving again: `heat()` raised its
+ *    temperature from 0. Graph and config changes, `setOpts()` and pinning a
+ *    node somewhere new all call `heat()`.
+ */
+
+/**
+ * Name of a simulation event
+ * @typedef {keyof SimEventMap} SimEventType
+ */
+
+/**
+ * Event passed to simulation listeners
+ * @template {SimEventType} [K=SimEventType]
+ * @typedef {EmitterEvent<SimEventMap, K, Simulation>} SimEvent
+ */
+
+/**
+ * Function called with each simulation event of the type it was added for
+ * @template {SimEventType} [K=SimEventType]
+ * @typedef {EmitterListener<SimEventMap, K, Simulation>} SimListener
+ */
 
 export {};

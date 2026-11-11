@@ -733,6 +733,34 @@ describe("GraphJS: events", () => {
   });
 });
 
+describe("GraphJS: simulation events", () => {
+  test("stopping on settle and starting on wake runs the loop only while the layout moves", () => {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    try {
+      gjs.simulation.on("settle", () => gjs.stop());
+      gjs.simulation.on("wake", () => gjs.start());
+      gjs.simulation.setOpts({ cooling: 0.5 });      // settles within a few frames
+      gjs.start();
+      let frames = 0;
+      while (gjs.isRunning() && frames < 100) { raf.flushFrame(); frames++; }
+      assert.equal(gjs.isRunning(), false, "settling stopped the loop");
+      assert.ok(frames < 20, `stopped after ${frames} frames`);
+      assert.equal(raf.pending.size, 0);
+
+      gjs.simulation.heat();                         // as any change would
+      assert.equal(gjs.isRunning(), true, "waking restarted it");
+      assert.equal(raf.pending.size, 1);
+    } finally { gjs.stop(); restoreWindow(); raf.restore(); }
+  });
+
+  test("the facade doesn't take simulation event names", () => {
+    const gjs = new GraphJS();
+    assert.throws(() => gjs.on("settle", () => {}), TypeError);
+    assert.doesNotThrow(() => gjs.simulation.on("settle", () => {}));
+  });
+});
+
 describe("GraphJS: tweens", () => {
   /* A headless instance (no canvas needed) and a tween that records values. */
   function tweened(gjs, opts) {

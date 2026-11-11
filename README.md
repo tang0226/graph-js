@@ -29,10 +29,13 @@ npm install @tang0226/graph-js
   - [Tweens](#tweens)
 - [Interaction](#interaction)
   - [Built-in interaction](#built-in-interaction)
-  - [Events](#events)
   - [Panning and zooming](#panning-and-zooming)
   - [Coordinates and hit-testing](#coordinates-and-hit-testing)
   - [Building your own interaction](#building-your-own-interaction)
+- [Events](#events)
+  - [Listening for events](#listening-for-events)
+  - [Interaction events](#interaction-events)
+  - [Simulation events](#simulation-events)
 - [Drawing](#drawing)
   - [Highlighting](#highlighting)
   - [Custom drawing](#custom-drawing)
@@ -80,7 +83,7 @@ A `GraphJS` instance combines three layers, each of which can also be used on it
 | `Simulation` | `gjs.simulation` | the physics layout: positions, forces, and settling |
 | `Renderer` | `gjs.renderer` | drawing: styles, the view, highlighting, and drawing hooks |
 
-`GraphJS` adds the animation loop, tweens, events, and pointer interaction on top, along with shortcuts for common calls such as `addNode()` and `pin()`.
+`GraphJS` adds the animation loop, tweens, and pointer interaction on top, along with shortcuts for common calls such as `addNode()` and `pin()`. Both `GraphJS` and the simulation emit [events](#events).
 
 ### Creating a GraphJS instance
 
@@ -462,7 +465,7 @@ Starting a tween with the key of an active one cancels the old one, so two tween
 
 - **When they run:** tweens are advanced at the start of each frame of `start()` and each `step()`, before the `"preTick"` hooks. Time only counts while frames run, so a tween doesn't jump ahead after `stop()` and `start()`.
 - **Without the loop:** if you draw only when something changes, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true. It advances tweens without ticking the simulation.
-- **With interaction:** a view tween keeps moving the view while the user pans or zooms. To let the user take over, cancel it from a `panstart` or `zoom` listener (see [Events](#events)).
+- **With interaction:** a view tween keeps moving the view while the user pans or zooms. To let the user take over, cancel it from a `panstart` or `zoom` listener (see [Interaction events](#interaction-events)).
 - **Errors:** a `set` function that throws is logged and the tween is cancelled. Cancel tweens whose node or edge you remove: `setEdgeConfig()` throws for a missing edge.
 - **Speed:** each change to a node or edge config makes the renderer re-read every node's and edge's settings on the next frame, so style tweens get expensive on large graphs. Tweening the view or node positions doesn't have this cost.
 - **Without GraphJS:** `Tween` is also exported from the package root and from `@tang0226/graph-js/tween`. `new Tween(opts)` takes the same options except `key`, and you advance it with `tween.step(ms)` from your own loop.
@@ -497,7 +500,7 @@ While it's on and a canvas is attached:
 | Double-click a node | | `nodedblclick` |
 | Move onto or off a node | | `nodeenter`, `nodeleave` |
 
-Listeners can change or cancel each response (see [Events](#events)).
+Listeners can change or cancel each response (see [Interaction events](#interaction-events)).
 
 | Option | Default | |
 |---|---|---|
@@ -518,63 +521,6 @@ Listeners can change or cancel each response (see [Events](#events)).
 - **The wheel:** the page doesn't scroll while the wheel zooms, even at a zoom limit. Horizontal scrolling is left to the page. A view that code has set past `minZoom` or `maxZoom` isn't snapped back; the wheel only stops it going further.
 - **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction draws one frame after each change. That frame doesn't advance tweens or finish highlight fades, so if you use those while stopped, keep drawing yourself (see [Tweens](#tweens) and [Highlighting](#highlighting)).
 - **The canvas:** interaction listens on whichever canvas is attached, and stops when it's detached. A canvas that can't receive pointer input, such as an `OffscreenCanvas`, is ignored. Turning interaction off or detaching during a drag ends it without events, and unpins the node.
-
-### Events
-
-`on()` adds a listener for an event, and `off()` removes it:
-
-```js
-function onClick(e) {
-  console.log(`clicked ${e.id} at (${e.x}, ${e.y})`);
-}
-gjs.on("nodeclick", onClick);
-gjs.off("nodeclick", onClick);   // true if it was added
-```
-
-Events come from [built-in interaction](#built-in-interaction), so listeners only hear them while it's on. Listeners belong to the instance: they stay through `detach()` and `attach()`, and through turning interaction off and on.
-
-| Event | When | Data | `preventDefault()` |
-|---|---|---|---|
-| `nodeenter` | the pointer moves onto a node | pointer, `id` | |
-| `nodeleave` | the pointer moves off a node, or leaves the canvas | pointer, `id` | |
-| `nodepress` | the pointer is pressed on a node, before it's known whether the press is a click or a drag | pointer, `id` | the press is ignored: no drag or click follows |
-| `nodeclick` | a node is clicked | pointer, `id` | |
-| `nodedblclick` | a node is double-clicked | pointer, `id` | |
-| `backgroundclick` | the canvas is clicked away from any node | pointer | |
-| `nodedragstart` | a node starts being dragged | pointer, `id` | the node isn't dragged |
-| `nodedrag` | a dragged node moves | pointer, `id`, `dx`, `dy` | the node doesn't move this time |
-| `nodedragend` | a dragged node is dropped | pointer, `id` | the node stays pinned where it was dropped |
-| `panstart` | the background starts being dragged | pointer, `view` | the view doesn't pan |
-| `pan` | the dragged background moves | pointer, `view`, `dx`, `dy` | the view doesn't move this time |
-| `panend` | the background is dropped | pointer, `view` | |
-| `zoom` | the wheel zooms the view | pointer, `view` | the view doesn't zoom |
-
-The data fields are:
-
-- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began.
-- **`id`:** the node's id.
-- **`dx`, `dy`:** how far the pointer moved, in canvas pixels, since the drag's previous event.
-- **`view`:** a copy of the view. For `panstart` and `panend` it's the current view; for `pan` and `zoom`, it's the view the change moves to.
-
-Every event also has `type`, its name, and `target`, the GraphJS instance. Events are emitted before GraphJS responds to them, so a listener can call `preventDefault()` to stop the response listed above. The other listeners still run, and can read `defaultPrevented`.
-
-```js
-// The root node can't be dragged
-gjs.on("nodedragstart", e => { if (e.id === "root") e.preventDefault(); });
-
-// Dropped nodes stay where they're put
-gjs.on("nodedragend", e => e.preventDefault());
-
-// Let the user take over from a camera tween
-gjs.on("panstart", () => gjs.cancelTween("camera"));
-gjs.on("zoom", () => gjs.cancelTween("camera"));
-```
-
-- **Order:** listeners of an event run in the order they were added, and adding the same function twice has no effect. Removing a listener needs the same function, so keep a reference to it.
-- **Errors:** a listener that throws is logged with `console.error`, and the remaining listeners still run.
-- **During an event:** a listener added while an event is running starts with the next one. A listener removed while an event is running doesn't run for it, if it hasn't already.
-- **Names:** an unknown event name throws a `TypeError`, so a misspelled name fails straight away instead of never firing.
-- **Changes from code:** calling `setView()`, `panBy()`, `pin()` and the like doesn't emit events. Events report what the user did.
 
 ### Panning and zooming
 
@@ -673,6 +619,101 @@ canvas.addEventListener("wheel", e => {
 ```
 
 Your own listeners can also run alongside built-in interaction, for input it doesn't handle, such as keyboard shortcuts that call `panBy()` and `zoomBy()`.
+
+## Events
+
+### Listening for events
+
+`GraphJS` and the simulation each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
+
+```js
+function onClick(e) {
+  console.log(`clicked ${e.id} at (${e.x}, ${e.y})`);
+}
+gjs.on("nodeclick", onClick);                    // an interaction event, on the GraphJS instance
+gjs.off("nodeclick", onClick);                   // true if it was added
+
+gjs.simulation.on("settle", () => gjs.stop());   // a simulation event, on the simulation
+```
+
+Each object only takes its own event names: `gjs.on("settle", ...)` throws, because `settle` is a simulation event.
+
+Every event has `type`, its name, and `target`, the object that emitted it, along with any data listed for that event. Every event also has `preventDefault()` and `defaultPrevented`, but what preventing does depends on where the event comes from:
+
+- **Interaction events** are emitted before GraphJS responds to the user, so calling `preventDefault()` stops the response listed in the [interaction events](#interaction-events) table. The other listeners still run, and can read `defaultPrevented`.
+- **Layer events,** such as the simulation's, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as calling `heat()` from a `settle` listener.
+
+How listeners run is the same for every event:
+
+- **Order:** listeners of an event run in the order they were added, and adding the same function twice has no effect. Removing a listener needs the same function, so keep a reference to it.
+- **Errors:** a listener that throws is logged with `console.error`, and the remaining listeners still run.
+- **During an event:** a listener added while an event is running starts with the next one. A listener removed while an event is running doesn't run for it, if it hasn't already.
+- **Names:** an unknown event name throws a `TypeError`, so a misspelled name fails straight away instead of never firing.
+- **Lifetime:** listeners belong to the object they're added to. GraphJS's stay through `detach()` and `attach()`, and through turning interaction off and on.
+
+### Interaction events
+
+[Built-in interaction](#built-in-interaction) emits these on the GraphJS instance, so listeners only hear them while it's on. They report what the user did: calling `setView()`, `panBy()`, `pin()` and the like doesn't emit them.
+
+| Event | When | Data | `preventDefault()` |
+|---|---|---|---|
+| `nodeenter` | the pointer moves onto a node | pointer, `id` | |
+| `nodeleave` | the pointer moves off a node, or leaves the canvas | pointer, `id` | |
+| `nodepress` | the pointer is pressed on a node, before it's known whether the press is a click or a drag | pointer, `id` | the press is ignored: no drag or click follows |
+| `nodeclick` | a node is clicked | pointer, `id` | |
+| `nodedblclick` | a node is double-clicked | pointer, `id` | |
+| `backgroundclick` | the canvas is clicked away from any node | pointer | |
+| `nodedragstart` | a node starts being dragged | pointer, `id` | the node isn't dragged |
+| `nodedrag` | a dragged node moves | pointer, `id`, `dx`, `dy` | the node doesn't move this time |
+| `nodedragend` | a dragged node is dropped | pointer, `id` | the node stays pinned where it was dropped |
+| `panstart` | the background starts being dragged | pointer, `view` | the view doesn't pan |
+| `pan` | the dragged background moves | pointer, `view`, `dx`, `dy` | the view doesn't move this time |
+| `panend` | the background is dropped | pointer, `view` | |
+| `zoom` | the wheel zooms the view | pointer, `view` | the view doesn't zoom |
+
+The data fields are:
+
+- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began.
+- **`id`:** the node's id.
+- **`dx`, `dy`:** how far the pointer moved, in canvas pixels, since the drag's previous event.
+- **`view`:** a copy of the view. For `panstart` and `panend` it's the current view; for `pan` and `zoom`, it's the view the change moves to.
+
+```js
+// The root node can't be dragged
+gjs.on("nodedragstart", e => { if (e.id === "root") e.preventDefault(); });
+
+// Dropped nodes stay where they're put
+gjs.on("nodedragend", e => e.preventDefault());
+
+// Let the user take over from a camera tween
+gjs.on("panstart", () => gjs.cancelTween("camera"));
+gjs.on("zoom", () => gjs.cancelTween("camera"));
+```
+
+### Simulation events
+
+The simulation emits these as the layout stops and starts (see [Settling](#settling)). Listen on `gjs.simulation`, or on a `Simulation` used on its own, including in Node.
+
+| Event | When |
+|---|---|
+| `settle` | the layout stops: its temperature drops below `freezePoint`, or `heat(0)` is called while it's moving |
+| `wake` | the layout starts moving again: `heat()` raises its temperature from 0 |
+
+Neither event carries data; read `e.target.temp` for the temperature. Both report what has already happened, so their defaults can't be prevented.
+
+```js
+// Fit the view once the layout has stopped moving (fitView is your own function)
+gjs.simulation.on("settle", () => fitView());
+
+// Save power: stop the loop while nothing moves, and restart it when something does
+gjs.simulation.on("settle", () => gjs.stop());
+gjs.simulation.on("wake", () => gjs.start());
+```
+
+- **Final positions:** `settle` is emitted after the tick that froze the layout has finished, so positions are final and velocities are zero.
+- **Every wake:** every change that wakes the layout, listed under [Settling](#settling), goes through `heat()`, so `wake` covers them all. It's emitted straight away, before the next tick. Heating a layout that's already moving doesn't emit it.
+- **From code too:** unlike interaction events, simulation events report changes however they're made, including by your own calls to `heat()`, `setOpts()` or `pin()`.
+- **A stopped loop:** if the loop is stopped, a change wakes the layout but nothing ticks it. That's what the `wake` listener above is for. While it's stopped, tweens and highlight fades don't advance either, so restart the loop for those too, or draw on demand (see [Tweens](#tweens)).
 
 ## Drawing
 
@@ -801,6 +842,12 @@ gjs.simulation.heat(0.3);       // a gentler nudge
 gjs.simulation.temp;            // current temperature; 0 means frozen
 ```
 
+The simulation emits a `settle` event when the layout stops, and a `wake` event when it starts moving again (see [Simulation events](#simulation-events)):
+
+```js
+gjs.simulation.on("settle", () => console.log("the layout has stopped"));
+```
+
 To cover more ground in each tick, raise `dt`. Temperature still falls once per tick, so the layout freezes after the same number of ticks, but it gets closer to its final shape first, which helps most on large graphs. Values up to about 3 stay stable; above that, nodes start to jitter. Passing a value to `gjs.simulation.tick(dt)` overrides the option for that tick.
 
 ### Barnes-Hut
@@ -870,7 +917,18 @@ function onMove(e: GraphJSEvent<"nodedrag" | "pan">) {
 gjs.on("nodedrag", onMove).on("pan", onMove);
 ```
 
-The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
+Simulation events have their own types, `SimEvent<K>` and `SimListener<K>`, used the same way:
+
+```ts
+import type { SimEvent } from "@tang0226/graph-js";
+
+function onSettle(e: SimEvent<"settle">) {
+  console.log("settled at temperature", e.target.temp);
+}
+gjs.simulation.on("settle", onSettle);
+```
+
+The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types, including the simulation's events, don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
 
 ```ts
 import { Graph } from "@tang0226/graph-js/graph";

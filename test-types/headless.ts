@@ -16,6 +16,12 @@ graph.addEdge("a", "b");
 const sim = new Simulation(graph, { collision: "grid", nodeConfig: { radius: n => 5 } });
 sim.tick().tick();
 const temp: number = sim.temp;
+
+// Simulation events work without the DOM, and are typed by name
+sim.on("settle", e => { const s: Simulation = e.target; const t: number = s.temp; }).on("wake", e => {});
+const offRemoved: boolean = sim.off("settle", () => {});
+// @ts-expect-error -- not a simulation event
+sim.on("nodeclick", () => {});
 const pos: [number, number] | null = sim.getPosition("a");
 
 // Tweens run without a canvas, driven by any loop

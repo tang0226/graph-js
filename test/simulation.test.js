@@ -624,6 +624,132 @@ describe("Simulation: temperature", () => {
   });
 });
 
+describe("Simulation: settle and wake events", () => {
+  /* A layout that cools fast: 0.5^7 < 0.01, so it settles on the 7th tick. */
+  function quick(n = 3) {
+    const sim = new Simulation(chain(n), { cooling: 0.5, freezePoint: 0.01 });
+    const log = [];
+    for (const type of ["settle", "wake"]) sim.on(type, e => log.push(e));
+    return { sim, log };
+  }
+  const ticksToSettle = sim => {
+    let n = 0;
+    while (sim.temp > 0 && n < 1000) { sim.tick(); n++; }
+    return n;
+  };
+
+  test("settle is emitted once, on the tick the layout freezes", () => {
+    const { sim, log } = quick();
+    sim.heat();
+    log.length = 0;
+    for (let i = 0; i < 6; i++) sim.tick();
+    assert.deepEqual(log, [], "still cooling");
+    sim.tick();
+    assert.deepEqual(log.map(e => e.type), ["settle"]);
+    assert.equal(log[0].target, sim);
+    sim.tick().tick();
+    assert.equal(log.length, 1, "a frozen layout doesn't settle again");
+  });
+
+  test("settle comes after the tick has finished, with final positions and zero velocity", () => {
+    const sim = new Simulation(chain(4), { cooling: 0.5, freezePoint: 0.01 });
+    let seen = null;
+    sim.on("settle", e => {
+      seen = {
+        temp: e.target.temp,
+        still: e.target.nodeList.every(n => n.vx === 0 && n.vy === 0),
+        positions: e.target.nodeList.map(n => [n.x, n.y]),
+      };
+    });
+    ticksToSettle(sim);
+    assert.equal(seen.temp, 0);
+    assert.equal(seen.still, true);
+    assert.deepEqual(seen.positions, sim.nodeList.map(n => [n.x, n.y]), "nothing moves after the listener runs");
+  });
+
+  test("wake is emitted when heat() starts a frozen layout", () => {
+    const { sim, log } = quick();
+    ticksToSettle(sim);
+    log.length = 0;
+    sim.heat(0.5);
+    assert.deepEqual(log.map(e => e.type), ["wake"]);
+    assert.equal(log[0].target.temp, 0.5, "the temperature is already set");
+    sim.heat();
+    assert.equal(log.length, 1, "heating a moving layout isn't a wake");
+  });
+
+  test("heat(0) on a moving layout is a settle; on a frozen one it's nothing", () => {
+    const { sim, log } = quick();
+    sim.heat();
+    log.length = 0;
+    sim.heat(0);
+    assert.deepEqual(log.map(e => e.type), ["settle"]);
+    sim.heat(0);
+    sim.heat(-1);
+    assert.equal(log.length, 1);
+  });
+
+  test("changes that heat the layout wake it", () => {
+    const { sim, log } = quick();
+    ticksToSettle(sim);
+    const wakes = () => log.filter(e => e.type === "wake").length;
+    log.length = 0;
+
+    sim.setOpts({ repulsion: 2000 });
+    assert.equal(wakes(), 1, "setOpts");
+    ticksToSettle(sim);
+
+    sim.graph.addNode({ id: "x" });
+    sim.tick();                                // the graph change is picked up on sync
+    assert.equal(wakes(), 2, "a graph change");
+    ticksToSettle(sim);
+
+    sim.pin("n0", 500, 500);
+    assert.equal(wakes(), 3, "pinning somewhere new");
+    ticksToSettle(sim);
+
+    sim.pin("n0", 500, 500);
+    assert.equal(wakes(), 3, "pinning in place doesn't wake it");
+  });
+
+  test("a settle listener can wake the layout again", () => {
+    const { sim, log } = quick();
+    let rewoken = false;
+    sim.on("settle", e => { if (!rewoken) { rewoken = true; e.target.heat(); } });
+    sim.heat();
+    log.length = 0;
+    for (let i = 0; i < 7; i++) sim.tick();   // exactly to the first settle
+    assert.deepEqual(log.map(e => e.type), ["settle", "wake"], "the wake is reported inside the settle");
+    assert.equal(sim.temp, 1);
+    ticksToSettle(sim);
+    assert.deepEqual(log.map(e => e.type), ["settle", "wake", "settle"]);
+  });
+
+  test("a layout that never freezes never settles", () => {
+    const sim = new Simulation(chain(3), { cooling: 1, freezePoint: 0.01 });
+    let settles = 0;
+    sim.on("settle", () => { settles++; });
+    sim.heat();
+    for (let i = 0; i < 50; i++) sim.tick();
+    assert.equal(settles, 0);
+  });
+
+  test("preventDefault has no effect on simulation events", () => {
+    const { sim } = quick();
+    sim.on("settle", e => e.preventDefault());
+    sim.on("wake", e => e.preventDefault());
+    ticksToSettle(sim);
+    assert.equal(sim.temp, 0, "the layout still froze");
+    sim.heat();
+    assert.equal(sim.temp, 1, "and still woke");
+  });
+
+  test("only simulation event names are accepted", () => {
+    const sim = new Simulation(chain(2));
+    assert.throws(() => sim.on("nodeclick", () => {}), /^TypeError: Simulation: unknown event "nodeclick"$/);
+  });
+});
+
 describe("Simulation: pin and unpin", () => {
   test("pin fixes the node at the given point", () => {
     const sim = new Simulation(chain(3), {});

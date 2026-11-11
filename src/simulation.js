@@ -9,12 +9,21 @@
  *  SimEdge, SimEdgeConfig, SimEdgeAccessors,
  *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
  *  SimOpts, SimOptsInput,
+ *  SimEventMap, SimEventType,
  * } from './typedefs/simulation.js'
  */
 
 import { asFn } from "./utils.js";
 import { BarnesHutContext } from "./barnes-hut.js";
 import { CollisionGrid } from "./collision-grid.js";
+import { Emitter } from "./emitter.js";
+
+
+/**
+ * Every simulation event name, matching the keys of `SimEventMap`
+ * @type {readonly SimEventType[]}
+ */
+const SIM_EVENT_TYPES = Object.freeze(["settle", "wake"]);
 
 
 /** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
@@ -48,8 +57,10 @@ const toEdgeAccessors = config => ({
 /**
  * Simulates repulsion, springs, friction, gravity,
  * and collision resolution for an underlying `Graph` instance.
+ * Emits the events in `SimEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<SimEventMap, Simulation>}
  */
-export class Simulation {
+export class Simulation extends Emitter {
   /** @private @type {Graph} */
   _graph;
   get graph() { return this._graph; }
@@ -316,7 +327,8 @@ export class Simulation {
    * Temperature value that forces are multiplied by. Decays each tick
    * according to the rate of `opts.cooling`. Once it is lower than
    * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
-   * which is called after config or settings changes.
+   * which is called after config or settings changes. The `settle` and
+   * `wake` events report it reaching zero and leaving it.
    */
   get temp() { return this._temp; }
 
@@ -369,6 +381,7 @@ export class Simulation {
    * @param {SimOptsInput} [opts={}] - physics engine and node body options
    */
   constructor(graph, opts = {}) {
+    super(SIM_EVENT_TYPES, "Simulation");
     this._graph = graph;
 
     this._opts = {
@@ -407,13 +420,16 @@ export class Simulation {
 
 
   /**
-   * Sets the simulation's temp value
-   * @param {number} [t=1] - temperature to set
+   * Sets the simulation's temp value. Emits `wake` if that starts a frozen
+   * layout moving, or `settle` if setting 0 stops a moving one.
+   * @param {number} [t=1] - temperature to set; values below 0 set 0
    * @returns {this} self reference
    */
   heat(t = 1) {
-    if (t >= 0) this._temp = t;
-    else this._temp = 0;
+    const wasFrozen = this._temp === 0;
+    this._temp = t >= 0 ? t : 0;
+    if (wasFrozen && this._temp > 0) this._emit("wake", {});
+    else if (!wasFrozen && this._temp === 0) this._emit("settle", {});
     return this;
   }
 
@@ -977,7 +993,8 @@ export class Simulation {
     }
 
     this._temp *= this._opts.cooling;
-    if (this._temp < this._opts.freezePoint) {
+    const settled = this._temp < this._opts.freezePoint;
+    if (settled) {
       this._temp = 0;
       // Drop residual velocities
       for (let i = 0; i < list.length; i++) { list[i].vx = 0; list[i].vy = 0; }
@@ -985,6 +1002,8 @@ export class Simulation {
 
     // Enforce radius
     this._enforceRadius();
+    // Last, so listeners see the tick's final positions
+    if (settled) this._emit("settle", {});
     return this;
   }
 
