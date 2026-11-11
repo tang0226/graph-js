@@ -4,18 +4,20 @@
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /**
+ * Id of a node. Any value works as a `Map` key, so ids may be strings,
+ * numbers or objects; generated ids are strings.
  * @typedef {any} NodeId
  */
 
 /**
  * Custom data for a node. Any fields are allowed; `id`, if present, becomes
  * the node's id when no explicit `id` argument is passed.
- * @typedef {{ id?: any, [key: string]: any }} NodeData
+ * @typedef {{ id?: NodeId, [key: string]: any }} NodeData
  */
 
 /**
  * @typedef {object} GraphNode
- * @property {any} id - id of the node
+ * @property {NodeId} id - id of the node
  * @property {any} data - custom data associated with the node
  */
 

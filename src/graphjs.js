@@ -1,4 +1,4 @@
-/** @import { NodeData } from './typedefs/graph.js' */
+/** @import { NodeData, NodeId } from './typedefs/graph.js' */
 /** @import { Canvas, View } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
@@ -244,8 +244,8 @@ export class GraphJS extends Emitter {
   /**
    * Adds a node to the `Graph`. Delegates to `Graph.addNode()`.
    * @param {NodeData} [data={}] - data for the node
-   * @param {any} [id=undefined] - node id
-   * @returns {any} - id of the node added
+   * @param {NodeId} [id=undefined] - node id
+   * @returns {NodeId} - id of the node added
    */
   addNode(data = {}, id = undefined) { return this.graph.addNode(data, id); }
 
@@ -253,8 +253,8 @@ export class GraphJS extends Emitter {
   /**
    * Adds an edge to the `Graph` based on source and destination node ids.
    * Delegates to `Graph.addEdge()`.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @param {any} data - data for the edge
    * @returns {boolean} - whether the edge was successfully added
    */
@@ -263,7 +263,7 @@ export class GraphJS extends Emitter {
 
   /**
    * Removes a node from the `Graph`. Delegates to `Graph.removeNode()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {boolean} success of the removal
    */
   removeNode(id) { return this.graph.removeNode(id); }
@@ -272,8 +272,8 @@ export class GraphJS extends Emitter {
   /**
    * Removes an edge from the `Graph` based on source and destination id.
    * Delegates to `Graph.removeEdge()`.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {boolean} success of the removal
    */
   removeEdge(srcId, destId) { return this.graph.removeEdge(srcId, destId); }
@@ -513,7 +513,7 @@ export class GraphJS extends Emitter {
    * @param {number} cy - canvas space y coordinate
    * @param {number} [slack] - extra hit radius around each node, in canvas
    *    pixels (defaults to the renderer's default)
-   * @returns {any | null} id of node at coordinates, or `null` if no node
+   * @returns {NodeId | null} id of node at coordinates, or `null` if no node
    *    was found
    * @throws {Error} throws if no canvas is attached
    */
@@ -526,7 +526,7 @@ export class GraphJS extends Emitter {
   /**
    * Returns the canvas space coordinates of a node based on id, or `null` if
    * the node id was not found. Delegates to `Simulation.getPosition()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {[number, number] | null} canvas space coordinates of the node,
    *    or `null` if the node id was not found
    * @throws {Error} throws if no canvas is attached
@@ -541,7 +541,7 @@ export class GraphJS extends Emitter {
   /**
    * Fixes the node with the specified id to a point in canvas space. Delegates
    * to `Simulation.pin()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {number} cx - canvas space x coordinate
    * @param {number} cy - canvas space y coordinate
    * @returns {boolean} whether the node was pinned (`false` if node not found)
@@ -556,7 +556,7 @@ export class GraphJS extends Emitter {
   /**
    * Unpins a node by reverting `fixed` to its default. Delegates to
    * `Simulation.unpin()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   unpin(id) { this._simulation.unpin(id); return this; }

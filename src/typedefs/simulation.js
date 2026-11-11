@@ -1,6 +1,6 @@
 // SIMULATION LAYER
 // Types only. No DOM types here: the headless entry points depend on this file.
-/** @import { NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
+/** @import { NodeId, NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 /** @import { Simulation } from '../simulation.js' */
 
@@ -46,7 +46,7 @@
  * Full simulation node object. Position and velocity props can be set directly,
  * but `mass`, `radius`, and `fixed` must be set using `setNodeConfig()`.
  * @typedef {object} SimNode
- * @property {any} id - node id (matches corresponding `GraphNode`)
+ * @property {NodeId} id - node id (matches corresponding `GraphNode`)
  * @property {number} mass - physical mass of the node
  * @property {number} radius - physical (and rendered) radius of the node
  * @property {number} charge - charge of the node for electrostatic repulsion
