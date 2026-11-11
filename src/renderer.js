@@ -17,7 +17,14 @@
 
 import { Simulation } from "./simulation.js";
 import { asFn, clamp, circleRectCollision, now } from "./utils.js";
+import { HookRegistry } from "./hook-registry.js";
 
+
+/**
+ * Every drawing hook type, matching `RendererHookType`
+ * @type {readonly RendererHookType[]}
+ */
+const HOOK_TYPES = Object.freeze(["background", "overlay"]);
 
 /** @type {RendererOpts} */
 const RENDERER_DEFAULTS = {
@@ -551,13 +558,10 @@ export class Renderer {
   /**
    * Hook functions by type, run by `render()`: "background" hooks after the
    * background fill, "overlay" hooks after everything else is drawn
-   * @type {Record<RendererHookType, Set<RendererHook>>}
+   * @type {HookRegistry<RendererHookType, RendererHook>}
    * @private
    */
-  _hooks = {
-    overlay: new Set(),
-    background: new Set(),
-  };
+  _hooks = new HookRegistry(HOOK_TYPES, "Renderer");
 
   
   /**
@@ -1343,7 +1347,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   addHook(type, f) {
-    this._hooks[type].add(f);
+    this._hooks.add(type, f);
     return this;
   }
 
@@ -1356,7 +1360,7 @@ export class Renderer {
    * @returns {boolean} - whether the hook existed
    */
   removeHook(type, f) {
-    return this._hooks[type].delete(f);
+    return this._hooks.remove(type, f);
   }
 
 
@@ -1368,14 +1372,13 @@ export class Renderer {
    * @private
    */
   _runHooks(type, time) {
-    const hooks = this._hooks[type];
-    if (hooks.size === 0 || !this._ctx) return;
-    for (const f of [...hooks]) {
-      this._ctx.save();
+    const ctx = this._ctx;
+    if (!ctx) return;
+    this._hooks.run(type, f => {
+      ctx.save();
       try { f(this, time); }
-      catch (err) { console.error(`Renderer: ${type} hook failed`, err); }
-      finally { this._ctx.restore(); }
-    }
+      finally { ctx.restore(); }
+    });
   }
 
 

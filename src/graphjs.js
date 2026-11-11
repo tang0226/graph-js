@@ -12,6 +12,7 @@ import { Renderer } from "./renderer.js";
 import { Tween } from "./tween.js";
 import { Interaction } from "./interaction.js";
 import { Emitter } from "./emitter.js";
+import { HookRegistry } from "./hook-registry.js";
 import { now } from "./utils.js";
 
 
@@ -25,6 +26,13 @@ const EVENT_TYPES = Object.freeze([
   "backgroundclick",
   "panstart", "pan", "panend", "zoom",
 ]);
+
+
+/**
+ * Every loop hook type, matching `GraphJSHookType`
+ * @type {readonly GraphJSHookType[]}
+ */
+const HOOK_TYPES = Object.freeze(["preTick", "postTick", "postRender"]);
 
 
 /**
@@ -60,14 +68,10 @@ export class GraphJS extends Emitter {
    * Hook functions by type, run by each frame of `start()` and by `step()`:
    * "preTick" before the simulation ticks, "postTick" between ticking and
    * rendering, and "postRender" after rendering
-   * @type {Record<GraphJSHookType, Set<GraphJSHook>>}
+   * @type {HookRegistry<GraphJSHookType, GraphJSHook>}
    * @private
    */
-  _hooks = {
-    preTick: new Set(),
-    postTick: new Set(),
-    postRender: new Set(),
-  };
+  _hooks = new HookRegistry(HOOK_TYPES, "GraphJS");
 
 
   /**
@@ -339,7 +343,7 @@ export class GraphJS extends Emitter {
    * @returns {this} self reference
    */
   addHook(type, f) {
-    this._hooks[type].add(f);
+    this._hooks.add(type, f);
     return this;
   }
 
@@ -352,7 +356,7 @@ export class GraphJS extends Emitter {
    * @returns {boolean} whether the hook existed
    */
   removeHook(type, f) {
-    return this._hooks[type].delete(f);
+    return this._hooks.remove(type, f);
   }
 
 
@@ -365,12 +369,7 @@ export class GraphJS extends Emitter {
    * @private
    */
   _runHooks(type, time) {
-    const hooks = this._hooks[type];
-    if (hooks.size === 0) return;
-    for (const f of [...hooks]) {
-      try { f(this, time); }
-      catch (err) { console.error(`GraphJS: ${type} hook failed`, err); }
-    }
+    this._hooks.run(type, f => f(this, time));
   }
 
 
