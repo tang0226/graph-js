@@ -1,0 +1,446 @@
+/** @import { GraphJS } from './graphjs.js' */
+/** @import { NodeId } from './typedefs/graph.js' */
+/** @import { Canvas } from './typedefs/renderer.js' */
+/** @import { InteractionOpts, InteractionOptsInput, InteractionEmit, InteractionPress } from './typedefs/interaction.js' */
+
+
+/** @type {Readonly<InteractionOpts>} */
+const DEFAULT_OPTS = Object.freeze({
+  dragNodes: true,
+  pan: true,
+  zoom: true,
+  dragThreshold: 4,
+  zoomSpeed: 0.002,
+  minZoom: 0.01,
+  maxZoom: 100,
+});
+
+
+/**
+ * Built-in pointer interaction for a `GraphJS` instance: turns DOM pointer and
+ * wheel events on its canvas into GraphJS events, then applies the built-in
+ * response to each (dragging nodes, panning, zooming) unless a listener calls
+ * `preventDefault()`. Owned by `GraphJS`, which binds it to the canvas on
+ * attach and unbinds it on detach.
+ */
+export class Interaction {
+  /** @private @type {GraphJS} */
+  _gjs;
+
+  /** @private @type {InteractionEmit} */
+  _emit;
+
+  /** @private @type {InteractionOpts} */
+  _opts = { ...DEFAULT_OPTS };
+  /**
+   * [read-only, set with `setOpts()`] Interaction options
+   * @returns {Readonly<InteractionOpts>}
+   */
+  get opts() { return this._opts; }
+
+  /**
+   * Canvas the DOM listeners are on, or `null` when unbound
+   * @type {HTMLCanvasElement | null}
+   * @private
+   */
+  _canvas = null;
+
+  /**
+   * Removes every DOM listener at once when aborted
+   * @type {AbortController | null}
+   * @private
+   */
+  _abort = null;
+
+  /**
+   * The canvas's `touch-action` before binding, restored on unbind
+   * @type {string}
+   * @private
+   */
+  _prevTouchAction = "";
+
+  /** @private @type {InteractionPress | null} */
+  _press = null;
+
+  /**
+   * Node under the pointer, or `null`. Frozen while a press is held.
+   * @type {NodeId | null}
+   * @private
+   */
+  _hovered = null;
+
+  /**
+   * Handle of the pending on-demand render, or `null`
+   * @type {number | null}
+   * @private
+   */
+  _raf = null;
+
+
+  /**
+   * @param {GraphJS} gjs - instance to interact with
+   * @param {InteractionEmit} emit - emits a GraphJS event
+   * @param {InteractionOptsInput} [opts] - options
+   * @throws {TypeError | RangeError} throws if an option is invalid
+   */
+  constructor(gjs, emit, opts = {}) {
+    this._gjs = gjs;
+    this._emit = emit;
+    this.setOpts(opts);
+  }
+
+
+  /**
+   * Merges options into the current ones. Options left `undefined` keep
+   * their current value. Nothing changes if any option is invalid.
+   * @param {InteractionOptsInput} opts - options to set
+   * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid
+   */
+  setOpts(opts) {
+    const next = { ...this._opts };
+    for (const key of /** @type {(keyof InteractionOpts)[]} */ (Object.keys(DEFAULT_OPTS))) {
+      if (opts[key] !== undefined) /** @type {any} */ (next)[key] = opts[key];
+    }
+    for (const key of /** @type {const} */ (["dragNodes", "pan", "zoom"])) {
+      if (typeof next[key] !== "boolean") throw new TypeError(`Interaction: \`${key}\` must be a boolean`);
+    }
+    if (!(next.dragThreshold >= 0 && Number.isFinite(next.dragThreshold)))
+      throw new RangeError("Interaction: `dragThreshold` must be a finite number, 0 or more");
+    if (!(next.zoomSpeed > 0 && Number.isFinite(next.zoomSpeed)))
+      throw new RangeError("Interaction: `zoomSpeed` must be a finite number above 0");
+    if (!(next.minZoom > 0 && Number.isFinite(next.minZoom)))
+      throw new RangeError("Interaction: `minZoom` must be a finite number above 0");
+    if (!(next.maxZoom >= next.minZoom))
+      throw new RangeError("Interaction: `maxZoom` must be at least `minZoom`");
+    this._opts = next;
+    return this;
+  }
+
+
+  /**
+   * Whether the DOM listeners are on a canvas
+   * @returns {boolean}
+   */
+  isBound() { return this._canvas !== null; }
+
+
+  /**
+   * Adds the DOM listeners to a canvas, unbinding from any previous one
+   * first. Canvases that can't receive pointer input, such as an
+   * `OffscreenCanvas`, are skipped.
+   * @param {Canvas} canvas - canvas to listen on
+   * @returns {boolean} whether the listeners were added
+   */
+  bind(canvas) {
+    this.unbind();
+    if (!("getBoundingClientRect" in canvas) || typeof canvas.addEventListener !== "function") return false;
+    const el = canvas;
+    const abort = new AbortController();
+    const signal = abort.signal;
+    this._canvas = el;
+    this._abort = abort;
+
+    el.addEventListener("pointerdown", e => this._onPointerDown(e), { signal });
+    el.addEventListener("pointermove", e => this._onPointerMove(e), { signal });
+    el.addEventListener("pointerup", e => this._endPress(e, true), { signal });
+    el.addEventListener("pointercancel", e => this._endPress(e, false), { signal });
+    el.addEventListener("pointerleave", e => { if (!this._press) this._clearHover(e); }, { signal });
+    el.addEventListener("dblclick", e => this._onDblClick(e), { signal });
+    // Not passive, so preventDefault() can stop the page scrolling
+    el.addEventListener("wheel", e => this._onWheel(e), { signal, passive: false });
+
+    // Stops touch drags from scrolling the page instead
+    if (el.style) {
+      this._prevTouchAction = el.style.touchAction;
+      el.style.touchAction = "none";
+    }
+    return true;
+  }
+
+
+  /**
+   * Removes the DOM listeners, if bound. Ends a press without emitting
+   * events, unpinning a node it was dragging, and forgets the hovered node.
+   * @returns {this} self reference
+   */
+  unbind() {
+    const el = this._canvas;
+    if (!el) return this;
+    this._abort?.abort();
+    this._abort = null;
+    this._canvas = null;
+    if (el.style) el.style.touchAction = this._prevTouchAction;
+    if (this._press?.unpin) this._gjs.simulation.unpin(this._press.id);
+    this._press = null;
+    this._hovered = null;
+    if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
+    return this;
+  }
+
+
+  /**
+   * Converts a DOM event's client coordinates to canvas space.
+   * @param {MouseEvent} e - DOM event
+   * @param {HTMLCanvasElement} el - bound canvas
+   * @returns {[number, number]} canvas space coordinates
+   * @private
+   */
+  _toCanvas(e, el) {
+    const r = el.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  }
+
+
+  /**
+   * Starts tracking a press of the primary pointer's main button.
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _onPointerDown(e) {
+    const el = this._canvas;
+    if (!el || this._press || !e.isPrimary || e.button !== 0) return;
+    const [x, y] = this._toCanvas(e, el);
+    this._press = {
+      pointerId: e.pointerId, id: this._gjs.nodeAt(x, y),
+      startX: x, startY: y, lastX: x, lastY: y,
+      drag: null, grabX: 0, grabY: 0, unpin: false,
+    };
+    // Keeps the moves coming if the pointer leaves the canvas mid-drag
+    try { el.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+  }
+
+
+  /**
+   * Updates hovering, or the press's drag once it passes the threshold.
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _onPointerMove(e) {
+    const el = this._canvas;
+    if (!el) return;
+    const [x, y] = this._toCanvas(e, el);
+    const press = this._press;
+    if (!press) { this._hover(x, y, e); return; }
+    if (e.pointerId !== press.pointerId) return;
+
+    if (press.drag === null) {
+      if (Math.hypot(x - press.startX, y - press.startY) <= this._opts.dragThreshold) return;
+      this._startDrag(press, e);
+      if (this._press !== press) return;
+    }
+    const dx = x - press.lastX, dy = y - press.lastY;
+    press.lastX = x;
+    press.lastY = y;
+    if (press.drag === "node") this._dragNode(press, x, y, dx, dy, e);
+    else if (press.drag === "pan") this._pan(press, x, y, dx, dy, e);
+  }
+
+
+  /**
+   * Decides what a press drags once it passes the threshold, and emits the
+   * drag's start event at the press position.
+   * @param {InteractionPress} press - press passing the threshold
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _startDrag(press, e) {
+    const { startX: x, startY: y, id } = press;
+    const gjs = this._gjs;
+    if (id !== null && this._opts.dragNodes) {
+      press.drag = "none";
+      if (this._emit("nodedragstart", { x, y, id, originalEvent: e }) || this._press !== press) return;
+      // Brings `fixed` up to date with config set since the last tick
+      gjs.simulation.sync();
+      const node = gjs.simulation.nodes.get(id);
+      if (!node) return; // removed since the press
+      const [px, py] = gjs.canvasToSim(x, y);
+      press.grabX = node.x - px;
+      press.grabY = node.y - py;
+      // A node that was already fixed stays fixed where it's dropped
+      press.unpin = !node.fixed;
+      gjs.simulation.pin(id, node.x, node.y);
+      press.drag = "node";
+    } else if (this._opts.pan) {
+      press.drag = "none";
+      if (this._emit("panstart", { x, y, view: { ...gjs.view }, originalEvent: e })) return;
+      press.drag = "pan";
+    } else {
+      press.drag = "none";
+    }
+  }
+
+
+  /**
+   * Emits `nodedrag`, then pins the node under the pointer.
+   * @param {InteractionPress} press - press dragging a node
+   * @param {number} x - canvas x coordinate of the pointer
+   * @param {number} y - canvas y coordinate of the pointer
+   * @param {number} dx - canvas x movement since the previous event
+   * @param {number} dy - canvas y movement since the previous event
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _dragNode(press, x, y, dx, dy, e) {
+    if (this._emit("nodedrag", { x, y, dx, dy, id: press.id, originalEvent: e }) || this._press !== press) return;
+    const [sx, sy] = this._gjs.canvasToSim(x, y);
+    this._gjs.simulation.pin(press.id, sx + press.grabX, sy + press.grabY);
+    this._requestRender();
+  }
+
+
+  /**
+   * Emits `pan`, then moves the view with the pointer.
+   * @param {InteractionPress} press - press panning
+   * @param {number} x - canvas x coordinate of the pointer
+   * @param {number} y - canvas y coordinate of the pointer
+   * @param {number} dx - canvas x movement since the previous event
+   * @param {number} dy - canvas y movement since the previous event
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _pan(press, x, y, dx, dy, e) {
+    const view = this._gjs.viewPannedBy(dx, dy);
+    if (this._emit("pan", { x, y, dx, dy, view, originalEvent: e }) || this._press !== press) return;
+    this._gjs.setView(view);
+    this._requestRender();
+  }
+
+
+  /**
+   * Ends the press: emits the drag's end event, or a click if the press
+   * never passed the threshold and `click` is set.
+   * @param {PointerEvent} e - DOM event
+   * @param {boolean} click - whether a press that didn't drag is a click
+   *    (`false` for `pointercancel`)
+   * @returns {void}
+   * @private
+   */
+  _endPress(e, click) {
+    const el = this._canvas, press = this._press;
+    if (!el || !press || e.pointerId !== press.pointerId) return;
+    this._press = null;
+    const [x, y] = this._toCanvas(e, el);
+    const gjs = this._gjs;
+
+    if (press.drag === "node") {
+      const prevented = this._emit("nodedragend", { x, y, id: press.id, originalEvent: e });
+      // Preventing the end leaves the node pinned where it was dropped
+      if (press.unpin && !prevented) gjs.simulation.unpin(press.id);
+    } else if (press.drag === "pan") {
+      this._emit("panend", { x, y, view: { ...gjs.view }, originalEvent: e });
+    } else if (press.drag === null && click) {
+      if (press.id !== null) this._emit("nodeclick", { x, y, id: press.id, originalEvent: e });
+      else this._emit("backgroundclick", { x, y, originalEvent: e });
+    }
+
+    if (this._canvas !== el) return;
+    // Touch has no hover, and a cancelled pointer has gone
+    if (click && e.pointerType !== "touch") this._hover(x, y, e);
+    else this._clearHover(e);
+  }
+
+
+  /**
+   * Emits `nodeleave` and `nodeenter` when the node under the pointer
+   * changes.
+   * @param {number} x - canvas x coordinate of the pointer
+   * @param {number} y - canvas y coordinate of the pointer
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _hover(x, y, e) {
+    const id = this._gjs.nodeAt(x, y);
+    const prev = this._hovered;
+    if (id === prev) return;
+    this._hovered = id;
+    if (prev !== null) this._emit("nodeleave", { x, y, id: prev, originalEvent: e });
+    // A nodeleave listener may have unbound, or moved the hover on
+    if (id !== null && this._hovered === id) this._emit("nodeenter", { x, y, id, originalEvent: e });
+  }
+
+
+  /**
+   * Emits `nodeleave` for the hovered node, if any, and forgets it.
+   * @param {PointerEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _clearHover(e) {
+    const el = this._canvas, prev = this._hovered;
+    if (!el || prev === null) return;
+    this._hovered = null;
+    const [x, y] = this._toCanvas(e, el);
+    this._emit("nodeleave", { x, y, id: prev, originalEvent: e });
+  }
+
+
+  /**
+   * Emits `nodedblclick` for a double-click on a node.
+   * @param {MouseEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _onDblClick(e) {
+    const el = this._canvas;
+    if (!el) return;
+    const [x, y] = this._toCanvas(e, el);
+    const id = this._gjs.nodeAt(x, y);
+    if (id !== null) this._emit("nodedblclick", { x, y, id, originalEvent: e });
+  }
+
+
+  /**
+   * Emits `zoom`, then zooms the view, keeping the point under the pointer
+   * fixed.
+   * @param {WheelEvent} e - DOM event
+   * @returns {void}
+   * @private
+   */
+  _onWheel(e) {
+    const el = this._canvas;
+    const gjs = this._gjs, size = gjs.renderer.size;
+    // Horizontal scrolling is left to the page
+    if (!el || !size || !this._opts.zoom || e.deltaY === 0) return;
+    // Even at a zoom limit, so the page doesn't start scrolling instead
+    e.preventDefault();
+
+    const { zoomSpeed, minZoom, maxZoom } = this._opts;
+    // deltaMode 1 is lines and 2 is pages; convert both to px
+    const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? size.h : 1);
+    const current = gjs.view.zoom, factor = 2 ** (-px * zoomSpeed);
+    // Never zoom past a limit, but don't snap a view already past it either
+    const zoom = factor > 1 ?
+      Math.min(current * factor, Math.max(maxZoom, current)) :
+      Math.max(current * factor, Math.min(minZoom, current));
+    if (zoom === current) return;
+
+    const [x, y] = this._toCanvas(e, el);
+    const view = gjs.viewZoomedTo(zoom, x, y);
+    if (this._emit("zoom", { x, y, view, originalEvent: e }) || this._canvas !== el) return;
+    gjs.setView(view);
+    this._requestRender();
+  }
+
+
+  /**
+   * Renders on the next animation frame, so changes show while the loop
+   * isn't running. Several requests in one frame render once.
+   * @returns {void}
+   * @private
+   */
+  _requestRender() {
+    if (this._raf !== null || this._gjs.isRunning()) return;
+    if (typeof requestAnimationFrame !== "function") { this._gjs.renderer.render(); return; }
+    this._raf = requestAnimationFrame(time => {
+      this._raf = null;
+      if (!this._gjs.isRunning()) this._gjs.renderer.render(time);
+    });
+  }
+}

@@ -239,15 +239,17 @@ export class Renderer {
   /** @private @type {View} */
   _view = { x: 0, y: 0, zoom: 1 };
   /**
-   * Current viewing window of the `Renderer`. Directly mutable. Contains
-   * center simulation coordinates and a zoom factor (canvasPx/simPx).
+   * Current viewing window of the `Renderer`. Contains center simulation
+   * coordinates and a zoom factor (canvasPx/simPx). Assigning to it sets the
+   * values given, checked as `setView()` checks them.
    * @returns {View}
    */
   get view() { return this._view; }
   /**
    * @param {Partial<View>} v - view props to assign
+   * @throws {RangeError} throws as `setView()` does
    */
-  set view(v) { Object.assign(this._view, v); }
+  set view(v) { this.setView(v); }
 
 
   /** @private @type {Map<NodeId, NodeStyle>} */
@@ -1545,6 +1547,116 @@ export class Renderer {
 
 
   /**
+   * Sets some or all of the view. Nothing changes if any value is invalid.
+   * Like other changes, it shows on the next render.
+   * @param {Partial<View>} view - view values to set; `undefined` values are
+   *    left alone
+   * @returns {this} self reference
+   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
+   *    isn't a finite number above 0
+   */
+  setView(view) {
+    const { x, y, zoom } = view;
+    if (x !== undefined && !Number.isFinite(x)) throw new RangeError("Renderer: view `x` must be finite");
+    if (y !== undefined && !Number.isFinite(y)) throw new RangeError("Renderer: view `y` must be finite");
+    if (zoom !== undefined) checkZoom(zoom, "view `zoom`");
+    const v = this._view;
+    if (x !== undefined) v.x = x;
+    if (y !== undefined) v.y = y;
+    if (zoom !== undefined) v.zoom = zoom;
+    return this;
+  }
+
+
+  /**
+   * Returns the view moved so the graph shifts by a distance on the canvas,
+   * as dragging the background does, without applying it.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {View} the panned view
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  viewPannedBy(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      throw new RangeError("Renderer: pan distances must be finite");
+    }
+    const v = this._view;
+    return { x: v.x - dx / v.zoom, y: v.y - dy / v.zoom, zoom: v.zoom };
+  }
+
+
+  /**
+   * Shifts the graph by a distance on the canvas, as dragging the background
+   * does.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {this} self reference
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  panBy(dx, dy) { return this.setView(this.viewPannedBy(dx, dy)); }
+
+
+  /**
+   * Returns the view at a zoom, without applying it. With an anchor point,
+   * the graph under that point stays where it is, as zooming with the wheel
+   * does; without one, the canvas centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {View} the zoomed view
+   * @throws {RangeError} throws if the zoom isn't a finite number above 0,
+   *    or the anchor isn't finite
+   * @throws {TypeError} throws if only one anchor coordinate is given
+   * @throws {Error} throws if an anchor is given and no canvas is attached
+   */
+  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
+    checkZoom(zoom, "zoom");
+    const v = this._view;
+    if (cx === undefined && cy === undefined) return { x: v.x, y: v.y, zoom };
+    if (cx === undefined || cy === undefined) {
+      throw new TypeError("Renderer: a zoom anchor needs both coordinates");
+    }
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+      throw new RangeError("Renderer: zoom anchor must be finite");
+    }
+    const [sx, sy] = this.canvasToSim(cx, cy);
+    const size = /** @type {Size} */ (this._size);
+    return { x: sx - (cx - size.w / 2) / zoom, y: sy - (cy - size.h / 2) / zoom, zoom };
+  }
+
+
+  /**
+   * Sets the zoom. With an anchor point, the graph under that point stays
+   * where it is, as zooming with the wheel does; without one, the canvas
+   * centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does
+   */
+  zoomTo(zoom, cx = undefined, cy = undefined) {
+    return this.setView(this.viewZoomedTo(zoom, cx, cy));
+  }
+
+
+  /**
+   * Multiplies the zoom by a factor: above 1 zooms in, below 1 zooms out.
+   * Anchored as `zoomTo()` is.
+   * @param {number} factor - factor to multiply the zoom by
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does,
+   *    or if the factor isn't a finite number above 0
+   */
+  zoomBy(factor, cx = undefined, cy = undefined) {
+    checkZoom(factor, "zoom factor");
+    return this.zoomTo(this._view.zoom * factor, cx, cy);
+  }
+
+
+  /**
    * Draws a node on the canvas, positioned and sized according to a `SimNode`
    * object and styled according to a `NodeStyle` object.
    * @param {SimNode} sNode - simulation's node body object
@@ -2113,4 +2225,17 @@ export class Renderer {
    * @returns {this} self reference
    */
   unpin(id) { this._simulation.unpin(id); return this; }
+}
+
+/**
+ * Throws unless a zoom, or zoom factor, is a finite number above 0.
+ * @param {number} zoom - value to check
+ * @param {string} name - name for the error message
+ * @returns {void}
+ * @throws {RangeError} throws if the value is invalid
+ */
+function checkZoom(zoom, name) {
+  if (!(zoom > 0 && Number.isFinite(zoom))) {
+    throw new RangeError(`Renderer: ${name} must be a finite number above 0`);
+  }
 }

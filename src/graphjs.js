@@ -1,13 +1,28 @@
 /** @import { NodeData } from './typedefs/graph.js' */
-/** @import { Canvas } from './typedefs/renderer.js' */
+/** @import { Canvas, View } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
+/** @import { GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener } from './typedefs/graphjs.js' */
 /** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
+/** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 
 
 import { Graph } from "./graph.js";
 import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
 import { Tween } from "./tween.js";
+import { Interaction } from "./interaction.js";
+
+
+/**
+ * Every event name, matching the keys of `GraphJSEventMap`
+ * @type {readonly GraphJSEventType[]}
+ */
+const EVENT_TYPES = Object.freeze([
+  "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
+  "nodedragstart", "nodedrag", "nodedragend",
+  "backgroundclick",
+  "panstart", "pan", "panend", "zoom",
+]);
 
 
 /**
@@ -49,6 +64,22 @@ export class GraphJS {
     postTick: new Set(),
     postRender: new Set(),
   };
+
+
+  /**
+   * Event listeners by event name, in the order they were added
+   * @type {Map<GraphJSEventType, Set<GraphJSListener<any>>>}
+   * @private
+   */
+  _listeners = new Map(EVENT_TYPES.map(type => [type, new Set()]));
+
+
+  /**
+   * Built-in pointer interaction, or `null` while it's off
+   * @type {Interaction | null}
+   * @private
+   */
+  _interaction = null;
 
 
   /**
@@ -106,6 +137,10 @@ export class GraphJS {
       ? { ...opts.renderer, canvas: opts.canvas }
       : opts.renderer ?? {};
     this._renderer = new Renderer(this._simulation, rendererOpts);
+
+    if (opts.interaction) {
+      this.enableInteraction(opts.interaction === true ? {} : opts.interaction);
+    }
   }
 
 
@@ -118,28 +153,83 @@ export class GraphJS {
 
   /**
    * Attaches a canvas to the `Renderer`. If a canvas is already attached, it
-   * will be removed before attaching the new canvas.
+   * will be removed before attaching the new canvas. If interaction is on,
+   * starts listening for pointer input on the canvas.
    * @param {Canvas} canvas - canvas object to attach
    * @returns {this} self reference
    */
   attach(canvas) {
     if (this.canvas) this.detach();
     this._renderer.attach(canvas);
+    this._interaction?.bind(canvas);
     return this;
   }
 
 
   /**
    * Detaches a canvas from the `Renderer`, if one is attached. Before
-   * detaching, it calls `stop()` to stop the render loop.
+   * detaching, it calls `stop()` to stop the render loop, and stops
+   * listening for pointer input.
    * @returns {this} self reference
    */
   detach() {
     if (!this.canvas) return this;
     this.stop();
+    this._interaction?.unbind();
     this._renderer.detach();
     return this;
   }
+
+
+  /**
+   * Turns on built-in pointer interaction, or updates its options if it's
+   * already on. While a canvas is attached, dragging a node moves it,
+   * dragging the background pans, and the wheel zooms, each emitting events
+   * (see `on()`) whose listeners can call `preventDefault()` to stop the
+   * built-in response. Canvases that can't receive pointer input, such as an
+   * `OffscreenCanvas`, are ignored.
+   * @param {InteractionOptsInput} [opts={}] - options to set. Options left
+   *    `undefined` keep their current value, or their default when turning
+   *    interaction on.
+   * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid
+   */
+  enableInteraction(opts = {}) {
+    if (this._interaction) {
+      this._interaction.setOpts(opts);
+      return this;
+    }
+    this._interaction = new Interaction(this, (type, data) => this._emit(type, data), opts);
+    if (this.canvas) this._interaction.bind(this.canvas);
+    return this;
+  }
+
+
+  /**
+   * Turns off built-in pointer interaction. A drag in progress ends without
+   * events, unpinning the dragged node. Turning interaction on again starts
+   * from the default options.
+   * @returns {this} self reference
+   */
+  disableInteraction() {
+    this._interaction?.unbind();
+    this._interaction = null;
+    return this;
+  }
+
+
+  /**
+   * Returns whether built-in pointer interaction is on.
+   * @returns {boolean} whether interaction is on
+   */
+  isInteractive() { return this._interaction !== null; }
+
+
+  /**
+   * Current interaction options, or `null` while interaction is off
+   * @type {Readonly<InteractionOpts> | null}
+   */
+  get interactionOpts() { return this._interaction?.opts ?? null; }
 
 
   /**
@@ -301,6 +391,87 @@ export class GraphJS {
     this._runHooks("postTick", time);
     this._renderer.render(time);
     this._runHooks("postRender", time);
+  }
+
+
+  /**
+   * Adds a listener for an event. Listeners of an event run in the order they
+   * were added, and adding the same function again has no effect. An error
+   * thrown by a listener is logged, and the remaining listeners still run.
+   * @template {GraphJSEventType} K
+   * @param {K} type - event name
+   * @param {GraphJSListener<K>} f - listener, called with the event
+   * @returns {this} self reference
+   * @throws {TypeError} throws if the event name is unknown or `f` isn't a
+   *    function
+   */
+  on(type, f) {
+    if (typeof f !== "function") {
+      throw new TypeError(`GraphJS: "${type}" listener must be a function`);
+    }
+    this._listenersOf(type).add(f);
+    return this;
+  }
+
+
+  /**
+   * Removes a listener for an event. A listener removed while its event is
+   * being emitted doesn't run for that event, if it hasn't already.
+   * @template {GraphJSEventType} K
+   * @param {K} type - event name
+   * @param {GraphJSListener<K>} f - listener to remove
+   * @returns {boolean} whether the listener was there
+   * @throws {TypeError} throws if the event name is unknown
+   */
+  off(type, f) {
+    return this._listenersOf(type).delete(f);
+  }
+
+
+  /**
+   * Returns the listener set of an event.
+   * @param {GraphJSEventType} type - event name
+   * @returns {Set<GraphJSListener<any>>} the event's listeners
+   * @throws {TypeError} throws if the event name is unknown
+   * @private
+   */
+  _listenersOf(type) {
+    const listeners = this._listeners.get(type);
+    if (!listeners) throw new TypeError(`GraphJS: unknown event "${type}"`);
+    return listeners;
+  }
+
+
+  /**
+   * Emits an event: calls each of its listeners with one shared event object,
+   * built from `data` plus the `type`, `target` and `preventDefault()` fields.
+   * Iterates over a copy, so listeners added during the emit start on the
+   * next one, and skips listeners removed during it.
+   * @template {GraphJSEventType} K
+   * @param {K} type - event name
+   * @param {GraphJSEventMap[K]} data - the event's data
+   * @returns {boolean} whether a listener called `preventDefault()`, in which
+   *    case the caller should skip its own response to the event
+   * @private
+   */
+  _emit(type, data) {
+    const listeners = this._listenersOf(type);
+    if (listeners.size === 0) return false;
+    let prevented = false;
+    /** @type {GraphJSEvent<K>} */
+    const event = {
+      ...data,
+      type,
+      target: this,
+      get defaultPrevented() { return prevented; },
+      preventDefault() { prevented = true; },
+    };
+    for (const f of [...listeners]) {
+      if (!listeners.has(f)) continue;
+      try { f(event); }
+      catch (err) { console.error(`GraphJS: "${type}" listener failed`, err); }
+    }
+    return prevented;
   }
 
 
@@ -474,4 +645,95 @@ export class GraphJS {
    * @returns {this} self reference
    */
   unpin(id) { this._simulation.unpin(id); return this; }
+
+
+  /**
+   * [read-only, set with `setView()` or the methods below] The `Renderer`'s
+   * current view: the simulation coordinates at the canvas centre, and the
+   * zoom (canvas px per simulation px).
+   *
+   * The view methods delegate to the `Renderer`'s. They don't emit events,
+   * and like other changes made from code, they show on the next render.
+   * @type {Readonly<View>}
+   */
+  get view() { return this._renderer.view; }
+
+
+  /**
+   * Sets some or all of the view. Delegates to `Renderer.setView()`.
+   * @param {Partial<View>} view - view values to set
+   * @returns {this} self reference
+   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
+   *    isn't a finite number above 0
+   */
+  setView(view) { this._renderer.setView(view); return this; }
+
+
+  /**
+   * Returns the view moved so the graph shifts by a distance on the canvas,
+   * without applying it. Delegates to `Renderer.viewPannedBy()`.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {View} the panned view
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  viewPannedBy(dx, dy) { return this._renderer.viewPannedBy(dx, dy); }
+
+
+  /**
+   * Shifts the graph by a distance on the canvas, as dragging the background
+   * does. Delegates to `Renderer.panBy()`.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {this} self reference
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  panBy(dx, dy) { this._renderer.panBy(dx, dy); return this; }
+
+
+  /**
+   * Returns the view at a zoom, anchored at a canvas point or the centre,
+   * without applying it. Delegates to `Renderer.viewZoomedTo()`.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {View} the zoomed view
+   * @throws {RangeError | TypeError | Error} throws as
+   *    `Renderer.viewZoomedTo()` does
+   */
+  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
+    return this._renderer.viewZoomedTo(zoom, cx, cy);
+  }
+
+
+  /**
+   * Sets the zoom, anchored at a canvas point or the centre. Delegates to
+   * `Renderer.zoomTo()`.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as
+   *    `Renderer.viewZoomedTo()` does
+   */
+  zoomTo(zoom, cx = undefined, cy = undefined) {
+    this._renderer.zoomTo(zoom, cx, cy);
+    return this;
+  }
+
+
+  /**
+   * Multiplies the zoom by a factor, anchored at a canvas point or the
+   * centre. Delegates to `Renderer.zoomBy()`.
+   * @param {number} factor - factor to multiply the zoom by
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `Renderer.zoomBy()`
+   *    does
+   */
+  zoomBy(factor, cx = undefined, cy = undefined) {
+    this._renderer.zoomBy(factor, cx, cy);
+    return this;
+  }
 }

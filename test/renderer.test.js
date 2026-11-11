@@ -1974,3 +1974,114 @@ describe("Renderer: picking", () => {
     assert.equal(r.nodeAt(400, 300, 80 + EPS), "b");
   });
 });
+
+describe("Renderer: view", () => {
+  const plain = () => new Renderer(new Simulation(new Graph(), {}), {});
+  // 800x600 canvas, so canvas (400, 300) is the view centre
+  const attached = () => {
+    const r = plain();
+    r.attach(makeCanvas());
+    return r;
+  };
+  const view = r => ({ ...r.view });
+
+  test("setView sets part or all of the view, in place", () => {
+    const r = plain();
+    const live = r.view;
+    assert.equal(r.setView({ zoom: 2 }), r);
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 2 });
+    r.setView({ x: 5, y: -5, zoom: 0.5 });
+    assert.deepEqual(view(r), { x: 5, y: -5, zoom: 0.5 });
+    r.setView({ x: undefined });
+    assert.deepEqual(view(r), { x: 5, y: -5, zoom: 0.5 }, "undefined values are left alone");
+    assert.equal(r.view, live, "the view object is updated, not replaced");
+  });
+
+  test("setView rejects bad values and changes nothing", () => {
+    const r = plain();
+    for (const bad of [{ x: NaN }, { y: Infinity }, { zoom: 0 }, { zoom: -1 }, { zoom: Infinity }, { x: 1, zoom: 0 }]) {
+      assert.throws(() => r.setView(bad), RangeError, JSON.stringify(bad));
+    }
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 1 });
+  });
+
+  test("assigning the view is checked the same way", () => {
+    const r = plain();
+    r.view = { x: 3, zoom: 2 };
+    assert.deepEqual(view(r), { x: 3, y: 0, zoom: 2 });
+    assert.throws(() => { r.view = { zoom: 0 }; }, RangeError);
+    assert.throws(() => { r.view = { x: 1, y: NaN }; }, RangeError);
+    assert.deepEqual(view(r), { x: 3, y: 0, zoom: 2 }, "a rejected assignment changes nothing");
+  });
+
+  test("panBy shifts the graph on the canvas by the distance given, at any zoom", () => {
+    const r = attached();
+    for (const zoom of [1, 2, 0.5]) {
+      r.setView({ x: 10, y: 20, zoom });
+      const before = r.simToCanvas(0, 0);
+      assert.equal(r.panBy(30, -40), r);
+      const after = r.simToCanvas(0, 0);
+      assert.deepEqual([after[0] - before[0], after[1] - before[1]].map(r2), [30, -40]);
+    }
+  });
+
+  test("viewPannedBy returns the panned view without applying it", () => {
+    const r = plain();
+    r.setView({ zoom: 2 });
+    const v = r.viewPannedBy(10, 20);
+    assert.deepEqual(v, { x: -5, y: -10, zoom: 2 });
+    assert.notEqual(v, r.view);
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 2 });
+    assert.throws(() => r.viewPannedBy(NaN, 0), RangeError);
+    assert.throws(() => r.panBy(0, Infinity), RangeError);
+  });
+
+  test("zoomTo keeps the anchor point fixed, or the centre without one", () => {
+    const r = attached();
+    r.setView({ x: 10, y: 20, zoom: 1 });
+    const anchor = r.canvasToSim(100, 500);
+    assert.equal(r.zoomTo(3, 100, 500), r);
+    assert.equal(r.view.zoom, 3);
+    assert.deepEqual(r.simToCanvas(...anchor).map(r2), [100, 500]);
+
+    const centre = r.canvasToSim(400, 300);
+    r.zoomTo(0.5);
+    assert.equal(r.view.zoom, 0.5);
+    assert.deepEqual(r.simToCanvas(...centre).map(r2), [400, 300], "the centre stays");
+  });
+
+  test("zoomBy multiplies the zoom, anchored the same way", () => {
+    const r = attached();
+    r.setView({ x: 0, y: 0, zoom: 2 });
+    const anchor = r.canvasToSim(700, 100);
+    assert.equal(r.zoomBy(1.5, 700, 100), r);
+    assert.equal(r.view.zoom, 3);
+    assert.deepEqual(r.simToCanvas(...anchor).map(r2), [700, 100]);
+    r.zoomBy(0.5);
+    assert.equal(r.view.zoom, 1.5);
+    for (const bad of [0, -2, NaN]) assert.throws(() => r.zoomBy(bad), RangeError);
+  });
+
+  test("viewZoomedTo returns the zoomed view without applying it", () => {
+    const r = attached();
+    const v = r.viewZoomedTo(2, 600, 300);
+    assert.deepEqual(v, { x: 100, y: 0, zoom: 2 }, "sim (200, 0) stays at canvas (600, 300)");
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 1 });
+  });
+
+  test("zooming rejects bad zooms and half or non-finite anchors", () => {
+    const r = attached();
+    for (const bad of [0, -1, NaN, Infinity]) assert.throws(() => r.zoomTo(bad), RangeError);
+    assert.throws(() => r.zoomTo(2, 100), TypeError);
+    assert.throws(() => r.zoomTo(2, undefined, 100), TypeError);
+    assert.throws(() => r.zoomTo(2, NaN, 100), RangeError);
+    assert.equal(r.view.zoom, 1);
+  });
+
+  test("without a canvas, panning and centre zooms work, but anchored zooms throw", () => {
+    const r = plain();
+    r.panBy(10, 0).zoomTo(2).zoomBy(2);
+    assert.deepEqual(view(r), { x: -10, y: 0, zoom: 4 });
+    assert.throws(() => r.zoomTo(2, 0, 0), /no canvas/);
+  });
+});

@@ -401,14 +401,18 @@ function readUI() {
 
 function buildGraph() {
   const wasRunning = gjs ? gjs.isRunning() : true;   // a rebuild keeps the play state
-  if (gjs) gjs.stop();
+  // Stops the old instance and removes its pointer listeners from the canvas
+  if (gjs) gjs.detach();
 
   gjs = new GraphJS({
     canvas,
     graph: { directed: ui.directed },
+    interaction: { minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX },
   });
   addLoopHooks(gjs);
+  addInteraction(gjs);
   hovered = null;                          // the new renderer starts unhighlighted
+  canvas.classList.remove("dragging");
 
   const n = ui.nodeCount;
   const nodes = [];
@@ -515,7 +519,7 @@ function applyViewConfig() {
     highlightFadeDuration: ui.highlightFade,
     highlightAlpha: ui.highlightAlpha,
   });
-  gjs.renderer.view.zoom = ui.zoom;
+  gjs.zoomTo(ui.zoom);
 }
 
 /* ---------- sizing ----------
@@ -528,22 +532,27 @@ new ResizeObserver(() => { if (gjs) { gjs.resize(); gjs.renderer.render(); } }).
 /* ---------- camera ----------
    Recenter, Zoom to fit and double-click all glide the view with one tween,
    keyed "camera": starting a new move replaces the old one mid-flight, and
-   grabbing the view (drag, wheel, Zoom slider) cancels it.
+   grabbing the view (panning, wheel, Zoom slider) cancels it.
 
    The tween only runs a plain 0 -> 1 progress value. Each frame, set() reads
    where the camera should end up *now* and blends toward it, so the move
    tracks nodes that are still drifting and lands exactly on them. Zoom is
    blended in log space, so zooming 0.1 -> 1 feels as fast as 1 -> 10.     */
 
-const ZOOM_MIN = 0.01, ZOOM_MAX = 10;     // the Zoom slider's range
+const ZOOM_MIN = 0.01, ZOOM_MAX = 10;     // the Zoom slider's range, also the wheel's
 const clampZoom = z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
-/* Applies a zoom to the view and mirrors it on the Zoom slider. */
-function setZoom(zoom) {
-  gjs.renderer.view.zoom = zoom;
+/* Mirrors a zoom on the Zoom slider. */
+function showZoom(zoom) {
   ui.zoom = zoom;
   $("zoom").value = zoom;
   $("zoomOut").textContent = zoom.toFixed(2);
+}
+
+/* Applies a zoom to the view, keeping the centre, and mirrors it. */
+function setZoom(zoom) {
+  gjs.zoomTo(zoom);
+  showZoom(zoom);
 }
 
 /* Glides the view to target(), which returns [x, y, zoom] and is re-read
@@ -558,7 +567,7 @@ function setZoom(zoom) {
    which front-loads the pan when zooming in and back-loads it when zooming
    out. With no zoom change (r = 1) it is just p.                           */
 function flyTo(target, duration = 700) {
-  const { x: sx, y: sy, zoom } = gjs.renderer.view;
+  const { x: sx, y: sy, zoom } = gjs.view;
   const sz = Math.log(zoom);
   gjs.tween({
     key: "camera",
@@ -568,7 +577,7 @@ function flyTo(target, duration = 700) {
       const [tx, ty, tz] = target();
       const k = Math.log(clampZoom(tz)) - sz;              // ln r
       const u = Math.abs(k) < 1e-6 ? p : (1 - Math.exp(-k * p)) / (1 - Math.exp(-k));
-      gjs.renderer.view = { x: sx + (tx - sx) * u, y: sy + (ty - sy) * u };
+      gjs.setView({ x: sx + (tx - sx) * u, y: sy + (ty - sy) * u });
       setZoom(Math.exp(sz + k * p));
     },
   });
@@ -598,18 +607,42 @@ function fitView() {
   return [(x0 + x1) / 2, (y0 + y1) / 2, zoom];
 }
 
-/* ---------- interaction ---------- */
+/* ---------- interaction ----------
+   Dragging nodes, panning and wheel zoom are built in (the `interaction`
+   option). The demo only adds its own responses through events: the cursor,
+   hover highlighting, keeping the Zoom slider in sync, cancelling camera
+   moves, and flying to a double-clicked node.                               */
 
-function pointerToCanvas(e) {
-  const r = canvas.getBoundingClientRect();
-  return [e.clientX - r.left, e.clientY - r.top];
+function addInteraction(g) {
+  // Grabbing the view stops a camera move, which would otherwise fight it
+  g.on("panstart", () => { g.cancelTween("camera"); });
+  g.on("zoom", e => {
+    g.cancelTween("camera");
+    showZoom(e.view.zoom);                 // the view this zoom moves to
+  });
+
+  for (const type of ["nodedragstart", "panstart"]) g.on(type, () => canvas.classList.add("dragging"));
+  for (const type of ["nodedragend", "panend"]) g.on(type, () => canvas.classList.remove("dragging"));
+
+  // Hover is held during a press, so a dragged node stays lit even if the
+  // pointer outruns it, and panning keeps the current highlight
+  g.on("nodeenter", e => updateHover(e.id));
+  g.on("nodeleave", () => updateHover(null));
+
+  // Fly to a node, zooming in to at least 2x, and follow it if it's still moving
+  g.on("nodedblclick", e => {
+    const zoom = Math.max(ui.zoom, 2);
+    let last = g.simulation.getPosition(e.id);
+    flyTo(() => {
+      last = g.simulation.getPosition(e.id) ?? last;   // keep the last spot if it's removed
+      return [...last, zoom];
+    });
+  });
 }
-
-let drag = null;
 
 /* ---------- hover highlighting ---------- */
 
-let hovered = null, hoveredVersion = -1;
+let hovered = null;
 
 /* The node plus every node and edge touching it. Scans all edges rather than
    graph.adjacency, which only lists outgoing edges in a directed graph.     */
@@ -624,84 +657,14 @@ function neighbourhood(id) {
   return { nodes: [...nodes], edges };
 }
 
-/* Recomputes only when the hovered node or the graph's shape changes, not on
-   every pointer move.                                                       */
 function updateHover(id) {
   if (!ui.hoverHighlight) id = null;
-  if (id === hovered && gjs.graph.version === hoveredVersion) return;
+  if (id === hovered) return;
   hovered = id;
-  hoveredVersion = gjs.graph.version;
   if (id === null) gjs.renderer.clearHighlight();
   else gjs.renderer.setHighlight(neighbourhood(id));
-  redraw();
+  redraw();                                // keeps drawing while the highlight fades
 }
-
-canvas.addEventListener("pointerleave", () => { if (!drag) updateHover(null); });
-
-canvas.addEventListener("pointerdown", e => {
-  canvas.setPointerCapture(e.pointerId);
-  const [cx, cy] = pointerToCanvas(e);
-  const id = gjs.nodeAt(cx, cy);
-  if (id !== null) {
-    // keep the grab offset so the node doesn't jump its centre to the cursor
-    const [nx, ny] = gjs.getPosition(id);
-    drag = { kind: "node", id, dx: nx - cx, dy: ny - cy };
-    gjs.pin(id, nx, ny);
-  } else {
-    gjs.cancelTween("camera");             // grabbing the view stops a camera move
-    const v = gjs.renderer.view;
-    drag = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
-  }
-  canvas.classList.add("dragging");
-});
-
-canvas.addEventListener("pointermove", e => {
-  const [cx, cy] = pointerToCanvas(e);
-  // a dragged node stays lit even if the pointer outruns it; panning keeps the current highlight
-  updateHover(drag?.kind === "node" ? drag.id : drag ? hovered : gjs.nodeAt(cx, cy));
-
-  if (!drag) return;
-  if (drag.kind === "node") {
-    gjs.pin(drag.id, cx + drag.dx, cy + drag.dy);
-  } else {
-    const v = gjs.renderer.view;
-    v.x = drag.vx - (e.clientX - drag.sx) / v.zoom;
-    v.y = drag.vy - (e.clientY - drag.sy) / v.zoom;
-  }
-  redraw();
-});
-
-function endDrag() {
-  if (drag?.kind === "node") gjs.unpin(drag.id);
-  drag = null;
-  canvas.classList.remove("dragging");
-}
-canvas.addEventListener("pointerup", endDrag);
-canvas.addEventListener("pointercancel", endDrag);
-
-// Fly to a node, zooming in to at least 2x, and follow it if it's still moving
-canvas.addEventListener("dblclick", e => {
-  const id = gjs.nodeAt(...pointerToCanvas(e));
-  if (id === null) return;
-  const zoom = Math.max(ui.zoom, 2);
-  let last = gjs.simulation.getPosition(id);
-  flyTo(() => {
-    last = gjs.simulation.getPosition(id) ?? last;   // keep the last spot if it's removed
-    return [...last, zoom];
-  });
-});
-
-canvas.addEventListener("wheel", e => {
-  e.preventDefault();
-  gjs.cancelTween("camera");               // it would undo the anchoring below
-  const [cx, cy] = pointerToCanvas(e);
-  const [bx, by] = gjs.canvasToSim(cx, cy);              // anchor under cursor
-  setZoom(clampZoom(ui.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  const [ax, ay] = gjs.canvasToSim(cx, cy);
-  gjs.renderer.view.x += bx - ax;
-  gjs.renderer.view.y += by - ay;
-  redraw();
-}, { passive: false });
 
 /* ---------- control wiring ---------- */
 
@@ -775,12 +738,12 @@ $("shake").addEventListener("click", () => {
 $("recenter").addEventListener("click", () => {
   if (!centroid()) return;
   const zoom = ui.zoom;
-  flyTo(() => [...(centroid() ?? [gjs.renderer.view.x, gjs.renderer.view.y]), zoom], 500);
+  flyTo(() => [...(centroid() ?? [gjs.view.x, gjs.view.y]), zoom], 500);
 });
 
 $("zoomFit").addEventListener("click", () => {
   if (!fitView()) return;
-  const v = gjs.renderer.view;
+  const v = gjs.view;
   flyTo(() => fitView() ?? [v.x, v.y, v.zoom]);
 });
 

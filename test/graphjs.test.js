@@ -496,6 +496,243 @@ describe("GraphJS: loop hooks", () => {
   });
 });
 
+describe("GraphJS: view", () => {
+  // The view math is tested in renderer.test.js; these check the forwarding
+  test("view is the renderer's view", () => {
+    const gjs = new GraphJS();
+    assert.equal(gjs.view, gjs.renderer.view);
+  });
+
+  test("the view methods delegate to the renderer, and chain the facade", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      const r = gjs.renderer;
+      const calls = [];
+      for (const name of ["setView", "panBy", "zoomTo", "zoomBy", "viewPannedBy", "viewZoomedTo"]) {
+        const f = r[name].bind(r);
+        r[name] = (...args) => { calls.push([name, ...args]); return f(...args); };
+      }
+      // Each forwarder's first renderer call is its own method, with its arguments
+      const check = (run, expected) => { calls.length = 0; run(); assert.deepEqual(calls[0], expected); };
+      check(() => assert.equal(gjs.setView({ x: 1 }), gjs), ["setView", { x: 1 }]);
+      check(() => assert.equal(gjs.panBy(2, 3), gjs), ["panBy", 2, 3]);
+      check(() => assert.equal(gjs.zoomTo(2, 10, 20), gjs), ["zoomTo", 2, 10, 20]);
+      check(() => assert.equal(gjs.zoomBy(0.5), gjs), ["zoomBy", 0.5, undefined, undefined]);
+      const panned = r.viewPannedBy(4, 5), zoomed = r.viewZoomedTo(3, 30, 40);
+      check(() => assert.deepEqual(gjs.viewPannedBy(4, 5), panned), ["viewPannedBy", 4, 5]);
+      check(() => assert.deepEqual(gjs.viewZoomedTo(3, 30, 40), zoomed), ["viewZoomedTo", 3, 30, 40]);
+    } finally { restoreWindow(); }
+  });
+
+  test("the view methods throw as the renderer's do", () => {
+    const gjs = new GraphJS();
+    assert.throws(() => gjs.setView({ zoom: 0 }), RangeError);
+    assert.throws(() => gjs.panBy(NaN, 0), RangeError);
+    assert.throws(() => gjs.zoomTo(2, 10), TypeError);
+    assert.throws(() => gjs.zoomBy(-1), RangeError);
+    assert.throws(() => gjs.zoomTo(2, 0, 0), /no canvas/);
+  });
+
+  test("view methods don't emit events", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      const seen = [];
+      for (const type of ["pan", "zoom", "panstart", "panend"]) gjs.on(type, e => seen.push(e.type));
+      gjs.panBy(5, 5).zoomTo(2, 10, 10).zoomBy(2).setView({ x: 0 });
+      assert.deepEqual(seen, []);
+    } finally { restoreWindow(); }
+  });
+});
+
+describe("GraphJS: events", () => {
+  // _emit is private: the interaction layer calls it, so tests stand in for it
+  const pointer = (id = "a") => ({ id, x: 1, y: 2, originalEvent: { type: "pointerdown" } });
+
+  test("on chains, and off reports whether the listener was there", () => {
+    const gjs = new GraphJS();
+    const f = () => {};
+    assert.equal(gjs.on("nodeclick", f), gjs);
+    assert.equal(gjs.off("nodedblclick", f), false, "events keep separate listeners");
+    assert.equal(gjs.off("nodeclick", f), true);
+    assert.equal(gjs.off("nodeclick", f), false);
+  });
+
+  test("an unknown event name throws instead of being ignored", () => {
+    const gjs = new GraphJS();
+    assert.throws(() => gjs.on("click", () => {}), TypeError);
+    assert.throws(() => gjs.off("click", () => {}), TypeError);
+    assert.throws(() => gjs._emit("click", {}), TypeError);
+    assert.throws(() => gjs.on("toString", () => {}), TypeError, "inherited keys aren't event names");
+  });
+
+  test("a listener must be a function", () => {
+    const gjs = new GraphJS();
+    for (const bad of [null, undefined, "f", {}]) assert.throws(() => gjs.on("nodeclick", bad), TypeError);
+  });
+
+  test("listeners get the event's data with its type and target", () => {
+    const gjs = new GraphJS();
+    const seen = [];
+    gjs.on("nodeclick", e => seen.push(e));
+    const data = pointer("b");
+    gjs._emit("nodeclick", data);
+    assert.equal(seen.length, 1);
+    const [e] = seen;
+    assert.equal(e.type, "nodeclick");
+    assert.equal(e.target, gjs);
+    assert.equal(e.id, "b");
+    assert.deepEqual([e.x, e.y], [1, 2]);
+    assert.equal(e.originalEvent, data.originalEvent);
+    assert.notEqual(e, data, "the caller's data object isn't mutated into the event");
+    assert.equal("type" in data, false);
+  });
+
+  test("data can't override type or target", () => {
+    const gjs = new GraphJS();
+    let seen;
+    gjs.on("nodeclick", e => { seen = e; });
+    gjs._emit("nodeclick", { ...pointer(), type: "nodeleave", target: null });
+    assert.equal(seen.type, "nodeclick");
+    assert.equal(seen.target, gjs);
+  });
+
+  test("every interaction event name is accepted", () => {
+    const gjs = new GraphJS();
+    const names = [
+      "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
+      "nodedragstart", "nodedrag", "nodedragend", "backgroundclick",
+      "panstart", "pan", "panend", "zoom",
+    ];
+    const seen = [];
+    for (const name of names) gjs.on(name, e => seen.push(e.type));
+    for (const name of names) gjs._emit(name, {});
+    assert.deepEqual(seen, names);
+  });
+
+  test("view events pass their view and movement through", () => {
+    const gjs = new GraphJS();
+    let seen;
+    gjs.on("pan", e => { seen = e; });
+    const view = { x: 5, y: -5, zoom: 2 };
+    gjs._emit("pan", { x: 10, y: 20, dx: 3, dy: -4, view, originalEvent: {} });
+    assert.deepEqual([seen.dx, seen.dy], [3, -4]);
+    assert.equal(seen.view, view);
+  });
+
+  test("node drag events pass their node and movement through", () => {
+    const gjs = new GraphJS();
+    let seen;
+    gjs.on("nodedrag", e => { seen = e; });
+    gjs._emit("nodedrag", { ...pointer("b"), dx: -1, dy: 6 });
+    assert.equal(seen.id, "b");
+    assert.deepEqual([seen.dx, seen.dy], [-1, 6]);
+  });
+
+  test("only listeners of the emitted event run", () => {
+    const gjs = new GraphJS();
+    const log = [];
+    gjs.on("nodeclick", () => log.push("click"));
+    gjs.on("nodedblclick", () => log.push("dblclick"));
+    gjs._emit("nodedblclick", pointer());
+    assert.deepEqual(log, ["dblclick"]);
+  });
+
+  test("listeners run in the order they were added, share one event, and a duplicate runs once", () => {
+    const gjs = new GraphJS();
+    const log = [], events = new Set();
+    const one = e => { log.push("1"); events.add(e); };
+    gjs.on("nodeclick", one).on("nodeclick", e => { log.push("2"); events.add(e); }).on("nodeclick", one);
+    gjs._emit("nodeclick", pointer());
+    assert.deepEqual(log, ["1", "2"]);
+    assert.equal(events.size, 1);
+  });
+
+  test("preventDefault is seen by later listeners and reported to the emitter", () => {
+    const gjs = new GraphJS();
+    const seen = [];
+    gjs.on("nodedrag", e => { seen.push(e.defaultPrevented); e.preventDefault(); });
+    gjs.on("nodedrag", e => { seen.push(e.defaultPrevented); });
+    assert.equal(gjs._emit("nodedrag", pointer()), true);
+    assert.deepEqual(seen, [false, true], "and it doesn't stop the remaining listeners");
+    assert.equal(gjs._emit("nodedragend", pointer()), false, "each event starts not prevented");
+  });
+
+  test("emitting with no listeners reports no preventDefault", () => {
+    assert.equal(new GraphJS()._emit("backgroundclick", { x: 0, y: 0, originalEvent: {} }), false);
+  });
+
+  test("a throwing listener is logged, and the remaining listeners still run", t => {
+    const error = t.mock.method(console, "error", () => {});
+    const gjs = new GraphJS();
+    const failure = new Error("listener failed");
+    const log = [];
+    gjs.on("nodeenter", () => { throw failure; });
+    gjs.on("nodeenter", e => { log.push("next"); e.preventDefault(); });
+    assert.equal(gjs._emit("nodeenter", pointer()), true);
+    assert.deepEqual(log, ["next"]);
+    assert.equal(error.mock.callCount(), 1);
+    const [message, logged] = error.mock.calls[0].arguments;
+    assert.match(message, /nodeenter/, "the message names the event");
+    assert.equal(logged, failure);
+  });
+
+  test("a removed listener no longer runs", () => {
+    const gjs = new GraphJS();
+    let calls = 0;
+    const f = () => { calls++; };
+    gjs.on("nodeclick", f);
+    gjs._emit("nodeclick", pointer());
+    gjs.off("nodeclick", f);
+    gjs._emit("nodeclick", pointer());
+    assert.equal(calls, 1);
+  });
+
+  test("a listener removed by an earlier one during an emit doesn't run for it", () => {
+    const gjs = new GraphJS();
+    let calls = 0;
+    const later = () => { calls++; };
+    gjs.on("nodeclick", g => { g.target.off("nodeclick", later); }).on("nodeclick", later);
+    gjs._emit("nodeclick", pointer());
+    assert.equal(calls, 0);
+  });
+
+  test("a listener added during an emit starts on the next one", () => {
+    const gjs = new GraphJS();
+    let lateCalls = 0;
+    const late = () => { lateCalls++; };
+    gjs.on("nodeclick", e => { e.target.on("nodeclick", late); });
+    gjs._emit("nodeclick", pointer());
+    assert.equal(lateCalls, 0);
+    gjs._emit("nodeclick", pointer());
+    assert.equal(lateCalls, 1);
+  });
+
+  test("a listener that removes and re-adds itself runs once per emit", () => {
+    const gjs = new GraphJS();
+    let calls = 0;
+    // Stops re-adding itself at 100, so a regression fails rather than hangs
+    const f = e => { calls++; if (calls < 100) { e.target.off("nodeclick", f); e.target.on("nodeclick", f); } };
+    gjs.on("nodeclick", f);
+    gjs._emit("nodeclick", pointer());
+    assert.equal(calls, 1);
+    gjs._emit("nodeclick", pointer());
+    assert.equal(calls, 2);
+  });
+
+  test("listeners belong to the instance, and survive detach and reattach", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      let calls = 0;
+      gjs.on("nodeclick", () => { calls++; });
+      const other = new GraphJS();
+      other._emit("nodeclick", pointer());
+      gjs.detach().attach(makeCanvas());
+      gjs._emit("nodeclick", pointer());
+      assert.equal(calls, 1);
+    } finally { restoreWindow(); }
+  });
+});
+
 describe("GraphJS: tweens", () => {
   /* A headless instance (no canvas needed) and a tween that records values. */
   function tweened(gjs, opts) {

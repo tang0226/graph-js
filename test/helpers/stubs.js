@@ -63,14 +63,57 @@ export function makeCtx() {
   };
 }
 
-export function makeCanvas({ w = 800, h = 600 } = {}) {
+/* An on-screen canvas. It's a real EventTarget, so interaction tests can
+   dispatch events at it (see `dispatchPointer()`), and `listenerCount()`
+   shows how many listeners are on it. `left`/`top` offset its bounding rect,
+   so client and canvas coordinates differ. `captured` holds the pointer ids
+   currently captured. */
+export function makeCanvas({ w = 800, h = 600, left = 0, top = 0 } = {}) {
   const ctx = makeCtx();
-  return {
+  const target = new EventTarget();
+  const listeners = new Map();
+  const captured = new Set();
+  const add = target.addEventListener.bind(target);
+  const remove = target.removeEventListener.bind(target);
+  return Object.assign(target, {
     width: w, height: h, clientWidth: w, clientHeight: h,
+    style: { touchAction: "" },
     getContext: () => ctx,
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: w, height: h }),
+    getBoundingClientRect: () => ({ left, top, width: w, height: h }),
     ctx,
-  };
+    captured,
+    setPointerCapture(id) { captured.add(id); },
+    releasePointerCapture(id) { captured.delete(id); },
+    // Tracks listeners by type, dropping them when their signal aborts. Sets,
+    // because Node also calls removeEventListener itself on abort.
+    addEventListener(type, f, opts) {
+      add(type, f, opts);
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(f);
+      opts?.signal?.addEventListener("abort", () => listeners.get(type).delete(f));
+    },
+    removeEventListener(type, f, opts) {
+      remove(type, f, opts);
+      listeners.get(type)?.delete(f);
+    },
+    listenerCount(type) {
+      if (type) return listeners.get(type)?.size ?? 0;
+      return [...listeners.values()].reduce((n, set) => n + set.size, 0);
+    },
+  });
+}
+
+/* Dispatches a DOM-like event at a canvas: a cancelable Event with the mouse,
+   pointer and wheel fields the library reads. `x`/`y` are client
+   coordinates. Returns the event, so tests can check `defaultPrevented`. */
+export function dispatchPointer(canvas, type, {
+  x = 0, y = 0, pointerId = 1, button = 0, isPrimary = true, pointerType = "mouse",
+  deltaY = 0, deltaMode = 0,
+} = {}) {
+  const e = new Event(type, { cancelable: true });
+  Object.assign(e, { clientX: x, clientY: y, pointerId, button, isPrimary, pointerType, deltaY, deltaMode });
+  canvas.dispatchEvent(e);
+  return e;
 }
 
 /* Installs a fake Image whose load resolves on a microtask. `fail(src)`
