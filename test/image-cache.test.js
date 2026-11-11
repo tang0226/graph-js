@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "../src/image-cache.js";
+import { ImageCache, pickSpriteSize } from "../src/image-cache.js";
 import { installImage, installOffscreenCanvas, flush } from "./helpers/stubs.js";
 
 describe("ImageCache", () => {
@@ -11,13 +11,15 @@ describe("ImageCache", () => {
       assert.equal(cache.load("a.png", "use-credentials", "origin"), true);
       assert.equal(cache.load("a.png", null, "no-referrer"), false, "already cached");
       assert.deepEqual(restore.requests, [{ src: "a.png", crossOrigin: "use-credentials", referrerPolicy: "origin" }]);
-      assert.equal(cache.images.get("a.png"), IMAGE_LOADING);
+      assert.deepEqual(cache.images.get("a.png"), { status: "loading", image: null });
+      assert.ok(Object.isFrozen(cache.images.get("a.png")), "entries are replaced, not changed");
       assert.equal(cache.loaded("a.png"), null, "not loaded yet");
 
       cache.load("bad.png", null, "no-referrer");
       await flush();
       assert.equal(typeof cache.loaded("a.png"), "object");
-      assert.equal(cache.images.get("bad.png"), IMAGE_FAILED);
+      assert.deepEqual(cache.images.get("bad.png"), { status: "failed", image: null });
+      assert.equal(cache.images.get("a.png").status, "loaded");
       assert.equal(cache.loaded("bad.png"), null);
       assert.equal(cache.loaded("unknown.png"), null);
     } finally { restore(); }

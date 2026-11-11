@@ -386,10 +386,12 @@ describe("Renderer: images", () => {
   test("the source is cached as loading, then replaced by the image", async () => {
     const { r, restore } = imageScene();
     try {
-      assert.equal(r._imageCache._images.get("a.png"), Renderer.IMAGE_LOADING);
+      assert.deepEqual(r.images.get("a.png"), { status: "loading", image: null });
       await flush();
-      assert.notEqual(r._imageCache._images.get("a.png"), Renderer.IMAGE_LOADING);
-      assert.equal(typeof r._imageCache._images.get("a.png"), "object");
+      const entry = r.images.get("a.png");
+      assert.equal(entry.status, "loaded");
+      assert.equal(typeof entry.image, "object");
+      assert.ok(entry.image);
     } finally { restore(); }
   });
 
@@ -419,7 +421,7 @@ describe("Renderer: images", () => {
     const { r, ctx, restore } = imageScene(() => true);
     try {
       await flush();
-      assert.equal(r._imageCache._images.get("a.png"), Renderer.IMAGE_FAILED);
+      assert.deepEqual(r.images.get("a.png"), { status: "failed", image: null });
       ctx.ops.length = 0;
       // The stub ctx throws on a non-image source, matching the browser.
       r.render();
@@ -460,7 +462,7 @@ describe("Renderer: images", () => {
       const sim = new Simulation(g, {});
       const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
       r.sync();
-      assert.equal(r._imageCache._images.get("late.png"), Renderer.IMAGE_LOADING);
+      assert.equal(r.images.get("late.png").status, "loading");
 
       r._imageCache._images.delete("late.png");          // simulate the sweep landing first
       await flush();                          // then the load completes

@@ -1,11 +1,5 @@
-/** @import { Canvas, CanvasContext } from './typedefs/renderer.js' */
+/** @import { Canvas, CanvasContext, ImageEntry } from './typedefs/renderer.js' */
 
-
-/** Value an image's entry holds while its request is in flight. */
-export const IMAGE_LOADING = "loading";
-
-/** Value an image's entry holds when its request failed. */
-export const IMAGE_FAILED = "failed";
 
 /** Sizes (device px) that sprites of node images are made at. */
 const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
@@ -60,12 +54,12 @@ const ctx2d = canvas => /** @type {CanvasContext | null} */ (canvas.getContext("
  * limit how many sprites a frame builds and evict the least recently drawn.
  */
 export class ImageCache {
-  /** @private @type {Map<string, HTMLImageElement | string>} */
+  /** @private @type {Map<string, Readonly<ImageEntry>>} */
   _images = new Map();
   /**
-   * Node image elements, keyed by source. An entry holds `IMAGE_LOADING`
-   * until its request settles, then the loaded image or `IMAGE_FAILED`.
-   * @returns {ReadonlyMap<string, HTMLImageElement | string>}
+   * Node images, keyed by source. Each entry is replaced, not changed, when
+   * its request settles.
+   * @returns {ReadonlyMap<string, Readonly<ImageEntry>>}
    */
   get images() { return this._images; }
 
@@ -128,12 +122,18 @@ export class ImageCache {
    */
   load(src, crossOrigin, referrerPolicy) {
     if (this._images.has(src)) return false;
-    this._images.set(src, IMAGE_LOADING);
+    /** @type {Readonly<ImageEntry>} */
+    const loading = Object.freeze({ status: "loading", image: null });
+    this._images.set(src, loading);
     const img = new Image();
     img.crossOrigin = crossOrigin;
     img.referrerPolicy = referrerPolicy;
-    img.onload  = () => { if (this._images.get(src) === IMAGE_LOADING) this._images.set(src, img); };
-    img.onerror = () => { if (this._images.get(src) === IMAGE_LOADING) this._images.set(src, IMAGE_FAILED); };
+    // Only if this request's entry is still there: an entry collected in the
+    // meantime mustn't be brought back by a late load
+    /** @param {Readonly<ImageEntry>} entry */
+    const settle = entry => { if (this._images.get(src) === loading) this._images.set(src, entry); };
+    img.onload  = () => settle(Object.freeze({ status: "loaded", image: img }));
+    img.onerror = () => settle(Object.freeze({ status: "failed", image: null }));
     img.src = src;
     return true;
   }
@@ -146,8 +146,7 @@ export class ImageCache {
    *    loading, failed or unknown
    */
   loaded(src) {
-    const img = this._images.get(src);
-    return img && typeof img !== "string" ? img : null;
+    return this._images.get(src)?.image ?? null;
   }
 
 

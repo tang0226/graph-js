@@ -99,6 +99,16 @@
 
 
 /**
+ * A node image in the renderer's cache: whether it has loaded, and the image
+ * once it has
+ * @typedef {object} ImageEntry
+ * @property {"loading" | "loaded" | "failed"} status - `"loading"` until the
+ *    request settles, then `"loaded"` or `"failed"`
+ * @property {HTMLImageElement | null} image - the loaded image, or `null`
+ *    while loading or after a failure
+ */
+
+/**
  * When a hook runs during `render()`: "background" after the background fill,
  * beneath everything else; "overlay" after everything else, on top
  * @typedef {"background" | "overlay"} RendererHookType

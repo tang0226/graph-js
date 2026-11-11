@@ -13,7 +13,7 @@
  *  NodeStyleConfig, EdgeStyleConfig,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
- *  Canvas, CanvasContext, Size, View,
+ *  Canvas, CanvasContext, Size, View, ImageEntry,
  * } from './typedefs/renderer.js'
  */
 
@@ -21,7 +21,7 @@
 import { Simulation } from "./simulation.js";
 import { circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
-import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "./image-cache.js";
+import { ImageCache, pickSpriteSize } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
@@ -94,9 +94,6 @@ const IMAGE_DOT_THRESHOLD = 6;
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
  */
 export class Renderer {
-  static IMAGE_LOADING = IMAGE_LOADING;
-  static IMAGE_FAILED = IMAGE_FAILED;
-
   /** @private @type {Graph} */
   _graph;
   /**
@@ -312,10 +309,11 @@ export class Renderer {
    */
   _imageCache = new ImageCache();
   /**
-   * Cache of node image elements, keyed by source string.
-   * @returns {ReadonlyMap<string, HTMLImageElement | string>}
+   * [read-only] Node images, keyed by source: each entry's load `status`,
+   * and the `image` once it has loaded
+   * @returns {ReadonlyMap<string, Readonly<ImageEntry>>}
    */
-  get images () { return this._imageCache.images; }
+  get images() { return this._imageCache.images; }
 
 
   /**
@@ -705,9 +703,9 @@ export class Renderer {
 
 
   /**
-   * Starts loading an image into the cache, keyed by its source. The entry
-   * holds `IMAGE_LOADING` until the request settles, then the loaded image or
-   * `IMAGE_FAILED`. Uses the renderer's current `crossOrigin` and
+   * Starts loading an image into the cache, keyed by its source. Its entry in
+   * `images` has the status "loading" until the request settles, then
+   * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
    * `imageReferrerPolicy`. A source that is already cached is not requested again.
    * @param {string} src - image source; also the cache key
    * @returns {boolean} `true` if a request was started, `false` if `src` was already cached

@@ -19,7 +19,7 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
@@ -207,6 +207,14 @@ const simEvents: SimEventMap = { settle: {}, wake: {} };
 gjs.on("settle", () => {});
 // @ts-expect-error -- emitting is internal to the simulation
 gjs.simulation._emit("settle", {});
+
+// Image entries carry a status, and the image once loaded
+const entry: Readonly<ImageEntry> | undefined = gjs.renderer.images.get("a.png");
+if (entry?.status === "loaded") { const el: HTMLImageElement | null = entry.image; }
+// @ts-expect-error -- not a status
+const badStatus: ImageEntry["status"] = "pending";
+// @ts-expect-error -- the sentinel constants are gone
+Renderer.IMAGE_LOADING;
 
 // Internal members are private, so consumers can't depend on them
 // @ts-expect-error -- private

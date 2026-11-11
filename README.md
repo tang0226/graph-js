@@ -324,6 +324,14 @@ gjs.renderer.loadImage("https://example.com/alice.png");
 
 Unused images are cleaned up periodically as nodes are removed, so preload shortly before the nodes that use them are added.
 
+Each requested image has an entry in `gjs.renderer.images`, keyed by its source:
+
+```js
+const entry = gjs.renderer.images.get("https://example.com/alice.png");
+entry?.status;   // "loading", "loaded" or "failed"
+entry?.image;    // the loaded HTMLImageElement, or null while loading or after a failure
+```
+
 For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the original image, so they stay as sharp as it allows. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
 
 ### Node labels
@@ -988,6 +996,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
 - **Invalid options now throw instead of being clamped or accepted.** `new GraphJS()`, the layer constructors and every `setOpts()` check their options (see [Changing options](#changing-options)). Previously `Renderer` clamped some out-of-range values, such as a negative `minEdgeWidth` or a `highlightAlpha` above 1, and accepted others, such as an unknown `labelPosition`, while `Simulation` accepted anything. Values that were silently fixed before now throw a `RangeError`, and misspelled option names throw a `TypeError` instead of being ignored. To keep forgiving input, clamp values yourself before passing them in.
 - **A missing edge in `setEdgeConfig()` throws a `ReferenceError`,** in both the simulation and the renderer, as a missing node or edge already did in the graph. It was a plain `Error`; `catch` blocks that check `instanceof Error` still match. The graph's error messages now start with `Graph:`, like the other layers', so code that matched the old wording (`Cannot find …`) needs updating.
+- **`renderer.images` entries are objects with a status.** Each entry is `{ status, image }`, where `status` is `"loading"`, `"loaded"` or `"failed"` and `image` is the loaded image or `null` (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
 - **`renderer.pin()` and `renderer.unpin()` are removed.** Pinning changes the simulation, which the renderer only draws. Use `gjs.pin(id, x, y)` and `gjs.unpin(id)`, which take canvas coordinates like the removed methods, or `gjs.simulation.pin()` with simulation coordinates.
 - **`SIM_NODE_DEFAULTS` and `SIM_EDGE_DEFAULTS` are no longer exported** from `@tang0226/graph-js/simulation`. Read the defaults a simulation is using from `simulation.defaultNodeConfig` and `simulation.defaultEdgeConfig` instead, and change them with `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. Changing the exported objects changed defaults for every simulation at once, which was never supported.
 
