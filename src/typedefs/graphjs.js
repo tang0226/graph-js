@@ -77,6 +77,10 @@
  *    pointer moved onto a node
  * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodeleave - the
  *    pointer moved off a node
+ * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodepress - the
+ *    pointer was pressed on a node, before it's known whether the press is a
+ *    click or a drag. Calling `preventDefault()` ignores the press: no drag
+ *    or click follows.
  * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodeclick - a
  *    node was clicked
  * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodedblclick - a

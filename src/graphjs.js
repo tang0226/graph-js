@@ -18,7 +18,7 @@ import { Interaction } from "./interaction.js";
  * @type {readonly GraphJSEventType[]}
  */
 const EVENT_TYPES = Object.freeze([
-  "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
+  "nodeenter", "nodeleave", "nodepress", "nodeclick", "nodedblclick",
   "nodedragstart", "nodedrag", "nodedragend",
   "backgroundclick",
   "panstart", "pan", "panend", "zoom",

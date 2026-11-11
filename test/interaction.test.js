@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { GraphJS } from "../src/graphjs.js";
 import { makeCanvas, installWindow, installRaf, dispatchPointer, r2 } from "./helpers/stubs.js";
 
+// Every event but nodepress, which would start most logs; its tests listen to it
 const EVENTS = [
   "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
   "nodedragstart", "nodedrag", "nodedragend", "backgroundclick",
@@ -255,6 +256,70 @@ describe("Interaction: clicks", () => {
     try {
       ptr.down(100, 100, { pointerId: 7 });
       assert.ok(canvas.captured.has(7));
+    } finally { restoreWindow(); }
+  });
+
+  test("pressing a node emits nodepress straight away, before the click or drag", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("nodepress", e => log.push(e));
+      const down = ptr.down(600, 300);
+      assert.deepEqual(types(log), ["nodepress"], "emitted on press, not release");
+      const [e] = log;
+      assert.equal(e.id, "b");
+      assert.deepEqual([e.x, e.y], [600, 300]);
+      assert.equal(e.originalEvent, down);
+      ptr.up(600, 300);
+      assert.deepEqual(acts(log), ["nodepress", "nodeclick"]);
+      log.length = 0;
+      ptr.down(600, 300); ptr.move(650, 300); ptr.up(650, 300);
+      assert.deepEqual(acts(log), ["nodepress", "nodedragstart", "nodedrag", "nodedragend"]);
+    } finally { restoreWindow(); }
+  });
+
+  test("pressing the background, or with another button, emits no nodepress", () => {
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      let presses = 0;
+      gjs.on("nodepress", () => { presses++; });
+      ptr.down(100, 100); ptr.up(100, 100);
+      ptr.down(400, 300, { button: 2 }); ptr.up(400, 300, { button: 2 });
+      ptr.down(400, 300, { isPrimary: false, pointerId: 2 }); ptr.up(400, 300, { pointerId: 2 });
+      assert.equal(presses, 0);
+    } finally { restoreWindow(); }
+  });
+
+  test("preventing nodepress ignores the press: no drag, click or capture", () => {
+    const { gjs, canvas, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("nodepress", e => e.preventDefault());
+      ptr.down(400, 300); ptr.move(450, 300); ptr.up(450, 300);
+      ptr.down(400, 300, { pointerId: 3 }); ptr.up(400, 300, { pointerId: 3 });
+      assert.deepEqual(acts(log), []);
+      assert.deepEqual(pos(gjs, "a"), [0, 0]);
+      assert.equal(fixed(gjs, "a"), false);
+      assert.equal(canvas.captured.size, 0);
+    } finally { restoreWindow(); }
+  });
+
+  test("after an ignored press, hover carries on as if nothing was pressed", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("nodepress", e => e.preventDefault());
+      ptr.move(400, 300);
+      ptr.down(400, 300);
+      ptr.move(600, 300);
+      assert.deepEqual(log.map(e => [e.type, e.id]), [["nodeenter", "a"], ["nodeleave", "a"], ["nodeenter", "b"]]);
+    } finally { restoreWindow(); }
+  });
+
+  test("a nodepress listener that turns interaction off stops the press cleanly", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("nodepress", e => e.target.disableInteraction());
+      assert.doesNotThrow(() => { ptr.down(400, 300); ptr.move(450, 300); ptr.up(450, 300); });
+      assert.deepEqual(log, []);
+      assert.deepEqual(pos(gjs, "a"), [0, 0]);
     } finally { restoreWindow(); }
   });
 

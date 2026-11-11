@@ -599,7 +599,7 @@ describe("GraphJS: events", () => {
   test("every interaction event name is accepted", () => {
     const gjs = new GraphJS();
     const names = [
-      "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
+      "nodeenter", "nodeleave", "nodepress", "nodeclick", "nodedblclick",
       "nodedragstart", "nodedrag", "nodedragend", "backgroundclick",
       "panstart", "pan", "panend", "zoom",
     ];

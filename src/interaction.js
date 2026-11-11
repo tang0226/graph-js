@@ -193,7 +193,8 @@ export class Interaction {
 
 
   /**
-   * Starts tracking a press of the primary pointer's main button.
+   * Starts tracking a press of the primary pointer's main button, after
+   * emitting `nodepress` for a press on a node.
    * @param {PointerEvent} e - DOM event
    * @returns {void}
    * @private
@@ -202,8 +203,11 @@ export class Interaction {
     const el = this._canvas;
     if (!el || this._press || !e.isPrimary || e.button !== 0) return;
     const [x, y] = this._toCanvas(e, el);
+    const id = this._gjs.nodeAt(x, y);
+    // Preventing nodepress ignores the press; a listener may also have unbound
+    if (id !== null && (this._emit("nodepress", { x, y, id, originalEvent: e }) || this._canvas !== el)) return;
     this._press = {
-      pointerId: e.pointerId, id: this._gjs.nodeAt(x, y),
+      pointerId: e.pointerId, id,
       startX: x, startY: y, lastX: x, lastY: y,
       drag: null, grabX: 0, grabY: 0, unpin: false,
     };

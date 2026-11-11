@@ -135,6 +135,9 @@ gjs.on("panend", e => { e.dx; });
 gjs.on("nodedrag", e => { const [dx, dy]: [number, number] = [e.dx, e.dy]; const id: NodeId = e.id; });
 // @ts-expect-error -- only drag moves carry movement, not their start
 gjs.on("nodedragstart", e => { e.dx; });
+gjs.on("nodepress", e => { const pressed: NodeId = e.id; const at: number = e.x; e.preventDefault(); });
+// @ts-expect-error -- a press has no movement
+gjs.on("nodepress", e => { e.dx; });
 // @ts-expect-error -- the event's view is read-only
 gjs.on("zoom", e => { e.view.zoom = 2; });
 // @ts-expect-error -- not an event name

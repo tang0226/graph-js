@@ -489,6 +489,7 @@ While it's on and a canvas is attached:
 
 | Gesture | Response | Events |
 |---|---|---|
+| Press a node | | `nodepress` |
 | Drag a node | the node follows the pointer | `nodedragstart`, `nodedrag`, `nodedragend` |
 | Drag the background | the view pans | `panstart`, `pan`, `panend` |
 | Turn the wheel | the view zooms around the pointer | `zoom` |
@@ -536,6 +537,7 @@ Events come from [built-in interaction](#built-in-interaction), so listeners onl
 |---|---|---|---|
 | `nodeenter` | the pointer moves onto a node | pointer, `id` | |
 | `nodeleave` | the pointer moves off a node, or leaves the canvas | pointer, `id` | |
+| `nodepress` | the pointer is pressed on a node, before it's known whether the press is a click or a drag | pointer, `id` | the press is ignored: no drag or click follows |
 | `nodeclick` | a node is clicked | pointer, `id` | |
 | `nodedblclick` | a node is double-clicked | pointer, `id` | |
 | `backgroundclick` | the canvas is clicked away from any node | pointer | |
