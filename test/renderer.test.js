@@ -1503,7 +1503,7 @@ describe("Renderer: highlighting", () => {
       g.removeNode("a");                 // b moves from slot 1 to slot 0
       g.addNode({ id: "c" });
       r.render();
-      const flags = r._nodeHighlightState;
+      const flags = r._highlighter.nodeState;
       assert.equal(flags.length, sim.nodeList.length);
       assert.equal(flags[sim.nodeIndex.get("b")], 1);
       assert.equal(flags[sim.nodeIndex.get("c")], 0);

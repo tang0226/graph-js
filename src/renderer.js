@@ -18,6 +18,7 @@ import { Simulation } from "./simulation.js";
 import { clamp, circleRectCollision, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "./image-cache.js";
+import { Highlighter } from "./highlighter.js";
 import { HookRegistry } from "./hook-registry.js";
 
 
@@ -90,28 +91,6 @@ const MIN_OUTLINE_WIDTH = 0.05;
 /** Below this on-screen diameter (device px), an image node is drawn as a
     circle in the image's average colour. */
 const IMAGE_DOT_THRESHOLD = 6;
-
-/**
- * Moves each alpha toward its target (1 when highlighted, `dim` otherwise) by
- * at most `step`.
- * @param {Float64Array} alphas - current alphas, updated in place
- * @param {Uint8Array} flags - highlight flags parallel to `alphas`
- * @param {number} dim - target alpha for non-highlighted elements
- * @param {number} step - largest alpha change allowed
- * @returns {boolean} whether every alpha has reached its target
- */
-const stepAlphas = (alphas, flags, dim, step) => {
-  let settled = true;
-  for (let i = 0; i < alphas.length; i++) {
-    const target = flags[i] ? 1 : dim, a = alphas[i];
-    if (a === target) continue;
-    let next = a < target ? Math.min(a + step, target) : Math.max(a - step, target);
-    if (Math.abs(next - target) < 1e-9) next = target;   // absorb float drift
-    alphas[i] = next;
-    if (next !== target) settled = false;
-  }
-  return settled;
-};
 
 
 /**
@@ -274,55 +253,23 @@ export class Renderer {
   _edgeBow = new Int8Array(0);
 
 
-  /** @private @type {Set<NodeId>}*/
-  _highlightedNodes = new Set();
+  /**
+   * Highlight state: highlighted elements, per-slot flags, and the alphas
+   * that fade toward them
+   * @type {Highlighter}
+   * @private
+   */
+  _highlighter = new Highlighter();
   /**
    * Ids of highlighted nodes. Modified via `highlight()`.
    * @returns {ReadonlySet<NodeId>}
    */
-  get highlightedNodes() { return this._highlightedNodes; }
-
-
-  /**
-   * Array of highlight state flags parallel to `Simulation.nodeList`
-   * @type {Uint8Array}
-   * @private
-   */
-  _nodeHighlightState = new Uint8Array(0);
-
-
-  /** @private @type {Set<GraphEdge>}*/
-  _highlightedEdges = new Set();
+  get highlightedNodes() { return this._highlighter.nodes; }
   /**
    * Highlighted edge objects. Modified via `highlight()`.
    * @returns {ReadonlySet<GraphEdge>}
    */
-  get highlightedEdges() { return this._highlightedEdges; }
-
-
-  /**
-   * Array of highlight state flags parallel to `Simulation.edgeList`
-   * @type {Uint8Array}
-   * @private
-   */
-  _edgeHighlightState = new Uint8Array(0);
-
-
-  /**
-   * Current drawing alpha of each node, parallel to `Simulation.nodeList`.
-   * Eased toward its highlight target over `highlightFadeDuration`.
-   * @type {Float64Array}
-   * @private
-   */
-  _nodeAlpha = new Float64Array(0);
-
-
-  /**
-   * Current drawing alpha of each edge, parallel to `Simulation.edgeList`.
-   * @type {Float64Array}
-   * @private
-   */
-  _edgeAlpha = new Float64Array(0);
+  get highlightedEdges() { return this._highlighter.edges; }
 
 
   /**
@@ -351,24 +298,6 @@ export class Renderer {
    * @private
    */
   _labelsDirty = true;
-
-
-  /**
-   * Whether any element's alpha may still differ from its target. Set by
-   * anything that changes targets; cleared once a step finds all settled.
-   * @type {boolean}
-   * @private
-   */
-  _fadeActive = false;
-
-
-  /**
-   * Timestamp of the previous `render()`, or `null` when a fade has just
-   * started.
-   * @type {number | null}
-   * @private
-   */
-  _lastFrameTime = null;
 
 
   /**
@@ -530,7 +459,7 @@ export class Renderer {
       this._labelsDirty = true;
     }
     // Mode and alpha set the dimmed target, so ease toward the new value
-    if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._startFade();
+    if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
@@ -739,22 +668,19 @@ export class Renderer {
   addHighlight({ nodes = [], edges = [] } = {}) {
     // Sync graph structure first
     this.sync();
-    
+
+    const hl = this._highlighter;
     for (const id of nodes) {
       const i = this.simulation.nodeIndex.get(id);
-      if (i === undefined) continue;
-      this._nodeHighlightState[i] = 1;
-      this._highlightedNodes.add(id);
+      if (i !== undefined) hl.addNode(id, i);
     }
     for (const idPair of edges) {
       const edge = this.graph.getEdge(...idPair);
       if (!edge) continue;
       const i = this.simulation.edgeIndex.get(edge);
-      if (i === undefined) continue;
-      this._edgeHighlightState[i] = 1;
-      this._highlightedEdges.add(edge);
+      if (i !== undefined) hl.addEdge(edge, i);
     }
-    this._startFade();
+    hl.startFade();
     return this;
   }
 
@@ -771,32 +697,21 @@ export class Renderer {
     // Sync graph structure first
     this.sync();
 
-    this._startFade();
+    const hl = this._highlighter;
+    hl.startFade();
 
     // Clear all if no elements are defined
     if (!nodes && !edges) {
-      this._highlightedNodes.clear();
-      this._nodeHighlightState.fill(0);
-      this._highlightedEdges.clear();
-      this._edgeHighlightState.fill(0);
+      hl.clear();
       return this;
     }
     if (nodes) {
-      for (const id of nodes) {
-        this._highlightedNodes.delete(id);
-        const i = this.simulation.nodeIndex.get(id);
-        if (i === undefined) continue;
-        this._nodeHighlightState[i] = 0;
-      }
+      for (const id of nodes) hl.removeNode(id, this.simulation.nodeIndex.get(id));
     }
     if (edges) {
       for (const idPair of edges) {
         const edge = this.graph.getEdge(...idPair);
-        if (!edge) continue;
-        this._highlightedEdges.delete(edge);
-        const i = this.simulation.edgeIndex.get(edge);
-        if (i === undefined) continue;
-        this._edgeHighlightState[i] = 0;
+        if (edge) hl.removeEdge(edge, this.simulation.edgeIndex.get(edge));
       }
     }
     return this;
@@ -806,9 +721,7 @@ export class Renderer {
   /**
    * @returns {boolean} whether the renderer has any highlighted elements
    */
-  hasHighlight() {
-    return this._highlightedNodes.size > 0 || this._highlightedEdges.size > 0;
-  }
+  hasHighlight() { return this._highlighter.has(); }
 
 
   /**
@@ -816,32 +729,7 @@ export class Renderer {
    * demand should keep calling `render()` while this is `true`.
    * @returns {boolean} whether a highlight fade is in progress
    */
-  isFading() { return this._fadeActive; }
-
-
-  /**
-   * Marks alpha targets as changed. Restarts the frame clock if no fade was
-   * running, so time spent idle isn't applied to the first step.
-   * @returns {void}
-   * @private
-   */
-  _startFade() {
-    if (this._fadeActive) return;
-    this._fadeActive = true;
-    this._lastFrameTime = null;
-  }
-
-
-  /**
-   * Target alpha for non-highlighted elements: 1 with no highlight, 0 when
-   * hiding, otherwise `highlightAlpha`.
-   * @returns {number} target alpha
-   * @private
-   */
-  _dimmedAlpha() {
-    if (!this.hasHighlight()) return 1;
-    return this._opts.highlightMode === "hide" ? 0 : this._opts.highlightAlpha;
-  }
+  isFading() { return this._highlighter.isFading(); }
 
 
   /**
@@ -996,11 +884,8 @@ export class Renderer {
        is running, carry each surviving element's alpha across by its style
        object, which persists through syncs. Pruning below can also end the
        highlight, so this is decided first. */
-    const carryAlpha = this._fadeActive || this.hasHighlight();
-    const oldNodeAlpha = carryAlpha ?
-      new Map(this._nodeStyles.map((s, i) => [s, this._nodeAlpha[i]])) : null;
-    const oldEdgeAlpha = carryAlpha ?
-      new Map(this._edgeStyles.map((s, i) => [s, this._edgeAlpha[i]])) : null;
+    const hl = this._highlighter;
+    const snap = hl.snapshot(this._nodeStyles, this._edgeStyles);
 
     // Delete old node styles
     for (const id of this._nodes.keys()) {
@@ -1008,7 +893,7 @@ export class Renderer {
         if (this._nodes.get(id)?.image) this._imageDebt++;
         this._nodes.delete(id);
         this._nodeConfig.prune(id);
-        this._highlightedNodes.delete(id);
+        hl.forgetNode(id);
       }
     }
     if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
@@ -1018,7 +903,7 @@ export class Renderer {
       if (!this._graph.edges.has(gEdge)) {
         this._edges.delete(gEdge);
         this._edgeConfig.prune(gEdge);
-        this._highlightedEdges.delete(gEdge);
+        hl.forgetEdge(gEdge);
       }
     }
 
@@ -1054,30 +939,9 @@ export class Renderer {
       this._edgeBow[k] = this._graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
     }
 
-    // Highlight state
-    this._nodeHighlightState = new Uint8Array(sim.nodeList.length);
-    for (const [i, node] of sim.nodeList.entries()) {
-      this._nodeHighlightState[i] = this._highlightedNodes.has(node.id) ? 1 : 0;
-    }
-
-    this._edgeHighlightState = new Uint8Array(sim.edgeList.length);
-    for (const [i, edge] of sim.edgeList.entries()) {
-      this._edgeHighlightState[i] = this._highlightedEdges.has(edge) ? 1 : 0;
-    }
-
-    // Highlight alphas: survivors keep theirs, new elements start at target
-    const dim = this._dimmedAlpha();
-    this._nodeAlpha = new Float64Array(this._nodeStyles.length);
-    for (const [i, style] of this._nodeStyles.entries()) {
-      this._nodeAlpha[i] = oldNodeAlpha?.get(style) ??
-        (this._nodeHighlightState[i] ? 1 : dim);
-    }
-    this._edgeAlpha = new Float64Array(this._edgeStyles.length);
-    for (const [i, style] of this._edgeStyles.entries()) {
-      this._edgeAlpha[i] = oldEdgeAlpha?.get(style) ??
-        (this._edgeHighlightState[i] ? 1 : dim);
-    }
-    if (carryAlpha) this._startFade();
+    // Highlight flags and alphas: survivors keep theirs, new elements start at target
+    hl.reslot(snap, sim.nodeList, sim.edgeList, this._nodeStyles, this._edgeStyles,
+      this._opts.highlightMode, this._opts.highlightAlpha);
 
     this._syncedSimulation = this._simulation.version;
     this._version++;
@@ -1617,28 +1481,6 @@ export class Renderer {
 
 
   /**
-   * Eases every element's alpha toward its target by the time elapsed since
-   * the previous frame. Covers off-screen elements too, so they don't come
-   * back into view mid-fade.
-   * @param {number} time - current timestamp in milliseconds
-   * @returns {void}
-   * @private
-   */
-  _stepFade(time) {
-    const dt = this._lastFrameTime === null ? 0 : time - this._lastFrameTime;
-    this._lastFrameTime = time;
-    if (!this._fadeActive) return;
-
-    const duration = this._opts.highlightFadeDuration;
-    const step = duration > 0 ? Math.max(dt, 0) / duration : Infinity;
-    const dim = this._dimmedAlpha();
-    const nodesSettled = stepAlphas(this._nodeAlpha, this._nodeHighlightState, dim, step);
-    const edgesSettled = stepAlphas(this._edgeAlpha, this._edgeHighlightState, dim, step);
-    if (nodesSettled && edgesSettled) this._fadeActive = false;
-  }
-
-
-  /**
    * Sets the context alpha for the next element, writing it only when it
    * changes.
    * @param {number} alpha - element alpha
@@ -1666,7 +1508,10 @@ export class Renderer {
   render(time = now()) {
     if (!this._ctx || !this._size) return false;
     this.sync();
-    this._stepFade(time);
+    // Eases every alpha toward its target, off-screen elements included, so
+    // they don't come back into view mid-fade
+    const opts = this._opts;
+    this._highlighter.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
     this._imageCache.beginFrame();
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
@@ -1703,19 +1548,21 @@ export class Renderer {
     }
     const dpr = this._dpr;
 
-    if (this.hasHighlight() || this._fadeActive) {
+    const hl = this._highlighter;
+    if (hl.has() || hl.isFading()) {
+      const { nodeState, nodeAlpha, edgeState, edgeAlpha } = hl;
       this._frameAlpha = 1;
       for (const flag of [0, 1]) {
         for (const i of inFrame.edgesI) {
-          if (this._edgeHighlightState[i] === flag && this._useAlpha(this._edgeAlpha[i]))
-            this._renderEdgeByIndex(i, this._edgeAlpha[i]);
+          if (edgeState[i] === flag && this._useAlpha(edgeAlpha[i]))
+            this._renderEdgeByIndex(i, edgeAlpha[i]);
         }
         for (const i of inFrame.nodesI) {
-          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
             this._renderNodeByIndex(i);
         }
         for (const i of inFrame.labelsI) {
-          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
             this._renderNodeLabelByIndex(i);
         }
         // Highlighted nodes are drawn next, in canvas space
