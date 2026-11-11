@@ -4,6 +4,9 @@
 import { Graph } from "@tang0226/graph-js/graph";
 import { Simulation } from "@tang0226/graph-js/simulation";
 import { Tween, easings } from "@tang0226/graph-js/tween";
+// Internal, so not a package subpath: imported by path to check it stays DOM-free
+// for the headless layers that will extend it
+import { Emitter } from "../types/emitter.js";
 
 const graph = new Graph({ directed: false });
 graph.addNode({ id: "a" });
@@ -22,5 +25,16 @@ const tween = new Tween({
   from: [0, 0], to: [100, 50], duration: 500, ease: easings.outQuad,
 });
 const done: boolean = tween.step(16);
+
+// A headless class can emit typed events
+class Counter extends Emitter<{ change: { to: number } }, Counter> {
+  constructor() { super(["change"], "Counter"); }
+  set(to: number) { return this._emit("change", { to }); }
+}
+const counter = new Counter().on("change", e => { const to: number = e.to; const self: Counter = e.target; });
+// @ts-expect-error -- not one of its events
+counter.on("reset", () => {});
+// @ts-expect-error -- emitting is for the subclass only
+counter._emit("change", { to: 1 });
 
 export {};

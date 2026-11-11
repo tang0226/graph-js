@@ -1,7 +1,7 @@
 /** @import { NodeData } from './typedefs/graph.js' */
 /** @import { Canvas, View } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
-/** @import { GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener } from './typedefs/graphjs.js' */
+/** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
 /** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
 /** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 
@@ -11,6 +11,7 @@ import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
 import { Tween } from "./tween.js";
 import { Interaction } from "./interaction.js";
+import { Emitter } from "./emitter.js";
 
 
 /**
@@ -27,8 +28,10 @@ const EVENT_TYPES = Object.freeze([
 
 /**
  * Unified interface over the `Graph`, `Simulation`, and `Renderer` layers.
+ * Emits the events in `GraphJSEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<GraphJSEventMap, GraphJS>}
  */
-export class GraphJS {
+export class GraphJS extends Emitter {
   /** @private @type {Graph} */
   _graph;
   /**
@@ -64,14 +67,6 @@ export class GraphJS {
     postTick: new Set(),
     postRender: new Set(),
   };
-
-
-  /**
-   * Event listeners by event name, in the order they were added
-   * @type {Map<GraphJSEventType, Set<GraphJSListener<any>>>}
-   * @private
-   */
-  _listeners = new Map(EVENT_TYPES.map(type => [type, new Set()]));
 
 
   /**
@@ -122,6 +117,7 @@ export class GraphJS {
    * @param {GraphJSOpts} opts
    */
   constructor(opts = {}) {
+    super(EVENT_TYPES, "GraphJS");
     const tweenUnit = opts.tweenUnit ?? "ms";
     if (tweenUnit !== "ms" && tweenUnit !== "frames") {
       throw new RangeError(`GraphJS: unknown tweenUnit "${tweenUnit}"`);
@@ -391,87 +387,6 @@ export class GraphJS {
     this._runHooks("postTick", time);
     this._renderer.render(time);
     this._runHooks("postRender", time);
-  }
-
-
-  /**
-   * Adds a listener for an event. Listeners of an event run in the order they
-   * were added, and adding the same function again has no effect. An error
-   * thrown by a listener is logged, and the remaining listeners still run.
-   * @template {GraphJSEventType} K
-   * @param {K} type - event name
-   * @param {GraphJSListener<K>} f - listener, called with the event
-   * @returns {this} self reference
-   * @throws {TypeError} throws if the event name is unknown or `f` isn't a
-   *    function
-   */
-  on(type, f) {
-    if (typeof f !== "function") {
-      throw new TypeError(`GraphJS: "${type}" listener must be a function`);
-    }
-    this._listenersOf(type).add(f);
-    return this;
-  }
-
-
-  /**
-   * Removes a listener for an event. A listener removed while its event is
-   * being emitted doesn't run for that event, if it hasn't already.
-   * @template {GraphJSEventType} K
-   * @param {K} type - event name
-   * @param {GraphJSListener<K>} f - listener to remove
-   * @returns {boolean} whether the listener was there
-   * @throws {TypeError} throws if the event name is unknown
-   */
-  off(type, f) {
-    return this._listenersOf(type).delete(f);
-  }
-
-
-  /**
-   * Returns the listener set of an event.
-   * @param {GraphJSEventType} type - event name
-   * @returns {Set<GraphJSListener<any>>} the event's listeners
-   * @throws {TypeError} throws if the event name is unknown
-   * @private
-   */
-  _listenersOf(type) {
-    const listeners = this._listeners.get(type);
-    if (!listeners) throw new TypeError(`GraphJS: unknown event "${type}"`);
-    return listeners;
-  }
-
-
-  /**
-   * Emits an event: calls each of its listeners with one shared event object,
-   * built from `data` plus the `type`, `target` and `preventDefault()` fields.
-   * Iterates over a copy, so listeners added during the emit start on the
-   * next one, and skips listeners removed during it.
-   * @template {GraphJSEventType} K
-   * @param {K} type - event name
-   * @param {GraphJSEventMap[K]} data - the event's data
-   * @returns {boolean} whether a listener called `preventDefault()`, in which
-   *    case the caller should skip its own response to the event
-   * @private
-   */
-  _emit(type, data) {
-    const listeners = this._listenersOf(type);
-    if (listeners.size === 0) return false;
-    let prevented = false;
-    /** @type {GraphJSEvent<K>} */
-    const event = {
-      ...data,
-      type,
-      target: this,
-      get defaultPrevented() { return prevented; },
-      preventDefault() { prevented = true; },
-    };
-    for (const f of [...listeners]) {
-      if (!listeners.has(f)) continue;
-      try { f(event); }
-      catch (err) { console.error(`GraphJS: "${type}" listener failed`, err); }
-    }
-    return prevented;
   }
 
 

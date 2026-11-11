@@ -5,6 +5,7 @@
 /** @import { RendererOptsInput, Canvas, View } from './renderer.js' */
 /** @import { TweenUnit } from './tween.js' */
 /** @import { InteractionOptsInput } from './interaction.js' */
+/** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /**
  * @typedef {object} GraphJSOpts
@@ -114,18 +115,13 @@
  * instance, and `preventDefault()`, which stops GraphJS's own response to the
  * event (such as moving a dragged node) without stopping other listeners
  * @template {GraphJSEventType} [K=GraphJSEventType]
- * @typedef {GraphJSEventMap[K] & {
- *   readonly type: K,
- *   readonly target: GraphJS,
- *   readonly defaultPrevented: boolean,
- *   preventDefault: () => void,
- * }} GraphJSEvent
+ * @typedef {EmitterEvent<GraphJSEventMap, K, GraphJS>} GraphJSEvent
  */
 
 /**
  * Function called with each event of the type it was added for by `on()`
  * @template {GraphJSEventType} [K=GraphJSEventType]
- * @typedef {(event: GraphJSEvent<K>) => void} GraphJSListener
+ * @typedef {EmitterListener<GraphJSEventMap, K, GraphJS>} GraphJSListener
  */
 
 export {};
