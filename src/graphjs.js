@@ -87,12 +87,21 @@ export class GraphJS extends Emitter {
 
 
   /**
-   * Handle of the pending animation frame while `start()` is running, or
-   * `null` when stopped
+   * Animation frame handle of the `start()` loop's next frame, or `null` while
+   * the loop is stopped. `isRunning()` reads it.
    * @type {number | null}
    * @private
    */
-  _raf = null;
+  _loopFrame = null;
+
+
+  /**
+   * Animation frame handle of the next on-demand frame from `requestRender()`,
+   * which draws while the loop is stopped, or `null` if none is pending
+   * @type {number | null}
+   * @private
+   */
+  _onDemandFrame = null;
 
 
   /**
@@ -180,6 +189,7 @@ export class GraphJS extends Emitter {
   detach() {
     if (!this.canvas) return this;
     this.stop();
+    this._cancelRenderRequest();
     this._interaction?.unbind();
     this._renderer.detach();
     return this;
@@ -289,14 +299,14 @@ export class GraphJS extends Emitter {
    * @returns {this} self reference
    */
   start() {
-    if (this._raf !== null || !this.canvas) return this;
+    if (this._loopFrame !== null || !this.canvas) return this;
     const frame = (/** @type {number} */ time) => {
-      if (!this.canvas) { this._raf = null; return; }
+      if (!this.canvas) { this._loopFrame = null; return; }
       // Schedule first, so that a hook calling stop() cancels the next frame
-      this._raf = requestAnimationFrame(frame);
+      this._loopFrame = requestAnimationFrame(frame);
       this._frame(time);
     };
-    this._raf = requestAnimationFrame(frame);
+    this._loopFrame = requestAnimationFrame(frame);
     this._tweenClock = null;
     return this;
   }
@@ -307,7 +317,7 @@ export class GraphJS extends Emitter {
    * @returns {this} self reference
    */
   stop() {
-    if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
+    if (this._loopFrame !== null) { cancelAnimationFrame(this._loopFrame); this._loopFrame = null; }
     this._tweenClock = null;
     return this;
   }
@@ -328,7 +338,52 @@ export class GraphJS extends Emitter {
    * Returns whether the simulation and renderer animation loop is running.
    * @returns {boolean} whether the animation loop is running
    */
-  isRunning() { return this._raf !== null; }
+  isRunning() { return this._loopFrame !== null; }
+
+
+  /**
+   * Draws a frame on the next animation frame while the loop isn't running,
+   * and keeps drawing one each frame while a tween or highlight fade is in
+   * progress, then stops. Each frame advances tweens and renders, but doesn't
+   * tick the simulation or run loop hooks. Requests made in the same frame
+   * draw once, and a request while the loop runs does nothing, since the
+   * loop draws anyway.
+   *
+   * Call it after changing what's drawn while the loop is stopped, such as
+   * highlighting from a hover listener. Built-in interaction calls it itself.
+   * @returns {this} self reference
+   */
+  requestRender() {
+    if (this._onDemandFrame !== null || this.isRunning() || !this.canvas) return this;
+    if (typeof requestAnimationFrame !== "function") {
+      // No frames to wait for: draw once now
+      const time = now();
+      this.stepTweens(time);
+      this._renderer.render(time);
+      return this;
+    }
+    this._onDemandFrame = requestAnimationFrame(time => {
+      this._onDemandFrame = null;
+      // The loop may have started since, and draws this frame itself
+      if (this.isRunning() || !this.canvas) return;
+      this.stepTweens(time);
+      this._renderer.render(time);
+      if (this.isTweening() || this._renderer.isFading()) this.requestRender();
+    });
+    return this;
+  }
+
+
+  /**
+   * Cancels a pending `requestRender()` frame, if any.
+   * @returns {void}
+   * @private
+   */
+  _cancelRenderRequest() {
+    if (this._onDemandFrame === null) return;
+    cancelAnimationFrame(this._onDemandFrame);
+    this._onDemandFrame = null;
+  }
 
 
   /**

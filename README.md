@@ -383,6 +383,15 @@ gjs.step();         // tick the simulation once and draw one frame
 
 `start()` does nothing until a canvas is attached.
 
+While the loop is stopped, `requestRender()` draws your changes without ticking the simulation:
+
+```js
+gjs.renderer.setHighlight({ nodes: ["alice"] });
+gjs.requestRender();   // draws on the next animation frame
+```
+
+It keeps drawing each frame while a tween or highlight fade is still running, then stops, so a fade started this way finishes. Requests made in the same frame draw once, and a request does nothing while the loop runs, since the loop draws anyway. It doesn't run [loop hooks](#loop-hooks), which belong to `start()` and `step()` frames.
+
 ### Loop hooks
 
 Each frame of `start()`, and each `step()`, ticks the simulation once and then draws. Loop hooks run your own code around those two steps:
@@ -482,7 +491,7 @@ gjs.isTweening();                 // true while any tween is active
 Starting a tween with the key of an active one cancels the old one, so two tweens never fight over the same value. A `from` function then picks up wherever the old one stopped.
 
 - **When they run:** tweens are advanced at the start of each frame of `start()` and each `step()`, before the `"preTick"` hooks. Time only counts while frames run, so a tween doesn't jump ahead after `stop()` and `start()`.
-- **Without the loop:** if you draw only when something changes, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true. It advances tweens without ticking the simulation.
+- **Without the loop:** call `gjs.requestRender()` after starting a tween, and it draws each frame until the tween ends (see [Starting and stopping](#starting-and-stopping)). With your own render loop instead, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true.
 - **With interaction:** a view tween keeps moving the view while the user pans or zooms. To let the user take over, cancel it from a `panstart` or `zoom` listener (see [Interaction events](#interaction-events)).
 - **Errors:** a `set` function that throws is logged and the tween is cancelled. Cancel tweens whose node or edge you remove: `setEdgeConfig()` throws for a missing edge.
 - **Speed:** each change to a node or edge config makes the renderer re-read every node's and edge's settings on the next frame, so style tweens get expensive on large graphs. Tweening the view or node positions doesn't have this cost.
@@ -537,7 +546,7 @@ Listeners can change or cancel each response (see [Interaction events](#interact
 - **Hover:** while a press is held, the hovered node doesn't change, so a dragged node stays hovered even if the pointer outruns it. Hover updates when the press ends. Touch has no hover.
 - **Pointers:** only the primary pointer's main button is used, and pinch-to-zoom isn't supported. While listening, the canvas's CSS `touch-action` is set to `none`, so touch drags don't scroll the page; the previous value is restored afterwards.
 - **The wheel:** the page doesn't scroll while the wheel zooms, even at a zoom limit. Horizontal scrolling is left to the page. A view that code has set past `minZoom` or `maxZoom` isn't snapped back; the wheel only stops it going further.
-- **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction draws one frame after each change. That frame doesn't advance tweens or finish highlight fades, so if you use those while stopped, keep drawing yourself (see [Tweens](#tweens) and [Highlighting](#highlighting)).
+- **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction calls `gjs.requestRender()` after each change it makes, so the change shows, and any tween or highlight fade in progress runs to the end. Changes your listeners make, such as highlighting on `nodeenter`, need their own `gjs.requestRender()` while the loop is stopped.
 - **Removed nodes:** if the node being dragged is removed from the graph, the drag ends straight away with `nodedragend`, and the rest of the press does nothing. A press on a node removed before it's dragged is cancelled, so no click or drag follows, and a hovered node that's removed gets its `nodeleave` straight away. Removed nodes aren't found by `nodeAt()`, even before the next tick.
 - **The canvas:** interaction listens on whichever canvas is attached, and stops when it's detached. A canvas that can't receive pointer input, such as an `OffscreenCanvas`, is ignored. Turning interaction off or detaching during a drag ends it without events, and unpins the node.
 
@@ -764,7 +773,7 @@ gjs.simulation.on("wake", () => gjs.start());
 - **Final positions:** `settle` is emitted after the tick that froze the layout has finished, so positions are final and velocities are zero.
 - **Every wake:** every change that wakes the layout, listed under [Settling](#settling), goes through `heat()`, so `wake` covers them all. It's emitted straight away, before the next tick. Heating a layout that's already moving doesn't emit it.
 - **From code too:** unlike interaction events, simulation events report changes however they're made, including by your own calls to `heat()`, `setOpts()` or `pin()`.
-- **A stopped loop:** if the loop is stopped, a change wakes the layout but nothing ticks it. That's what the `wake` listener above is for. While it's stopped, tweens and highlight fades don't advance either, so restart the loop for those too, or draw on demand (see [Tweens](#tweens)).
+- **A stopped loop:** if the loop is stopped, a change wakes the layout but nothing ticks it. That's what the `wake` listener above is for. While it's stopped, call `gjs.requestRender()` after a change you want to see; it also keeps tweens and highlight fades running until they finish (see [Starting and stopping](#starting-and-stopping)).
 
 ## Drawing
 
@@ -792,7 +801,7 @@ gjs.renderer.setOpts({ highlightMode: "dim", highlightAlpha: 0.3 });
 
 Changes fade rather than switching instantly, so a quickly moving hover highlight doesn't flash the whole canvas. Each item takes up to `highlightFadeDuration` milliseconds to reach its new opacity; in `"hide"` mode, items fade out until they're invisible. Set the option to `0` to switch instantly.
 
-`gjs.start()` keeps rendering, so fades finish on their own. If you render only on demand instead, keep calling `render()` while a fade is in progress:
+`gjs.start()` keeps rendering, so fades finish on their own. While the loop is stopped, `gjs.requestRender()` draws until the fade finishes. With your own render loop, keep calling `render()` while a fade is in progress:
 
 ```js
 function redraw() {
@@ -825,6 +834,8 @@ With [built-in interaction](#built-in-interaction), the same function highlights
 ```js
 gjs.on("nodeenter", e => gjs.renderer.setHighlight(neighborhood(e.id)));
 gjs.on("nodeleave", () => gjs.renderer.clearHighlight());
+gjs.on("nodeenter", () => gjs.requestRender());   // only needed while the loop is stopped
+gjs.on("nodeleave", () => gjs.requestRender());
 ```
 
 ### Custom drawing

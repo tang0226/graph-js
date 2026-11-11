@@ -788,6 +788,110 @@ describe("GraphJS: simulation events", () => {
   });
 });
 
+describe("GraphJS: requestRender", () => {
+  /* A stopped instance with manual frames. `renders` records each
+     render's timestamp; the simulation must never tick. */
+  function onDemand() {
+    const raf = installRaf();
+    const { gjs, restoreWindow } = build();
+    const renders = [];
+    const render = gjs.renderer.render.bind(gjs.renderer);
+    gjs.renderer.render = time => { renders.push(time); return render(time); };
+    let ticks = 0;
+    const tick = gjs.simulation.tick.bind(gjs.simulation);
+    gjs.simulation.tick = (...a) => { ticks++; return tick(...a); };
+    const cleanup = () => { gjs.stop(); restoreWindow(); raf.restore(); };
+    return { gjs, raf, renders, ticks: () => ticks, cleanup };
+  }
+
+  test("draws once on the next frame, without ticking; requests in one frame draw once", () => {
+    const { gjs, raf, renders, ticks, cleanup } = onDemand();
+    try {
+      assert.equal(gjs.requestRender(), gjs);
+      gjs.requestRender().requestRender();
+      assert.equal(raf.pending.size, 1);
+      assert.deepEqual(renders, [], "nothing until the frame");
+      raf.flushFrame(1, { t0: 500 });
+      assert.deepEqual(renders, [500]);
+      assert.equal(raf.pending.size, 0, "nothing is moving, so it stops");
+      assert.equal(ticks(), 0, "the simulation doesn't tick");
+    } finally { cleanup(); }
+  });
+
+  test("keeps drawing while a tween runs, advancing it, then stops", () => {
+    const { gjs, raf, renders, cleanup } = onDemand();
+    try {
+      const values = [];
+      gjs.tween({ set: v => values.push(v), from: 0, to: 1, duration: 100 });
+      gjs.requestRender();
+      raf.flushFrame(6, { t0: 1000, dt: 25 });
+      assert.deepEqual(values.map(v => +v.toFixed(2)), [0, 0.25, 0.5, 0.75, 1]);
+      assert.equal(gjs.isTweening(), false);
+      assert.equal(renders.length, 5, "one frame per tween step, then no more");
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
+  test("keeps drawing while a highlight fades, then stops", () => {
+    const { gjs, raf, renders, cleanup } = onDemand();
+    try {
+      gjs.renderer.setOpts({ highlightFadeDuration: 100 });
+      gjs.renderer.setHighlight({ nodes: ["a"] });
+      gjs.requestRender();
+      raf.flushFrame(10, { t0: 0, dt: 30 });
+      assert.equal(gjs.renderer.isFading(), false, "the fade finished");
+      assert.ok(renders.length >= 4 && renders.length < 10, `drew ${renders.length} frames, then stopped`);
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
+  test("does nothing while the loop runs, or without a canvas", () => {
+    const { gjs, raf, cleanup } = onDemand();
+    try {
+      gjs.start();
+      gjs.requestRender();
+      assert.equal(raf.pending.size, 1, "only the loop's own frame");
+      gjs.stop();
+      gjs.detach();
+      gjs.requestRender();
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
+  test("a frame still pending when the loop starts is left to the loop", () => {
+    const { gjs, raf, renders, cleanup } = onDemand();
+    try {
+      gjs.requestRender();
+      gjs.start();
+      raf.flushFrame(1, { t0: 100 });
+      assert.deepEqual(renders, [100], "drawn once, by the loop");
+    } finally { cleanup(); }
+  });
+
+  test("detach cancels a pending frame", () => {
+    const { gjs, raf, cleanup } = onDemand();
+    try {
+      gjs.requestRender();
+      gjs.detach();
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
+  test("without requestAnimationFrame, draws straight away and advances tweens", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      let renders = 0;
+      const render = gjs.renderer.render.bind(gjs.renderer);
+      gjs.renderer.render = time => { renders++; return render(time); };
+      const values = [];
+      gjs.tween({ set: v => values.push(v), from: 0, to: 1, duration: 100 });
+      gjs.requestRender();
+      assert.equal(renders, 1);
+      assert.deepEqual(values, [0], "the tween's first step ran");
+    } finally { restoreWindow(); }
+  });
+});
+
 describe("GraphJS: tweens", () => {
   /* A headless instance (no canvas needed) and a tween that records values. */
   function tweened(gjs, opts) {

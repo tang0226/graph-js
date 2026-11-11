@@ -786,6 +786,32 @@ describe("Interaction: rendering", () => {
     } finally { restoreWindow(); raf.restore(); }
   });
 
+  test("while the loop is stopped, a hover fade started by a listener runs to the end", () => {
+    const raf = installRaf();
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      gjs.renderer.setOpts({ highlightFadeDuration: 100 });
+      gjs.on("nodeenter", e => { gjs.renderer.setHighlight({ nodes: [e.id] }); gjs.requestRender(); });
+      ptr.move(400, 300);
+      raf.flushFrame(10, { t0: 0, dt: 30 });
+      assert.equal(gjs.renderer.isFading(), false, "the fade didn't stall after one frame");
+      assert.equal(raf.pending.size, 0, "and drawing stopped once it finished");
+    } finally { restoreWindow(); raf.restore(); }
+  });
+
+  test("while the loop is stopped, panning keeps a running tween moving", () => {
+    const raf = installRaf();
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      const values = [];
+      gjs.tween({ set: v => values.push(v), from: 0, to: 1, duration: 100 });
+      ptr.down(100, 100); ptr.move(150, 100);
+      raf.flushFrame(8, { t0: 0, dt: 25 });
+      assert.equal(values.at(-1), 1, "the tween reached its end");
+      assert.equal(raf.pending.size, 0);
+    } finally { restoreWindow(); raf.restore(); }
+  });
+
   test("detaching cancels a pending render", () => {
     const raf = installRaf();
     const { gjs, ptr, restoreWindow } = setup();

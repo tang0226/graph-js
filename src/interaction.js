@@ -66,13 +66,6 @@ export class Interaction {
    */
   _hovered = null;
 
-  /**
-   * Handle of the pending on-demand render, or `null`
-   * @type {number | null}
-   * @private
-   */
-  _raf = null;
-
 
   /**
    * Canvas position and DOM event of the latest pointer input, or `null`
@@ -191,7 +184,6 @@ export class Interaction {
     this._press = null;
     this._hovered = null;
     this._last = null;
-    if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
     return this;
   }
 
@@ -482,17 +474,12 @@ export class Interaction {
 
 
   /**
-   * Renders on the next animation frame, so changes show while the loop
-   * isn't running. Several requests in one frame render once.
+   * Shows a change while the loop isn't running, including any fade or
+   * tween it starts (see `GraphJS.requestRender()`).
    * @returns {void}
    * @private
    */
   _requestRender() {
-    if (this._raf !== null || this._gjs.isRunning()) return;
-    if (typeof requestAnimationFrame !== "function") { this._gjs.renderer.render(); return; }
-    this._raf = requestAnimationFrame(time => {
-      this._raf = null;
-      if (!this._gjs.isRunning()) this._gjs.renderer.render(time);
-    });
+    this._gjs.requestRender();
   }
 }
