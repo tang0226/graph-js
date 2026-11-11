@@ -4,16 +4,7 @@
 /** @import { InteractionOpts, InteractionOptsInput, InteractionEmit, InteractionPress } from './typedefs/interaction.js' */
 
 
-/** @type {Readonly<InteractionOpts>} */
-const DEFAULT_OPTS = Object.freeze({
-  dragNodes: true,
-  pan: true,
-  zoom: true,
-  dragThreshold: 4,
-  zoomSpeed: 0.002,
-  minZoom: 0.01,
-  maxZoom: 100,
-});
+import { INTERACTION_DEFAULTS } from "./defaults.js";
 
 
 /**
@@ -31,7 +22,7 @@ export class Interaction {
   _emit;
 
   /** @private @type {InteractionOpts} */
-  _opts = { ...DEFAULT_OPTS };
+  _opts = { ...INTERACTION_DEFAULTS };
   /**
    * [read-only, set with `setOpts()`] Interaction options
    * @returns {Readonly<InteractionOpts>}
@@ -99,7 +90,7 @@ export class Interaction {
    */
   setOpts(opts) {
     const next = { ...this._opts };
-    for (const key of /** @type {(keyof InteractionOpts)[]} */ (Object.keys(DEFAULT_OPTS))) {
+    for (const key of /** @type {(keyof InteractionOpts)[]} */ (Object.keys(INTERACTION_DEFAULTS))) {
       if (opts[key] !== undefined) /** @type {any} */ (next)[key] = opts[key];
     }
     for (const key of /** @type {const} */ (["dragNodes", "pan", "zoom"])) {

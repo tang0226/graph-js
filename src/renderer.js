@@ -19,6 +19,7 @@ import { clamp, circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
+import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import { HookRegistry } from "./hook-registry.js";
 
 
@@ -29,50 +30,6 @@ import { HookRegistry } from "./hook-registry.js";
  */
 const HOOK_NAMES = { background: true, overlay: true };
 const HOOK_TYPES = keysOf(HOOK_NAMES);
-
-/** @type {RendererOpts} */
-const RENDERER_DEFAULTS = {
-  background: "#ffffff",
-  renderEdges: true,
-  renderLabels: true,
-  labelFont: "Arial",
-  labelPosition: "bottom",
-  labelMargin: 2,
-  minLabelSize: 6,
-  maxLabelSize: Infinity,
-  scaleStrokes: true,
-  minEdgeWidth: 1,
-  maxEdgeWidth: 8,
-  highlightMode: "dim",
-  highlightAlpha: 0.15,
-  highlightFadeDuration: 150,
-  imageReferrerPolicy: "no-referrer",
-  crossOrigin: "anonymous",
-  imageCacheMB: 64,
-};
-
-/** @type {NodeStyle} */
-const NODE_STYLE_DEFAULTS = {
-  color: "#ffffff",
-  outlineColor: "#000000",
-  outlineWidth: 1,
-  image: null,
-  label: null,
-  renderLabel: true,
-  labelScale: 15,
-  labelTextColor: "#000000",
-};
-
-/** @type {EdgeStyle} */
-const EDGE_STYLE_DEFAULTS = {
-  color: "#000000",
-  width: 1,
-  arrow: null,
-  arrowSize: 10,
-  bow: 14,
-};
-
-
 
 /**
  * Font size (px) labels are measured and drawn at. Each label is scaled to its

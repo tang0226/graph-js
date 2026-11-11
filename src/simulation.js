@@ -18,6 +18,7 @@ import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
 import { Emitter } from "./emitter.js";
 import { keysOf } from "./utils.js";
+import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
 
 
 /**
@@ -28,13 +29,6 @@ import { keysOf } from "./utils.js";
  */
 const SIM_EVENT_NAMES = { settle: true, wake: true };
 const SIM_EVENT_TYPES = keysOf(SIM_EVENT_NAMES);
-
-
-/** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
-export const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
-
-/** @type {{ length: number, stiffness: number }} */
-export const SIM_EDGE_DEFAULTS = { length: 50, stiffness: 0.015 };
 
 
 /**

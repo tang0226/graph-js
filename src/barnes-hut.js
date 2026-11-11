@@ -1,14 +1,9 @@
 /** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs/simulation.js' */
 
 import { growF64, growI32 } from "./utils.js";
+import { BARNES_HUT_DEFAULTS } from "./defaults.js";
 
 
-/** @type {BarnesHutOpts} */
-const DEFAULT_BH_CONFIG = {
-  capacity: 1024,
-  theta: 0.9,
-  maxDepth: 20,
-};
 
 
 
@@ -17,21 +12,21 @@ const DEFAULT_BH_CONFIG = {
  */
 export class BarnesHutContext {
   /** @private @type {number} */
-  _capacity = DEFAULT_BH_CONFIG.capacity;
+  _capacity = BARNES_HUT_DEFAULTS.capacity;
   /**
    * Cell pool capacity
    */
   get capacity() { return this._capacity; }
 
   /** @private @type {number} */
-  _maxDepth = DEFAULT_BH_CONFIG.maxDepth;
+  _maxDepth = BARNES_HUT_DEFAULTS.maxDepth;
   /**
    * Max depth of quadtree
    */
   get maxDepth() { return this._maxDepth; }
 
   /** @private @type {number} */
-  _theta = DEFAULT_BH_CONFIG.theta;
+  _theta = BARNES_HUT_DEFAULTS.theta;
   /**
    * Barnes-Hut theta value
    */

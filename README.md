@@ -977,6 +977,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Assigning `renderer.view` now checks its values.** Assigning a non-finite `x` or `y`, or a `zoom` that isn't a finite number above 0, throws a `RangeError` and leaves the view unchanged. These values already broke coordinate conversions and rendering. Writing a single field, as in `renderer.view.zoom = 0`, isn't checked.
 - **Edge widths, arrowheads and node outlines now scale with zoom** (see [Edge and outline widths](#edge-and-outline-widths)). At zoom 1 they look the same as before. Zoomed out they get thinner and fade, and zoomed in they get thicker, up to `maxEdgeWidth`. Set `scaleStrokes: false` to keep the old fixed screen sizes.
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
+- **`SIM_NODE_DEFAULTS` and `SIM_EDGE_DEFAULTS` are no longer exported** from `@tang0226/graph-js/simulation`. Read the defaults a simulation is using from `simulation.defaultNodeConfig` and `simulation.defaultEdgeConfig` instead, and change them with `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. Changing the exported objects changed defaults for every simulation at once, which was never supported.
 
 ### From 0.5
 
