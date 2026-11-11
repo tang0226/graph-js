@@ -58,6 +58,12 @@ const directed: boolean = gjs.graph.directed;
 // Chainable methods return the facade, never an inner layer
 gjs.resize().stop().step();
 gjs.unpin("b").stop();
+// Pinning changes the simulation, so it's on GraphJS and the simulation, not the renderer
+gjs.simulation.pin("b", 0, 0);
+// @ts-expect-error -- not on the renderer
+gjs.renderer.pin("b", 0, 0);
+// @ts-expect-error -- not on the renderer
+gjs.renderer.unpin("b");
 
 // nodeAt takes an optional slack in canvas pixels, on the facade and the renderer
 gjs.nodeAt(10, 10);

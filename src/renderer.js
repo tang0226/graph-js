@@ -1560,28 +1560,6 @@ export class Renderer {
     const p = this._simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
-
-
-  /**
-   * Finds a node by id and pins it to specified coordinates in canvas space
-   * @param {NodeId} id - node id
-   * @param {number} cx - canvas x coordinate to pin to
-   * @param {number} cy - canvas y coordinate to pin to
-   * @returns {boolean} whether the node was pinned (`false` if node not found)
-   * @throws {Error} throws when no canvas is attached
-   */
-  pin(id, cx, cy) {
-    if (!this._canvas) throw new Error("Renderer: no canvas attached");
-    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
-  }
-
-
-  /**
-   * Unpins a node by id by reverting `fixed` to its default.
-   * @param {NodeId} id - node id
-   * @returns {this} self reference
-   */
-  unpin(id) { this._simulation.unpin(id); return this; }
 }
 
 /**
