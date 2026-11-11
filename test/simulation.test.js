@@ -61,7 +61,7 @@ describe("Simulation: config cascade", () => {
     g.addNode({ id: "a", w: 7 });
     const sim = new Simulation(g, {});
     sim.setDefaultNodeConfig({ mass: n => n.data.w, radius: 20, fixed: false });
-    const resolve = () => { sim._nodeConfigDirty = true; sim.sync(); return sim.nodes.get("a"); };
+    const resolve = () => { sim._nodeConfig.markDirty(); sim.sync(); return sim.nodes.get("a"); };
     return [sim, resolve];
   }
 
@@ -120,7 +120,7 @@ describe("Simulation: config cascade", () => {
     sim.sync();
     g.removeNode("n1");
     sim.sync();
-    assert.equal(sim._nodeOverrides.has("n1"), false, "a stale override would reapply if n1 returns");
+    assert.equal(sim._nodeConfig.overrides.has("n1"), false, "a stale override would reapply if n1 returns");
   });
 });
 
@@ -1312,7 +1312,7 @@ describe("Simulation: edge config", () => {
     sim.setEdgeConfig("a", "b", { length: 200 }).sync();
     g.removeEdge("a", "b");
     sim.sync();
-    assert.equal(sim._edgeOverrides.size, 0);
+    assert.equal(sim._edgeConfig.overrides.size, 0);
     g.addEdge("a", "b");
     assert.equal(spring(sim, "a", "b")[0], SIM_EDGE_DEFAULTS.length, "a re-added edge must not inherit old overrides");
   });

@@ -6,7 +6,6 @@
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
- *  NodeStyleAccessors, EdgeStyleAccessors,
  *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
@@ -16,7 +15,8 @@
 
 
 import { Simulation } from "./simulation.js";
-import { asFn, clamp, circleRectCollision, now } from "./utils.js";
+import { clamp, circleRectCollision, now } from "./utils.js";
+import { ConfigCascade } from "./config-cascade.js";
 import { HookRegistry } from "./hook-registry.js";
 
 
@@ -68,34 +68,6 @@ const EDGE_STYLE_DEFAULTS = {
   bow: 14,
 };
 
-/**
- * Converts a full node config object to accessor functions
- * @param {ResolvedNodeStyleConfig} config - config to convert
- * @returns {ResolvedNodeStyleAccessors} accessors
- */
-const toNodeAccessors = config => ({
-  color: asFn(config.color),
-  outlineColor: asFn(config.outlineColor),
-  outlineWidth: asFn(config.outlineWidth),
-  image: asFn(config.image),
-  label: asFn(config.label),
-  renderLabel: asFn(config.renderLabel),
-  labelScale: asFn(config.labelScale),
-  labelTextColor: asFn(config.labelTextColor),
-});
-
-/**
- * Converts a full edge config object to accessor functions
- * @param {ResolvedEdgeStyleConfig} config - config to convert
- * @returns {ResolvedEdgeStyleAccessors} accessors
- */
-const toEdgeAccessors = config => ({
-  color: asFn(config.color),
-  width: asFn(config.width),
-  arrow: asFn(config.arrow),
-  arrowSize: asFn(config.arrowSize),
-  bow: asFn(config.bow),
-});
 
 
 /**
@@ -279,8 +251,14 @@ export class Renderer {
   get edges() { return this._edges; }
 
 
-  /** @private @type {ResolvedNodeStyleConfig} */
-  _defaultNodeConfig = {...NODE_STYLE_DEFAULTS};
+  /**
+   * Node style config: the default node style config, and per-node overrides
+   * keyed by node id. A node's own overrides take priority over the default
+   * config, which takes priority over the global defaults.
+   * @type {ConfigCascade<ResolvedNodeStyleConfig, ResolvedNodeStyleAccessors, NodeId>}
+   * @private
+   */
+  _nodeConfig = new ConfigCascade(NODE_STYLE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultNodeConfig()`]
    * Current default node style config. During style resolution, it takes
@@ -288,60 +266,25 @@ export class Renderer {
    * nodes using `setNodeConfig()`.
    * @returns {Readonly<ResolvedNodeStyleConfig>}
    */
-  get defaultNodeConfig() { return this._defaultNodeConfig; }
+  get defaultNodeConfig() { return this._nodeConfig.defaults; }
 
 
-  /** @private @type {ResolvedEdgeStyleConfig} */
-  _defaultEdgeConfig = {...EDGE_STYLE_DEFAULTS};
   /**
+   * Edge style config: the default edge style config, and per-edge overrides
+   * keyed by edge object. An edge's own overrides take priority over the
+   * default config, which takes priority over the global defaults.
+   * @type {ConfigCascade<ResolvedEdgeStyleConfig, ResolvedEdgeStyleAccessors, GraphEdge>}
+   * @private
+   */
+  _edgeConfig = new ConfigCascade(EDGE_STYLE_DEFAULTS);
+  /**
+   * [read-only, set with `setDefaultEdgeConfig()`]
    * Current default edge style config. During style resolution, it takes
    * precedence over global config defaults, but can be overriden for specific
-   * edges in `_edgeOverrides`.
+   * edges using `setEdgeConfig()`.
    * @returns {Readonly<ResolvedEdgeStyleConfig>}
    */
-  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
-
-
-  /**
-   * Node-specific style config overrides. Node style config here takes
-   * precedence over global defaults and the `Renderer`'s current
-   * `_defaultNodeConfig`
-   * @type {Map<NodeId, NodeStyleAccessors>}
-   * @private
-   */
-  _nodeOverrides = new Map();
-
-  /**
-   * Edge-specific style config overrides. Edge style config here takes
-   * precedence over global defaults and the `Renderer`'s current
-   * `_defaultEdgeConfig`
-   * @type {Map<GraphEdge, EdgeStyleAccessors>}
-   * @private
-   */
-  _edgeOverrides = new Map();
-
-  /**
-   * `_defaultNodeConfig` as cached functions. Used to apply the `Renderer`'s
-   * default config when resolving a node's raw style.
-   * @type {ResolvedNodeStyleAccessors}
-   * @private
-   */
-  _nodeAccessors = toNodeAccessors(NODE_STYLE_DEFAULTS);
-
-  /**
-   * `_defaultEdgeConfig` as cached functions. Used to apply the `Renderer`'s
-   * default config when resolving a edge's raw style.
-   * @type {ResolvedEdgeStyleAccessors}
-   * @private
-   */
-  _edgeAccessors = toEdgeAccessors(EDGE_STYLE_DEFAULTS);
-
-  /**
-   * Whether a style config changed since the last effective `sync()`
-   * @type {boolean}
-   * @private
-   */
-  _stylesDirty = false;
+  get defaultEdgeConfig() { return this._edgeConfig.defaults; }
 
 
   /** @private @type {NodeStyle[]} */
@@ -746,9 +689,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setDefaultNodeConfig(config = {}) {
-    this._defaultNodeConfig = { ...NODE_STYLE_DEFAULTS, ...this._defaultNodeConfig, ...config };
-    this._nodeAccessors = toNodeAccessors(this._defaultNodeConfig);
-    this._stylesDirty = true;
+    this._nodeConfig.setDefaults(config);
     return this;
   }
 
@@ -760,15 +701,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setNodeConfig(id, config = {}) {
-    /** @type {Record<string, any>} */
-    const merged = { ...this._nodeOverrides.get(id), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._nodeOverrides.set(
-      id,
-      /** @type {NodeStyleAccessors} */
-      merged
-    );
-    this._stylesDirty = true;
+    this._nodeConfig.set(id, config);
     return this;
   }
 
@@ -779,8 +712,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
-    this._nodeOverrides.delete(id);
-    this._stylesDirty = true;
+    this._nodeConfig.clear(id);
     return this;
   }
 
@@ -791,9 +723,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setDefaultEdgeConfig(config = {}) {
-    this._defaultEdgeConfig = { ...EDGE_STYLE_DEFAULTS, ...this._defaultEdgeConfig, ...config };
-    this._edgeAccessors = toEdgeAccessors(this._defaultEdgeConfig);
-    this._stylesDirty = true;
+    this._edgeConfig.setDefaults(config);
     return this;
   }
 
@@ -809,15 +739,7 @@ export class Renderer {
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
     if (!gEdge) throw new Error(`Renderer: no edge from "${srcId}" to "${destId}"`);
-    /** @type {Record<string, any>} */
-    const merged = { ...this._edgeOverrides.get(gEdge), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._edgeOverrides.set(
-      gEdge,
-      /** @type {EdgeStyleAccessors} */
-      merged
-    );
-    this._stylesDirty = true;
+    this._edgeConfig.set(gEdge, config);
     return this;
   }
 
@@ -830,9 +752,7 @@ export class Renderer {
    */
   clearEdgeConfig(srcId, destId) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) return this;
-    this._edgeOverrides.delete(gEdge);
-    this._stylesDirty = true;
+    if (gEdge) this._edgeConfig.clear(gEdge);
     return this;
   }
 
@@ -844,7 +764,7 @@ export class Renderer {
    * @private
    */
   _resolveNode(gNode, rNode) {
-    const acc = this._nodeAccessors, g = this._graph, o = this._nodeOverrides.get(gNode.id);
+    const acc = this._nodeConfig.accessors, g = this._graph, o = this._nodeConfig.overrides.get(gNode.id);
     rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
     rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
     rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
@@ -863,7 +783,7 @@ export class Renderer {
    * @private
    */
   _resolveEdge(gEdge, rEdge) {
-    const acc = this._edgeAccessors, g = this._graph, o = this._edgeOverrides.get(gEdge);
+    const acc = this._edgeConfig.accessors, g = this._graph, o = this._edgeConfig.overrides.get(gEdge);
     rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
     rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
     rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
@@ -1392,11 +1312,13 @@ export class Renderer {
     this._simulation.sync();
 
     if (this._syncedDataVersion !== this._graph.dataVersion) {
-      this._stylesDirty = true;
+      this._nodeConfig.markDirty();
+      this._edgeConfig.markDirty();
       this._syncedDataVersion = this._graph.dataVersion;
     }
 
-    if (this._syncedSimulation === this._simulation.version && !this._stylesDirty) return false;
+    const stylesDirty = this._nodeConfig.dirty || this._edgeConfig.dirty;
+    if (this._syncedSimulation === this._simulation.version && !stylesDirty) return false;
     
     // Update node styles and seed new ones
     for (const [id, gNode] of this._graph.nodes) {
@@ -1421,7 +1343,8 @@ export class Renderer {
       else this._edges.set(gEdge, this._seedEdge(gEdge));
     }
 
-    this._stylesDirty = false;
+    this._nodeConfig.markClean();
+    this._edgeConfig.markClean();
     this._labelsDirty = true;
 
     if (this._syncedSimulation === this._simulation.version) return true;
@@ -1441,7 +1364,7 @@ export class Renderer {
       if (!this._graph.nodes.has(id)) {
         if (this._nodes.get(id)?.image) this._imageDebt++;
         this._nodes.delete(id);
-        this._nodeOverrides.delete(id);
+        this._nodeConfig.prune(id);
         this._highlightedNodes.delete(id);
       }
     }
@@ -1451,7 +1374,7 @@ export class Renderer {
     for (const gEdge of this._edges.keys()) {
       if (!this._graph.edges.has(gEdge)) {
         this._edges.delete(gEdge);
-        this._edgeOverrides.delete(gEdge);
+        this._edgeConfig.prune(gEdge);
         this._highlightedEdges.delete(gEdge);
       }
     }

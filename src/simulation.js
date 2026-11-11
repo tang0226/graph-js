@@ -4,17 +4,17 @@
 /** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
 /**
  * @import {
- *  SimNode, SimNodeConfig, SimNodeAccessors,
+ *  SimNode, SimNodeConfig,
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
- *  SimEdge, SimEdgeConfig, SimEdgeAccessors,
+ *  SimEdge, SimEdgeConfig,
  *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
  *  SimOpts, SimOptsInput,
  *  SimEventMap, SimEventType,
  * } from './typedefs/simulation.js'
  */
 
-import { asFn } from "./utils.js";
 import { BarnesHutContext } from "./barnes-hut.js";
+import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
 import { Emitter } from "./emitter.js";
 
@@ -29,29 +29,8 @@ const SIM_EVENT_TYPES = Object.freeze(["settle", "wake"]);
 /** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
 export const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
 
-/**
- * @param {ResolvedSimNodeConfig} config
- * @returns {ResolvedSimNodeAccessors}
- */
-const toNodeAccessors = config => ({
-  mass: asFn(config.mass),
-  radius: asFn(config.radius),
-  charge: asFn(config.charge),
-  fixed: asFn(config.fixed),
-});
-
-
 /** @type {{ length: number, stiffness: number }} */
 export const SIM_EDGE_DEFAULTS = { length: 50, stiffness: 0.015 };
-
-/**
- * @param {ResolvedSimEdgeConfig} config
- * @returns {ResolvedSimEdgeAccessors}
- */
-const toEdgeAccessors = config => ({
-  length: asFn(config.length),
-  stiffness: asFn(config.stiffness),
-});
 
 
 /**
@@ -245,79 +224,37 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Node-specific config overrides, keyed by node id.
-   * Node props specified here get first priority over the simulation's current
-   * default node config and the global default node config.
-   * @type {Map<NodeId, SimNodeAccessors>}
+   * Node config: the default node config, and per-node overrides keyed by
+   * node id. A node's own overrides take priority over the default config,
+   * which takes priority over `SIM_NODE_DEFAULTS`.
+   * @type {ConfigCascade<ResolvedSimNodeConfig, ResolvedSimNodeAccessors, NodeId>}
    * @private
    */
-  _nodeOverrides = new Map();
-
-
-  /** @private @type {ResolvedSimNodeConfig} */
-  _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
+  _nodeConfig = new ConfigCascade(SIM_NODE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultNodeConfig()` or `setOpts()`]
    * Current default node config. Takes precedence over the global default config,
    * but can be overridden for specific nodes using `setNodeConfig()`.
    * @returns {Readonly<ResolvedSimNodeConfig>}
    */
-  get defaultNodeConfig() { return this._defaultNodeConfig; }
+  get defaultNodeConfig() { return this._nodeConfig.defaults; }
 
 
   /**
-   * `defaultNodeConfig` as cached functions. Used to apply the simulation's
-   * default node config when resolving a `SimNode`'s raw configuration.
-   * @type {ResolvedSimNodeAccessors}
+   * Edge config: the default edge config, and per-edge overrides keyed by
+   * edge object. An edge's own overrides take priority over the default
+   * config, which takes priority over `SIM_EDGE_DEFAULTS`.
+   * @type {ConfigCascade<ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors, GraphEdge>}
    * @private
    */
-  _nodeAccessors = toNodeAccessors(SIM_NODE_DEFAULTS);
-
-
-  /**
-   * Set to `true` whenever any node config (default or override) is changed.
-   * Set back to `false` once those changes are applied in `sync()`.
-   * @private
-   * @type {boolean} */
-  _nodeConfigDirty = false;
-
-
-  /**
-   * Edge-specific config overrides, keyed by edge object.
-   * Edge props specified here get first priority over the simulation's current
-   * default edge config and the global default edge config.
-   * @type {Map<GraphEdge, SimEdgeAccessors>}
-   * @private
-   */
-  _edgeOverrides = new Map();
-
-
-  /** @private @type {ResolvedSimEdgeConfig} */
-  _defaultEdgeConfig = {...SIM_EDGE_DEFAULTS};
+  _edgeConfig = new ConfigCascade(SIM_EDGE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultEdgeConfig()` or `setOpts()`]
    * Current default edge config. Takes precedence over the global default
    * config, but can be overridden for specific edges using `setEdgeConfig()`.
    * @returns {Readonly<ResolvedSimEdgeConfig>}
    */
-  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
-
-
-  /**
-   * `defaultEdgeConfig` as cached functions. Used to apply the simulation's
-   * default edge config when resolving an edge's spring settings.
-   * @type {ResolvedSimEdgeAccessors}
-   * @private
-   */
-  _edgeAccessors = toEdgeAccessors(SIM_EDGE_DEFAULTS);
-
-
-  /**
-   * Set to `true` whenever any edge config (default or override) is changed.
-   * Set back to `false` once those changes are applied in `sync()`.
-   * @private
-   * @type {boolean} */
-  _edgeConfigDirty = false;
+  get defaultEdgeConfig() { return this._edgeConfig.defaults; }
 
 
   /** @private @type {number} */
@@ -438,17 +375,11 @@ export class Simulation extends Emitter {
    * Sets the default physical attributes for all nodes.
    * `sync()` will update all nodes with the new defaults, except for
    * specific overrides
-   * @param {SimNodeConfig} config 
+   * @param {SimNodeConfig} config
    * @returns {this} self reference
    */
   setDefaultNodeConfig(config = {}) {
-    this._defaultNodeConfig = {
-      ...SIM_NODE_DEFAULTS,
-      ...this._defaultNodeConfig,
-      ...config
-    };
-    this._nodeAccessors = toNodeAccessors(this._defaultNodeConfig);
-    this._nodeConfigDirty = true;
+    this._nodeConfig.setDefaults(config);
     return this;
   }
 
@@ -460,15 +391,7 @@ export class Simulation extends Emitter {
    * @returns {this} self reference
    */
   setNodeConfig(id, config = {}) {
-    /** @type {Record<string, any>} */
-    const merged = { ...this._nodeOverrides.get(id), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._nodeOverrides.set(
-      id,
-      /** @type {SimNodeAccessors} */
-      merged,
-    );
-    this._nodeConfigDirty = true;
+    this._nodeConfig.set(id, config);
     return this;
   }
 
@@ -479,8 +402,7 @@ export class Simulation extends Emitter {
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
-    this._nodeOverrides.delete(id);
-    this._nodeConfigDirty = true;
+    this._nodeConfig.clear(id);
     return this;
   }
 
@@ -493,13 +415,7 @@ export class Simulation extends Emitter {
    * @returns {this} self reference
    */
   setDefaultEdgeConfig(config = {}) {
-    this._defaultEdgeConfig = {
-      ...SIM_EDGE_DEFAULTS,
-      ...this._defaultEdgeConfig,
-      ...config
-    };
-    this._edgeAccessors = toEdgeAccessors(this._defaultEdgeConfig);
-    this._edgeConfigDirty = true;
+    this._edgeConfig.setDefaults(config);
     return this;
   }
 
@@ -515,15 +431,7 @@ export class Simulation extends Emitter {
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
     if (!gEdge) throw new Error(`Simulation: no edge from "${srcId}" to "${destId}"`);
-    /** @type {Record<string, any>} */
-    const merged = { ...this._edgeOverrides.get(gEdge), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._edgeOverrides.set(
-      gEdge,
-      /** @type {SimEdgeAccessors} */
-      merged,
-    );
-    this._edgeConfigDirty = true;
+    this._edgeConfig.set(gEdge, config);
     return this;
   }
 
@@ -536,9 +444,7 @@ export class Simulation extends Emitter {
    */
   clearEdgeConfig(srcId, destId) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) return this;
-    this._edgeOverrides.delete(gEdge);
-    this._edgeConfigDirty = true;
+    if (gEdge) this._edgeConfig.clear(gEdge);
     return this;
   }
 
@@ -551,9 +457,9 @@ export class Simulation extends Emitter {
    * @private
    */
   _resolveNode(gNode, sNode) {
-    const acc = this._nodeAccessors,
+    const acc = this._nodeConfig.accessors,
           g = this._graph,
-          o = this._nodeOverrides.get(gNode.id);
+          o = this._nodeConfig.overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
     const charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
@@ -580,9 +486,9 @@ export class Simulation extends Emitter {
    * @private
    */
   _resolveEdge(gEdge) {
-    const acc = this._edgeAccessors,
+    const acc = this._edgeConfig.accessors,
           g = this._graph,
-          o = this._edgeOverrides.get(gEdge);
+          o = this._edgeConfig.overrides.get(gEdge);
     const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
     const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
     return [
@@ -609,7 +515,7 @@ export class Simulation extends Emitter {
       this._nodeCharge[i] = sNode.charge;
       this._nodeFixed[i] = sNode.fixed ? 1 : 0;
     }
-    this._nodeConfigDirty = false;
+    this._nodeConfig.markClean();
     return changed;
   }
 
@@ -650,7 +556,7 @@ export class Simulation extends Emitter {
       if (lens[s] !== len || ks[s] !== k) changed = true;
       lens[s] = len; ks[s] = k;
     }
-    this._edgeConfigDirty = false;
+    this._edgeConfig.markClean();
     return changed;
   }
 
@@ -709,18 +615,18 @@ export class Simulation extends Emitter {
    */
   sync() {
     if (this._syncedGraphDataVersion !== this._graph.dataVersion) {
-      this._nodeConfigDirty = true;
-      this._edgeConfigDirty = true;
+      this._nodeConfig.markDirty();
+      this._edgeConfig.markDirty();
       this._syncedGraphDataVersion = this._graph.dataVersion;
     }
     const structural = this._syncedGraphVersion !== this._graph.version;
-    if (!structural && !this._nodeConfigDirty && !this._edgeConfigDirty)
+    if (!structural && !this._nodeConfig.dirty && !this._edgeConfig.dirty)
       return false;
 
     if (structural) this._syncStructure();
 
-    const nodesChanged = this._nodeConfigDirty && this._packNodeConfig();
-    const edgesChanged = this._edgeConfigDirty && this._packEdgeConfig();
+    const nodesChanged = this._nodeConfig.dirty && this._packNodeConfig();
+    const edgesChanged = this._edgeConfig.dirty && this._packEdgeConfig();
     if (structural || nodesChanged || edgesChanged) this.heat();
     return true;
   }
@@ -744,7 +650,7 @@ export class Simulation extends Emitter {
     for (const id of this._nodes.keys()) {
       if (!this._graph.nodes.has(id)) {
         this._nodes.delete(id);
-        this._nodeOverrides.delete(id);
+        this._nodeConfig.prune(id);
       }
     }
 
@@ -769,8 +675,8 @@ export class Simulation extends Emitter {
     }
 
     // Delete overrides of old edges
-    for (const gEdge of this._edgeOverrides.keys()) {
-      if (!this._graph.edges.has(gEdge)) this._edgeOverrides.delete(gEdge);
+    for (const gEdge of this._edgeConfig.overrides.keys()) {
+      if (!this._graph.edges.has(gEdge)) this._edgeConfig.prune(gEdge);
     }
 
     const pairs = [], springs = [], springEdges = [], n = this._nodes.size;
@@ -807,8 +713,8 @@ export class Simulation extends Emitter {
     this._springLength = new Float64Array(this._springs.length / 2);
     this._springStiffness = new Float64Array(this._springs.length / 2);
 
-    this._nodeConfigDirty = true;
-    this._edgeConfigDirty = true;
+    this._nodeConfig.markDirty();
+    this._edgeConfig.markDirty();
     this._syncedGraphVersion = this._graph.version;
     this._version++;
   }
