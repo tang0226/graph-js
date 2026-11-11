@@ -667,6 +667,92 @@ describe("Interaction: zooming", () => {
   });
 });
 
+describe("Interaction: removed nodes", () => {
+  test("removing the dragged node ends the drag straight away, at the latest pointer position", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(400, 300);                     // hover a first, as a real pointer would
+      ptr.down(400, 300); ptr.move(450, 310);
+      const lastMove = ptr.move(460, 320);
+      log.length = 0;
+      gjs.removeNode("a");
+      const [end, ...rest] = log;
+      assert.equal(end.type, "nodedragend");
+      assert.equal(end.id, "a");
+      assert.deepEqual([end.x, end.y], [460, 320]);
+      assert.equal(end.originalEvent, lastMove);
+      assert.deepEqual(rest.map(e => e.type), ["nodeleave"], "the dragged node was hovered too");
+
+      log.length = 0;
+      ptr.move(500, 320); ptr.up(500, 320);
+      assert.deepEqual(acts(log), [], "the rest of the press does nothing");
+    } finally { restoreWindow(); }
+  });
+
+  test("ending a drag on a removed node leaves no pin behind for a later node with its id", () => {
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      ptr.down(400, 300); ptr.move(450, 300);
+      gjs.removeNode("a");
+      ptr.up(450, 300);
+      gjs.simulation.sync();
+      assert.equal(gjs.simulation._nodeConfig.overrides.has("a"), false);
+      gjs.addNode({}, "a");
+      gjs.simulation.sync();
+      assert.equal(gjs.simulation.nodes.get("a").fixed, false);
+    } finally { restoreWindow(); }
+  });
+
+  test("removing a pressed node before it's dragged cancels the press", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.down(400, 300);
+      gjs.removeNode("a");
+      ptr.move(450, 300); ptr.up(450, 300);
+      assert.deepEqual(acts(log), [], "no click or drag follows");
+    } finally { restoreWindow(); }
+  });
+
+  test("removing the hovered node emits nodeleave straight away", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(100, 100);
+      const over = ptr.move(600, 300);
+      log.length = 0;
+      gjs.removeNode("b");
+      assert.deepEqual(log.map(e => [e.type, e.id, e.x, e.y]), [["nodeleave", "b", 600, 300]]);
+      assert.equal(log[0].originalEvent, over);
+      ptr.move(601, 300);
+      assert.equal(log.length, 1, "no second nodeleave on the next move");
+    } finally { restoreWindow(); }
+  });
+
+  test("removing an unrelated node changes nothing", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(600, 300);
+      ptr.down(600, 300); ptr.move(650, 300);
+      log.length = 0;
+      gjs.removeNode("a");
+      assert.deepEqual(log, []);
+      ptr.up(650, 300);
+      assert.ok(types(log).includes("nodedragend"), "the drag of b carries on");
+    } finally { restoreWindow(); }
+  });
+
+  test("turning interaction off stops listening to the graph", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(600, 300);
+      gjs.disableInteraction();
+      log.length = 0;
+      gjs.removeNode("b");
+      assert.deepEqual(log, []);
+      assert.equal(gjs.graph._hasListeners("noderemove"), false);
+    } finally { restoreWindow(); }
+  });
+});
+
 describe("Interaction: rendering", () => {
   function counted(gjs) {
     const calls = [];

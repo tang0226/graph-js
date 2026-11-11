@@ -981,9 +981,14 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Unpins a node by id by reverting `fixed` to its default.
+   * Unpins a node by id by reverting `fixed` to its default. Does nothing for
+   * a node that isn't in the graph, so unpinning a removed node doesn't leave
+   * an override behind for a later node with the same id.
    * @param {NodeId} id - node id
    * @returns {this} self reference
    */
-  unpin(id) { this.setNodeConfig(id, { fixed: undefined }); return this; }
+  unpin(id) {
+    if (this._graph.nodes.has(id)) this.setNodeConfig(id, { fixed: undefined });
+    return this;
+  }
 }

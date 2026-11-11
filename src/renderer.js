@@ -1526,7 +1526,8 @@ export class Renderer {
 
 
   /**
-   * Returns the id of a node at a specific point on the canvas
+   * Returns the id of a node at a specific point on the canvas. A node
+   * removed from the graph isn't found, even before the simulation syncs.
    * @param {number} cx - canvas x coordinate
    * @param {number} cy - canvas y coordinate
    * @param {number} [slack] - slack, in canvas pixels
@@ -1538,9 +1539,11 @@ export class Renderer {
     const [x, y] = this.canvasToSim(cx, cy);
     const nodes = this._simulation.nodeList;
     const s = Math.max(slack, 0) / this._view.zoom; // radius slack
+    const graphNodes = this._graph.nodes;
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i], r = node.radius + s;
-      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
+      // The node list lags the graph until the next sync: skip removed nodes
+      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r && graphNodes.has(node.id)) return node.id;
     }
     return null;
   }

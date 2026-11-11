@@ -1,5 +1,5 @@
 /** @import { GraphJS } from './graphjs.js' */
-/** @import { NodeId } from './typedefs/graph.js' */
+/** @import { NodeId, GraphEvent } from './typedefs/graph.js' */
 /** @import { Canvas } from './typedefs/renderer.js' */
 /** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 /** @import { InteractionEmit, InteractionPress } from './typedefs/internal/interaction.js' */
@@ -75,6 +75,25 @@ export class Interaction {
 
 
   /**
+   * Canvas position and DOM event of the latest pointer input, or `null`
+   * before any. Events caused by a node's removal report these, since no
+   * pointer input caused them.
+   * @type {{ x: number, y: number, event: PointerEvent } | null}
+   * @private
+   */
+  _last = null;
+
+
+  /**
+   * Graph listener that ends a drag or hover on a node when it's removed.
+   * Kept as a field so `unbind()` can remove it.
+   * @type {(e: GraphEvent<"noderemove">) => void}
+   * @private
+   */
+  _onGraphNodeRemove = e => this._nodeRemoved(e.id);
+
+
+  /**
    * @param {GraphJS} gjs - instance to interact with
    * @param {InteractionEmit} emit - emits a GraphJS event
    * @param {InteractionOptsInput} [opts] - options
@@ -144,6 +163,8 @@ export class Interaction {
     // Not passive, so preventDefault() can stop the page scrolling
     el.addEventListener("wheel", e => this._onWheel(e), { signal, passive: false });
 
+    this._gjs.graph.on("noderemove", this._onGraphNodeRemove);
+
     // Stops touch drags from scrolling the page instead
     if (el.style) {
       this._prevTouchAction = el.style.touchAction;
@@ -164,10 +185,12 @@ export class Interaction {
     this._abort?.abort();
     this._abort = null;
     this._canvas = null;
+    this._gjs.graph.off("noderemove", this._onGraphNodeRemove);
     if (el.style) el.style.touchAction = this._prevTouchAction;
     if (this._press?.unpin) this._gjs.simulation.unpin(this._press.id);
     this._press = null;
     this._hovered = null;
+    this._last = null;
     if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
     return this;
   }
@@ -197,6 +220,7 @@ export class Interaction {
     const el = this._canvas;
     if (!el || this._press || !e.isPrimary || e.button !== 0) return;
     const [x, y] = this._toCanvas(e, el);
+    this._last = { x, y, event: e };
     const id = this._gjs.nodeAt(x, y);
     // Preventing nodepress ignores the press; a listener may also have unbound
     if (id !== null && (this._emit("nodepress", { x, y, id, originalEvent: e }) || this._canvas !== el)) return;
@@ -221,8 +245,9 @@ export class Interaction {
     if (!el) return;
     const [x, y] = this._toCanvas(e, el);
     const press = this._press;
-    if (!press) { this._hover(x, y, e); return; }
+    if (!press) { this._last = { x, y, event: e }; this._hover(x, y, e); return; }
     if (e.pointerId !== press.pointerId) return;
+    this._last = { x, y, event: e };
 
     if (press.drag === null) {
       if (Math.hypot(x - press.startX, y - press.startY) <= this._opts.dragThreshold) return;
@@ -324,6 +349,7 @@ export class Interaction {
     if (!el || !press || e.pointerId !== press.pointerId) return;
     this._press = null;
     const [x, y] = this._toCanvas(e, el);
+    this._last = { x, y, event: e };
     const gjs = this._gjs;
 
     if (press.drag === "node") {
@@ -361,6 +387,34 @@ export class Interaction {
     if (prev !== null) this._emit("nodeleave", { x, y, id: prev, originalEvent: e });
     // A nodeleave listener may have unbound, or moved the hover on
     if (id !== null && this._hovered === id) this._emit("nodeenter", { x, y, id, originalEvent: e });
+  }
+
+
+  /**
+   * Ends what the pointer was doing with a node that has just been removed:
+   * a drag of it ends with `nodedragend`, a press on it is cancelled so no
+   * click or drag follows, and hovering it ends with `nodeleave`. Without
+   * this, those would wait for the next pointer input, and a drag would keep
+   * reporting a node that's gone. The events report the latest pointer input.
+   * @param {NodeId} id - id of the removed node
+   * @returns {void}
+   * @private
+   */
+  _nodeRemoved(id) {
+    const last = this._last, press = this._press;
+    if (!last) return;
+    if (press && press.id === id && press.drag !== "none") {
+      const dragging = press.drag === "node";
+      // The rest of the press does nothing, and there's no node left to unpin
+      press.drag = "none";
+      press.unpin = false;
+      if (dragging) this._emit("nodedragend", { x: last.x, y: last.y, id, originalEvent: last.event });
+    }
+    // A listener above may have unbound, which clears the hover
+    if (this._hovered === id) {
+      this._hovered = null;
+      this._emit("nodeleave", { x: last.x, y: last.y, id, originalEvent: last.event });
+    }
   }
 
 

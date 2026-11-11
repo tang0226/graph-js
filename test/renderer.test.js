@@ -1971,6 +1971,14 @@ describe("Renderer: picking", () => {
     return [x, y + px];
   };
 
+  test("a node removed from the graph isn't found, even before the simulation syncs", () => {
+    const { g, sim, r } = scene(false, []);
+    assert.equal(r.nodeAt(300, 300), "a");
+    g.removeNode("a");
+    assert.ok(sim.nodes.has("a"), "the simulation hasn't synced yet");
+    assert.equal(r.nodeAt(300, 300), null);
+  });
+
   test("the default slack is 2 canvas pixels at every zoom", () => {
     const { r } = scene(false, []);
     for (const zoom of [0.5, 1, 4]) {

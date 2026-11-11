@@ -538,6 +538,7 @@ Listeners can change or cancel each response (see [Interaction events](#interact
 - **Pointers:** only the primary pointer's main button is used, and pinch-to-zoom isn't supported. While listening, the canvas's CSS `touch-action` is set to `none`, so touch drags don't scroll the page; the previous value is restored afterwards.
 - **The wheel:** the page doesn't scroll while the wheel zooms, even at a zoom limit. Horizontal scrolling is left to the page. A view that code has set past `minZoom` or `maxZoom` isn't snapped back; the wheel only stops it going further.
 - **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction draws one frame after each change. That frame doesn't advance tweens or finish highlight fades, so if you use those while stopped, keep drawing yourself (see [Tweens](#tweens) and [Highlighting](#highlighting)).
+- **Removed nodes:** if the node being dragged is removed from the graph, the drag ends straight away with `nodedragend`, and the rest of the press does nothing. A press on a node removed before it's dragged is cancelled, so no click or drag follows, and a hovered node that's removed gets its `nodeleave` straight away. Removed nodes aren't found by `nodeAt()`, even before the next tick.
 - **The canvas:** interaction listens on whichever canvas is attached, and stops when it's detached. A canvas that can't receive pointer input, such as an `OffscreenCanvas`, is ignored. Turning interaction off or detaching during a drag ends it without events, and unpins the node.
 
 ### Panning and zooming
@@ -692,7 +693,7 @@ How listeners run is the same for every event:
 
 The data fields are:
 
-- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began.
+- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began. When a node is removed mid-drag or while hovered, its `nodedragend` or `nodeleave` reports the latest pointer input instead, since no pointer input caused it.
 - **`id`:** the node's id.
 - **`dx`, `dy`:** how far the pointer moved, in canvas pixels, since the drag's previous event.
 - **`view`:** a copy of the view. For `panstart` and `panend` it's the current view; for `pan` and `zoom`, it's the view the change moves to.

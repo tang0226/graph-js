@@ -797,6 +797,29 @@ describe("Simulation: settle and wake events", () => {
 });
 
 describe("Simulation: pin and unpin", () => {
+  test("unpinning a removed node leaves no override behind", () => {
+    const g = new Graph();
+    g.addNode({}, "a");
+    const sim = new Simulation(g);
+    sim.pin("a", 0, 0);
+    g.removeNode("a");
+    sim.sync();
+    sim.unpin("a");
+    sim.sync();
+    assert.equal(sim._nodeConfig.overrides.has("a"), false);
+    assert.equal(sim.unpin("never-added"), sim, "unknown ids are ignored and still chain");
+  });
+
+  test("unpinning a node added since the last sync still works", () => {
+    const g = new Graph();
+    const sim = new Simulation(g);
+    g.addNode({}, "a");
+    sim.setNodeConfig("a", { fixed: true });
+    sim.unpin("a");
+    sim.sync();
+    assert.equal(sim.nodes.get("a").fixed, false);
+  });
+
   test("pin fixes the node at the given point", () => {
     const sim = new Simulation(chain(3), {});
     sim.pin("n0", 70, -30);
