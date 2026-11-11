@@ -13,26 +13,30 @@ import { Tween } from "./tween.js";
 import { Interaction } from "./interaction.js";
 import { Emitter } from "./emitter.js";
 import { HookRegistry } from "./hook-registry.js";
-import { now } from "./utils.js";
+import { keysOf, now } from "./utils.js";
 
 
 /**
- * Every event name, matching the keys of `GraphJSEventMap`
- * @type {readonly GraphJSEventType[]}
+ * Every event name. The type requires exactly the keys of `GraphJSEventMap`,
+ * so adding an event there without adding it here fails type checking.
+ * @type {Record<GraphJSEventType, true>}
  */
-const EVENT_TYPES = Object.freeze([
-  "nodeenter", "nodeleave", "nodepress", "nodeclick", "nodedblclick",
-  "nodedragstart", "nodedrag", "nodedragend",
-  "backgroundclick",
-  "panstart", "pan", "panend", "zoom",
-]);
+const EVENT_NAMES = {
+  nodeenter: true, nodeleave: true, nodepress: true, nodeclick: true, nodedblclick: true,
+  nodedragstart: true, nodedrag: true, nodedragend: true,
+  backgroundclick: true,
+  panstart: true, pan: true, panend: true, zoom: true,
+};
+const EVENT_TYPES = keysOf(EVENT_NAMES);
 
 
 /**
- * Every loop hook type, matching `GraphJSHookType`
- * @type {readonly GraphJSHookType[]}
+ * Every loop hook type. The type requires exactly the members of
+ * `GraphJSHookType`.
+ * @type {Record<GraphJSHookType, true>}
  */
-const HOOK_TYPES = Object.freeze(["preTick", "postTick", "postRender"]);
+const HOOK_NAMES = { preTick: true, postTick: true, postRender: true };
+const HOOK_TYPES = keysOf(HOOK_NAMES);
 
 
 /**

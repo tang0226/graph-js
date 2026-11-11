@@ -17,13 +17,17 @@ import { BarnesHutContext } from "./barnes-hut.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
 import { Emitter } from "./emitter.js";
+import { keysOf } from "./utils.js";
 
 
 /**
- * Every simulation event name, matching the keys of `SimEventMap`
- * @type {readonly SimEventType[]}
+ * Every simulation event name. The type requires exactly the keys of
+ * `SimEventMap`, so adding an event there without adding it here fails type
+ * checking.
+ * @type {Record<SimEventType, true>}
  */
-const SIM_EVENT_TYPES = Object.freeze(["settle", "wake"]);
+const SIM_EVENT_NAMES = { settle: true, wake: true };
+const SIM_EVENT_TYPES = keysOf(SIM_EVENT_NAMES);
 
 
 /** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */

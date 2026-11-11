@@ -23,6 +23,17 @@ export const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
 
 
 /**
+ * Lists a record's keys, typed as its key type, in a frozen array. Declaring
+ * the record as `Record<Name, true>` makes the type checker require every
+ * name, and reject any other, so the list can't fall out of step with `Name`.
+ * @template {string} K
+ * @param {Record<K, true>} record - one key per name
+ * @returns {readonly K[]} the names
+ */
+export const keysOf = record => Object.freeze(/** @type {K[]} */ (Object.keys(record)));
+
+
+/**
  * Current time in milliseconds, for frame timestamps: `performance.now()`
  * where it exists, otherwise `Date.now()`.
  * @returns {number} timestamp in milliseconds

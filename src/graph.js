@@ -1,16 +1,20 @@
 /** @import {NodeId, NodeData, GraphNode, GraphEdge, GraphEventMap, GraphEventType} from './typedefs/graph.js' */
 
 import { Emitter } from "./emitter.js";
+import { keysOf } from "./utils.js";
 
 
 /**
- * Every graph event name, matching the keys of `GraphEventMap`
- * @type {readonly GraphEventType[]}
+ * Every graph event name. The type requires exactly the keys of
+ * `GraphEventMap`, so adding an event there without adding it here fails
+ * type checking.
+ * @type {Record<GraphEventType, true>}
  */
-const GRAPH_EVENT_TYPES = Object.freeze([
-  "nodeadd", "noderemove", "nodedatachange",
-  "edgeadd", "edgeremove", "edgedatachange",
-]);
+const GRAPH_EVENT_NAMES = {
+  nodeadd: true, noderemove: true, nodedatachange: true,
+  edgeadd: true, edgeremove: true, edgedatachange: true,
+};
+const GRAPH_EVENT_TYPES = keysOf(GRAPH_EVENT_NAMES);
 
 
 /**

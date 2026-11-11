@@ -15,7 +15,7 @@
 
 
 import { Simulation } from "./simulation.js";
-import { clamp, circleRectCollision, now } from "./utils.js";
+import { clamp, circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
@@ -23,10 +23,12 @@ import { HookRegistry } from "./hook-registry.js";
 
 
 /**
- * Every drawing hook type, matching `RendererHookType`
- * @type {readonly RendererHookType[]}
+ * Every drawing hook type. The type requires exactly the members of
+ * `RendererHookType`.
+ * @type {Record<RendererHookType, true>}
  */
-const HOOK_TYPES = Object.freeze(["background", "overlay"]);
+const HOOK_NAMES = { background: true, overlay: true };
+const HOOK_TYPES = keysOf(HOOK_NAMES);
 
 /** @type {RendererOpts} */
 const RENDERER_DEFAULTS = {
