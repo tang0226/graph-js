@@ -6,7 +6,50 @@ Graph building, physics simulation, and canvas rendering for the browser.
 npm install @tang0226/graph-js
 ```
 
-## Quick start
+## Contents
+
+- [Getting started](#getting-started)
+  - [Quick start](#quick-start)
+  - [How it fits together](#how-it-fits-together)
+  - [Creating a GraphJS instance](#creating-a-graphjs-instance)
+  - [Changing options](#changing-options)
+  - [Attaching and resizing the canvas](#attaching-and-resizing-the-canvas)
+- [Building the graph](#building-the-graph)
+  - [Adding and removing nodes and edges](#adding-and-removing-nodes-and-edges)
+  - [Reading graph and simulation state](#reading-graph-and-simulation-state)
+- [Configuring nodes and edges](#configuring-nodes-and-edges)
+  - [Individual node and edge settings](#individual-node-and-edge-settings)
+  - [Node charge](#node-charge)
+  - [Node images](#node-images)
+  - [Node labels](#node-labels)
+  - [Edge and outline widths](#edge-and-outline-widths)
+- [Running the animation](#running-the-animation)
+  - [Starting and stopping](#starting-and-stopping)
+  - [Loop hooks](#loop-hooks)
+  - [Tweens](#tweens)
+- [Interaction](#interaction)
+  - [Built-in interaction](#built-in-interaction)
+  - [Events](#events)
+  - [Panning and zooming](#panning-and-zooming)
+  - [Coordinates and hit-testing](#coordinates-and-hit-testing)
+  - [Building your own interaction](#building-your-own-interaction)
+- [Drawing](#drawing)
+  - [Highlighting](#highlighting)
+  - [Custom drawing](#custom-drawing)
+- [Layout physics](#layout-physics)
+  - [Settling](#settling)
+  - [Barnes-Hut](#barnes-hut)
+  - [Collisions](#collisions)
+- [TypeScript](#typescript)
+- [Upgrading](#upgrading)
+  - [From 0.6](#from-06)
+  - [From 0.5](#from-05)
+  - [From 0.4](#from-04)
+  - [From 0.2](#from-02)
+
+## Getting started
+
+### Quick start
 
 ```html
 <canvas id="graph" style="width: 100%; height: 400px"></canvas>
@@ -16,7 +59,7 @@ npm install @tang0226/graph-js
 import { GraphJS } from "@tang0226/graph-js";
 
 const canvas = document.getElementById("graph");
-const gjs = new GraphJS({ canvas });
+const gjs = new GraphJS({ canvas, interaction: true });   // drag nodes, pan and zoom
 
 gjs.addNode({ id: "a" });
 gjs.addNode({ id: "b" });
@@ -27,7 +70,19 @@ gjs.addEdge("b", "c");
 gjs.start();
 ```
 
-## Creating a GraphJS instance
+### How it fits together
+
+A `GraphJS` instance combines three layers, each of which can also be used on its own:
+
+| Layer | Property | Holds |
+|---|---|---|
+| `Graph` | `gjs.graph` | nodes, edges, and their data |
+| `Simulation` | `gjs.simulation` | the physics layout: positions, forces, and settling |
+| `Renderer` | `gjs.renderer` | drawing: styles, the view, highlighting, and drawing hooks |
+
+`GraphJS` adds the animation loop, tweens, events, and pointer interaction on top, along with shortcuts for common calls such as `addNode()` and `pin()`.
+
+### Creating a GraphJS instance
 
 All parameters are optional. Each layer's options are passed under that layer's key.
 
@@ -35,6 +90,7 @@ All parameters are optional. Each layer's options are passed under that layer's 
 const gjs = new GraphJS({
   canvas,                           // or attach one later
   tweenUnit: "ms",                  // default unit of tweens: "ms" or "frames" (see "Tweens")
+  interaction: false,               // true, or options, to drag, pan and zoom (see "Built-in interaction")
 
   graph: {
     directed: true,                 // default false; cannot be changed after instantiation
@@ -91,7 +147,9 @@ gjs.renderer.setOpts({ background: "#15171c", renderEdges: false });
 
 `setOpts()` also accepts `nodeConfig` and `edgeConfig`, which are passed on to `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. The `opts` objects themselves are read-only: assigning to `gjs.simulation.opts.repulsion` directly won't wake a settled layout.
 
-### Attaching a canvas
+Interaction options are changed with `enableInteraction()` (see [Built-in interaction](#built-in-interaction)).
+
+### Attaching and resizing the canvas
 
 A `GraphJS` instance can be created without a canvas. The canvas element can be attached any time after instantiation.
 
@@ -106,7 +164,17 @@ gjs.attach(canvas).start();
 gjs.detach();
 ```
 
-## Adding and removing nodes and edges
+GraphJS sizes the canvas when it's attached. If its CSS size changes later, call `resize()`:
+
+```js
+new ResizeObserver(() => gjs.resize()).observe(canvas);
+```
+
+`resize()` is safe to call even when no canvas is attached.
+
+## Building the graph
+
+### Adding and removing nodes and edges
 
 ```js
 // Provide an id in the data object, or as the second argument.
@@ -127,6 +195,21 @@ gjs.removeNode(carol);             // also removes any edges it still has
 `addEdge` throws if either node doesn't exist. Removing a node or edge that doesn't exist returns `false`.
 
 In an undirected graph, `"a"` to `"b"` and `"b"` to `"a"` are the same edge. In a directed graph they're two edges, drawn as a pair of curved arrows.
+
+### Reading graph and simulation state
+
+The layers expose their internal state as read-only properties, for custom drawing, statistics, or hit-testing:
+
+```js
+gjs.graph.nodes;             // Map: id -> { id, data }
+gjs.graph.edges;             // Set of { src, dest, data }
+gjs.graph.directed;
+
+gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, charge, fixed, ... }
+gjs.simulation.nodeList;     // the same nodes as an array
+```
+
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
 
 ## Configuring nodes and edges
 
@@ -162,20 +245,20 @@ All the available settings:
 |---|---|---|---|
 | Simulation (nodes) | `radius` | `20` | physical and drawn radius |
 | | `mass` | `1` | heavier nodes are pushed around less |
-| | `charge` | `1` | how strongly the node repels and is repelled; `0` for neither (see below) |
+| | `charge` | `1` | how strongly the node repels and is repelled; `0` for neither (see [Node charge](#node-charge)) |
 | | `fixed` | `false` | `true` holds the node in place |
 | Simulation (edges) | `length` | `50` | resting length of the edge |
 | | `stiffness` | `0.015` | how strongly the edge holds its length; `0` for a loose edge |
 | Renderer (nodes) | `color` | `"#ffffff"` | fill color |
 | | `outlineColor` | `"#000000"` | |
 | | `outlineWidth` | `1` | in simulation units; `0` for no outline |
-| | `image` | `null` | image URL drawn inside the node (see below) |
-| | `label` | `null` | text drawn beside the node; a string or number (see below) |
+| | `image` | `null` | image URL drawn inside the node (see [Node images](#node-images)) |
+| | `label` | `null` | text drawn beside the node; a string or number (see [Node labels](#node-labels)) |
 | | `renderLabel` | `true` | `false` hides this node's label |
 | | `labelScale` | `15` | label font size, in simulation units |
 | | `labelTextColor` | `"#000000"` | |
 | Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
-| | `width` | `1` | in simulation units (see "Edge and outline widths") |
+| | `width` | `1` | in simulation units (see [Edge and outline widths](#edge-and-outline-widths)) |
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
 | | `arrowSize` | `10` | arrowhead length, in simulation units |
 | | `bow` | `14` | how far a pair of opposite directed edges curve apart |
@@ -183,16 +266,6 @@ All the available settings:
 A function receives the node or edge object with custom data stored in `.data`. Whenever the graph changes, the function is re-run and the results are cached. That keeps the `radius` above in step as connections are added.
 
 To change a node's data, use `gjs.graph.setNodeData(id, data)` rather than editing `node.data` directly. Direct edits will not trigger a cache refresh, so the functions won't re-run. Same applies to `gjs.graph.setEdgeData(srcId, destId, data)`.
-
-### Node charge
-
-The repulsion between two nodes is multiplied by both of their charges, so two nodes with a charge of `2` push each other apart 4 times as hard as two with the default of `1`. Giving hubs a higher charge spreads their neighbourhoods out:
-
-```js
-gjs.simulation.setDefaultNodeConfig({ charge: node => 1 + gjs.graph.degree(node.id) / 4 });
-```
-
-A node with a charge of `0` neither repels nor is repelled, so only its edges, gravity and collisions place it. Negative charges are treated as `0`; nodes can't attract each other through charge.
 
 ### Individual node and edge settings
 
@@ -211,6 +284,16 @@ Setting config properties merges them with previously set config. `setEdgeConfig
 In a directed graph, a pair of opposite edges (`"a"` to `"b"` and `"b"` to `"a"`) pulls on its nodes through a single spring. Its stiffness is the average of the two edges' stiffnesses, and its length is the average of their lengths, weighted by stiffness.
 
 To read the spring settings an edge ends up with, use `gjs.simulation.getEdgeSpring(srcId, destId)`. It returns `{ length, stiffness }` (the combined settings for a pair of opposite directed edges), or `null` if the edge doesn't exist or connects a node to itself.
+
+### Node charge
+
+The repulsion between two nodes is multiplied by both of their charges, so two nodes with a charge of `2` push each other apart 4 times as hard as two with the default of `1`. Giving hubs a higher charge spreads their neighbourhoods out:
+
+```js
+gjs.simulation.setDefaultNodeConfig({ charge: node => 1 + gjs.graph.degree(node.id) / 4 });
+```
+
+A node with a charge of `0` neither repels nor is repelled, so only its edges, gravity and collisions place it. Negative charges are treated as `0`; nodes can't attract each other through charge.
 
 ### Node images
 
@@ -265,34 +348,303 @@ Edge `width`, `arrowSize` and node `outlineWidth` are in simulation units, so th
 
 To keep widths fixed on screen at every zoom instead, set `scaleStrokes: false`. `width`, `arrowSize` and `outlineWidth` are then in screen pixels, and `minEdgeWidth` and `maxEdgeWidth` don't apply.
 
-## Reading graph and simulation state
+## Running the animation
 
-The layers expose their internal state as read-only properties, for custom drawing, statistics, or hit-testing:
+### Starting and stopping
 
 ```js
-gjs.graph.nodes;             // Map: id -> { id, data }
-gjs.graph.edges;             // Set of { src, dest, data }
-gjs.graph.directed;
+gjs.start();        // simulate and redraw every frame
+gjs.stop();         // pause
+gjs.isRunning();    // true while running
 
-gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, charge, fixed, ... }
-gjs.simulation.nodeList;     // the same nodes as an array
+gjs.step();         // tick the simulation once and draw one frame
 ```
 
-These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+`start()` does nothing until a canvas is attached.
 
-## Dragging nodes
+### Loop hooks
+
+Each frame of `start()`, and each `step()`, ticks the simulation once and then draws. Loop hooks run your own code around those two steps:
+
+| Hook | Runs |
+|---|---|
+| `"preTick"` | before the simulation ticks |
+| `"postTick"` | after the tick, before drawing |
+| `"postRender"` | after the frame is drawn |
 
 ```js
-let dragging = null;
+// Time each tick
+let tickStart = 0, tickMs = 0;
+gjs.addHook("preTick", () => { tickStart = performance.now(); });
+gjs.addHook("postTick", () => { tickMs = performance.now() - tickStart; });
 
+// Keep every node inside a 1000 x 1000 box
+function keepInBox(gjs) {
+  for (const node of gjs.simulation.nodeList) {
+    node.x = Math.max(-500, Math.min(500, node.x));
+    node.y = Math.max(-500, Math.min(500, node.y));
+  }
+}
+gjs.addHook("postTick", keepInBox);
+
+gjs.removeHook("postTick", keepInBox);   // true if it existed and was removed
+```
+
+- **Arguments:** each hook is called with the GraphJS instance and the frame's timestamp. That's the `requestAnimationFrame` time in the loop, or `performance.now()` for `step()`, and the renderer is given the same one.
+- **When they run:** on every frame, including after the layout settles. The tick does nothing then, but `"preTick"` and `"postTick"` hooks still run.
+- **Stopping:** a hook can call `stop()`. The current frame finishes, and no more are run. Don't call `step()` from a hook, since that runs the hooks again.
+- **Errors and order:** these work as they do for [renderer hooks](#custom-drawing). A hook that throws is logged and the frame carries on, and hooks of a type run in the order they were added.
+- **Drawing:** use renderer hooks instead. They run at a fixed point in the frame with canvas state saved and restored, while a `"postRender"` hook's changes to canvas state carry into the next frame.
+
+### Tweens
+
+A tween animates a number, or an array of numbers, from one value to another. You give it a `set` function, and it's called with each new value:
+
+```js
+// Zoom to 2x over 400 ms, around the canvas centre
+gjs.tween({
+  set: zoom => gjs.zoomTo(zoom),
+  from: () => gjs.view.zoom,            // read when the tween starts
+  to: 2,
+  duration: 400,
+  ease: "inOutQuad",
+  key: "zoom",
+});
+
+// Pan to a node, with the x and y coordinates as one array value
+gjs.tween({
+  set: ([x, y]) => gjs.setView({ x, y }),
+  from: () => [gjs.view.x, gjs.view.y],
+  to: gjs.simulation.getPosition("alice"),
+  duration: 600,
+  ease: "outCubic",
+  key: "pan",
+});
+
+// Pulse a node's outline forever
+gjs.tween({
+  set: w => gjs.renderer.setNodeConfig("alice", { outlineWidth: w }),
+  from: 1, to: 5, duration: 500,
+  repeat: Infinity, yoyo: true,
+  key: "alice:outline",
+});
+```
+
+| Option | Default | |
+|---|---|---|
+| `set` | | called with each new value |
+| `from` | | start value: a number, an array of numbers, or a function returning one. A function is called once, when the tween starts moving. |
+| `to` | | end value, the same shape as `from` |
+| `duration` | | length of one play |
+| `unit` | `"ms"` | `"ms"` or `"frames"`: what `duration` and `delay` count. Set the default for every tween with the `tweenUnit` option of `new GraphJS()`. |
+| `ease` | `"linear"` | `"linear"`, `"inQuad"`, `"outQuad"`, `"inOutQuad"`, `"inCubic"`, `"outCubic"`, `"inOutCubic"`, `"outBack"`, or your own function from progress (0 to 1) to eased progress |
+| `delay` | `0` | wait before the first play |
+| `repeat` | `0` | extra plays after the first; `Infinity` loops |
+| `yoyo` | `false` | every other play runs backwards |
+| `onFinish` | | called when the tween finishes, but not when it's cancelled |
+| `key` | | names the tween, so it can be looked up, cancelled or replaced |
+
+`tween()` returns the tween. To stop it:
+
+```js
+const pulse = gjs.tween({ /* ... */ });
+pulse.cancel();                   // stop where it is
+pulse.finish();                   // jump to the end (of the current play, if it loops forever)
+await pulse.finished;             // true if it finished, false if it was cancelled
+
+gjs.cancelTween("zoom");          // by key; true if there was one
+gjs.cancelAllTweens();
+gjs.getTween("zoom");             // the active tween with that key, or null
+gjs.isTweening();                 // true while any tween is active
+```
+
+Starting a tween with the key of an active one cancels the old one, so two tweens never fight over the same value. A `from` function then picks up wherever the old one stopped.
+
+- **When they run:** tweens are advanced at the start of each frame of `start()` and each `step()`, before the `"preTick"` hooks. Time only counts while frames run, so a tween doesn't jump ahead after `stop()` and `start()`.
+- **Without the loop:** if you draw only when something changes, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true. It advances tweens without ticking the simulation.
+- **With interaction:** a view tween keeps moving the view while the user pans or zooms. To let the user take over, cancel it from a `panstart` or `zoom` listener (see [Events](#events)).
+- **Errors:** a `set` function that throws is logged and the tween is cancelled. Cancel tweens whose node or edge you remove: `setEdgeConfig()` throws for a missing edge.
+- **Speed:** each change to a node or edge config makes the renderer re-read every node's and edge's settings on the next frame, so style tweens get expensive on large graphs. Tweening the view or node positions doesn't have this cost.
+- **Without GraphJS:** `Tween` is also exported from the package root and from `@tang0226/graph-js/tween`. `new Tween(opts)` takes the same options except `key`, and you advance it with `tween.step(ms)` from your own loop.
+
+## Interaction
+
+### Built-in interaction
+
+Pointer interaction is off by default. Turn it on with the `interaction` option, or at any time with `enableInteraction()`:
+
+```js
+const gjs = new GraphJS({
+  canvas,
+  interaction: { maxZoom: 10 },                // or true, for the default options
+});
+
+gjs.enableInteraction({ dragThreshold: 8 });   // turn on, or change options while on
+gjs.disableInteraction();
+gjs.isInteractive();                           // true while on
+gjs.interactionOpts;                           // the current options, or null while off
+```
+
+While it's on and a canvas is attached:
+
+| Gesture | Response | Events |
+|---|---|---|
+| Drag a node | the node follows the pointer | `nodedragstart`, `nodedrag`, `nodedragend` |
+| Drag the background | the view pans | `panstart`, `pan`, `panend` |
+| Turn the wheel | the view zooms around the pointer | `zoom` |
+| Click a node, or the background | | `nodeclick`, `backgroundclick` |
+| Double-click a node | | `nodedblclick` |
+| Move onto or off a node | | `nodeenter`, `nodeleave` |
+
+Listeners can change or cancel each response (see [Events](#events)).
+
+| Option | Default | |
+|---|---|---|
+| `dragNodes` | `true` | whether dragging a node moves it. When `false`, dragging a node pans instead, if `pan` is on. |
+| `pan` | `true` | whether dragging the background pans the view |
+| `zoom` | `true` | whether the wheel zooms. When `false`, the wheel scrolls the page as usual. |
+| `dragThreshold` | `4` | how far (px) the pointer must move while pressed before a drag starts |
+| `zoomSpeed` | `0.002` | each wheel event multiplies the zoom by `2 ** (-deltaY * zoomSpeed)`, which is about 1.15 per mouse wheel notch |
+| `minZoom` | `0.01` | the wheel doesn't zoom out past this |
+| `maxZoom` | `100` | the wheel doesn't zoom in past this |
+
+`enableInteraction()` merges new options into the current ones, and throws for an invalid one. `disableInteraction()` forgets them, so turning interaction on again starts from the defaults.
+
+- **Clicks and drags:** a press becomes a drag once the pointer moves more than `dragThreshold` pixels. Otherwise, releasing it is a click. A drag is never also a click, and a cancelled press (such as a touch interrupted by the browser) is neither.
+- **Dragged nodes:** the node keeps its offset from the pointer, so it doesn't jump to centre on it. It's pinned while dragged and unpinned when dropped. A node that was already fixed stays fixed where it's dropped.
+- **Hover:** while a press is held, the hovered node doesn't change, so a dragged node stays hovered even if the pointer outruns it. Hover updates when the press ends. Touch has no hover.
+- **Pointers:** only the primary pointer's main button is used, and pinch-to-zoom isn't supported. While listening, the canvas's CSS `touch-action` is set to `none`, so touch drags don't scroll the page; the previous value is restored afterwards.
+- **The wheel:** the page doesn't scroll while the wheel zooms, even at a zoom limit. Horizontal scrolling is left to the page. A view that code has set past `minZoom` or `maxZoom` isn't snapped back; the wheel only stops it going further.
+- **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction draws one frame after each change. That frame doesn't advance tweens or finish highlight fades, so if you use those while stopped, keep drawing yourself (see [Tweens](#tweens) and [Highlighting](#highlighting)).
+- **The canvas:** interaction listens on whichever canvas is attached, and stops when it's detached. A canvas that can't receive pointer input, such as an `OffscreenCanvas`, is ignored. Turning interaction off or detaching during a drag ends it without events, and unpins the node.
+
+### Events
+
+`on()` adds a listener for an event, and `off()` removes it:
+
+```js
+function onClick(e) {
+  console.log(`clicked ${e.id} at (${e.x}, ${e.y})`);
+}
+gjs.on("nodeclick", onClick);
+gjs.off("nodeclick", onClick);   // true if it was added
+```
+
+Events come from [built-in interaction](#built-in-interaction), so listeners only hear them while it's on. Listeners belong to the instance: they stay through `detach()` and `attach()`, and through turning interaction off and on.
+
+| Event | When | Data | `preventDefault()` |
+|---|---|---|---|
+| `nodeenter` | the pointer moves onto a node | pointer, `id` | |
+| `nodeleave` | the pointer moves off a node, or leaves the canvas | pointer, `id` | |
+| `nodeclick` | a node is clicked | pointer, `id` | |
+| `nodedblclick` | a node is double-clicked | pointer, `id` | |
+| `backgroundclick` | the canvas is clicked away from any node | pointer | |
+| `nodedragstart` | a node starts being dragged | pointer, `id` | the node isn't dragged |
+| `nodedrag` | a dragged node moves | pointer, `id`, `dx`, `dy` | the node doesn't move this time |
+| `nodedragend` | a dragged node is dropped | pointer, `id` | the node stays pinned where it was dropped |
+| `panstart` | the background starts being dragged | pointer, `view` | the view doesn't pan |
+| `pan` | the dragged background moves | pointer, `view`, `dx`, `dy` | the view doesn't move this time |
+| `panend` | the background is dropped | pointer, `view` | |
+| `zoom` | the wheel zooms the view | pointer, `view` | the view doesn't zoom |
+
+The data fields are:
+
+- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began.
+- **`id`:** the node's id.
+- **`dx`, `dy`:** how far the pointer moved, in canvas pixels, since the drag's previous event.
+- **`view`:** a copy of the view. For `panstart` and `panend` it's the current view; for `pan` and `zoom`, it's the view the change moves to.
+
+Every event also has `type`, its name, and `target`, the GraphJS instance. Events are emitted before GraphJS responds to them, so a listener can call `preventDefault()` to stop the response listed above. The other listeners still run, and can read `defaultPrevented`.
+
+```js
+// The root node can't be dragged
+gjs.on("nodedragstart", e => { if (e.id === "root") e.preventDefault(); });
+
+// Dropped nodes stay where they're put
+gjs.on("nodedragend", e => e.preventDefault());
+
+// Let the user take over from a camera tween
+gjs.on("panstart", () => gjs.cancelTween("camera"));
+gjs.on("zoom", () => gjs.cancelTween("camera"));
+```
+
+- **Order:** listeners of an event run in the order they were added, and adding the same function twice has no effect. Removing a listener needs the same function, so keep a reference to it.
+- **Errors:** a listener that throws is logged with `console.error`, and the remaining listeners still run.
+- **During an event:** a listener added while an event is running starts with the next one. A listener removed while an event is running doesn't run for it, if it hasn't already.
+- **Names:** an unknown event name throws a `TypeError`, so a misspelled name fails straight away instead of never firing.
+- **Changes from code:** calling `setView()`, `panBy()`, `pin()` and the like doesn't emit events. Events report what the user did.
+
+### Panning and zooming
+
+The view holds the simulation coordinates at the center of the canvas, and a zoom factor (canvas pixels per simulation unit):
+
+```js
+gjs.view;                          // { x, y, zoom }
+gjs.setView({ x: 0, y: 0, zoom: 1 });   // set some or all of it
+
+gjs.panBy(100, 0);                 // shift the graph 100 px right on the canvas
+gjs.zoomTo(2);                     // zoom to 2x around the canvas centre
+gjs.zoomTo(2, 300, 200);           // ... or keep the point at (300, 200) on the canvas fixed
+gjs.zoomBy(1.5, 300, 200);         // multiply the zoom, anchored the same way
+```
+
+`viewPannedBy()` and `viewZoomedTo()` take the same arguments as `panBy()` and `zoomTo()`, and return the view they would set without applying it. The `pan` and `zoom` events carry views worked out this way.
+
+```js
+const next = gjs.viewZoomedTo(2, 300, 200);   // { x, y, zoom }
+gjs.setView(next);                            // the same as gjs.zoomTo(2, 300, 200)
+```
+
+To animate the view, set it from a tween. Zooming with `zoomTo()` keeps the anchor fixed the whole way:
+
+```js
+gjs.tween({
+  set: zoom => gjs.zoomTo(zoom, 300, 200),
+  from: () => gjs.view.zoom, to: 4, duration: 500, ease: "inOutCubic", key: "camera",
+});
+```
+
+- **Checks:** a coordinate that isn't finite, or a zoom that isn't a finite number above 0, throws a `RangeError` and changes nothing. A zoom anchor needs both coordinates and an attached canvas.
+- **Drawing:** like other changes made from code, view changes show on the next frame. If the animation is stopped, call `gjs.renderer.render()`.
+- **On the renderer:** the same methods are on `gjs.renderer`, where they return the renderer. `gjs.view` is the renderer's `view`.
+- **Assigning:** `gjs.renderer.view = { zoom: 2 }` is checked the same way as `setView()`. Writing a single field, as in `gjs.renderer.view.zoom = 2`, isn't checked, so prefer `setView()`.
+
+### Coordinates and hit-testing
+
+Canvas coordinates are CSS pixels from the canvas's top-left corner, at any device pixel ratio. Event positions, `getPosition()` and the drawing hooks all use them.
+
+```js
+gjs.nodeAt(100, 50);         // id of the node at (100, 50) on the canvas, or null
+gjs.nodeAt(100, 50, 4);      // with 4 px of slack around each node (the default is 2)
+gjs.getPosition("alice");    // [x, y] on the canvas, or null if the node doesn't exist
+gjs.simToCanvas(0, 0);       // canvas coordinates of the simulation's center
+gjs.canvasToSim(100, 50);    // converts (100, 50) on the canvas to simulation coordinates
+
+gjs.pin("alice", 100, 50);   // holds a node at (100, 50) on the canvas
+gjs.unpin("alice");          // allows the node to move freely again
+```
+
+These helpers, except `unpin()`, require an attached canvas and throw without one.
+
+### Building your own interaction
+
+With built-in interaction off, the helpers above are enough to handle DOM events yourself. To convert a DOM event's position to canvas coordinates:
+
+```js
 const toCanvas = e => {
   const { left, top } = canvas.getBoundingClientRect();
   return [e.clientX - left, e.clientY - top];
 };
+```
+
+Dragging nodes:
+
+```js
+let dragging = null;
 
 canvas.addEventListener("pointerdown", e => {
   const [x, y] = toCanvas(e);
-  dragging = gjs.nodeAt(x, y, 4);       // node id, or null; 4 CSS px of slack (default is 2)
+  dragging = gjs.nodeAt(x, y, 4);       // node id, or null
   if (dragging !== null) canvas.setPointerCapture(e.pointerId);
 });
 
@@ -303,45 +655,26 @@ canvas.addEventListener("pointermove", e => {
 });
 
 canvas.addEventListener("pointerup", () => {
-  if (dragging !== null) gjs.unpin(dragging);  // allows the node to move freely again
+  if (dragging !== null) gjs.unpin(dragging);
   dragging = null;
 });
 ```
 
-Other position helpers:
-
-```js
-gjs.getPosition("alice");    // [x, y] on the canvas, or null if the node doesn't exist
-gjs.simToCanvas(0, 0);       // canvas coordinates of the simulation's center
-gjs.canvasToSim(100, 50);    // converts the coordinates (100, 50) on the canvas to simulation space coordinates
-```
-
-These helpers, and `nodeAt()` and `pin()` above, require an attached canvas and throw without one.
-
-## Panning and zooming
-
-The renderer's `view` holds the simulation coordinates at the center of the canvas, and a zoom factor (canvas pixels per simulation unit):
-
-```js
-gjs.renderer.view.zoom = 2;                     // change one field
-gjs.renderer.view = { x: 0, y: 0, zoom: 1 };    // or several at once
-```
-
-Zooming toward the cursor means keeping the point under it fixed:
+Zooming toward the cursor:
 
 ```js
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
   const [x, y] = toCanvas(e);
-  const [bx, by] = gjs.canvasToSim(x, y);
-  gjs.renderer.view.zoom *= e.deltaY < 0 ? 1.1 : 1 / 1.1;
-  const [ax, ay] = gjs.canvasToSim(x, y);
-  gjs.renderer.view.x += bx - ax;
-  gjs.renderer.view.y += by - ay;
+  gjs.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1, x, y);   // keeps the point under the cursor fixed
 }, { passive: false });
 ```
 
-## Highlighting
+Your own listeners can also run alongside built-in interaction, for input it doesn't handle, such as keyboard shortcuts that call `panBy()` and `zoomBy()`.
+
+## Drawing
+
+### Highlighting
 
 Highlighting draws selected nodes and edges normally, and everything else dimmed (or hidden). Edges are given as `[srcId, destId]` pairs.
 
@@ -393,7 +726,14 @@ function neighborhood(id) {
 gjs.renderer.setHighlight(neighborhood("alice"));
 ```
 
-## Custom drawing
+With [built-in interaction](#built-in-interaction), the same function highlights whichever node is under the pointer:
+
+```js
+gjs.on("nodeenter", e => gjs.renderer.setHighlight(neighborhood(e.id)));
+gjs.on("nodeleave", () => gjs.renderer.clearHighlight());
+```
+
+### Custom drawing
 
 Renderer hooks draw your own content as part of each frame. A `"background"` hook runs after the background is filled, beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp. For non-drawing per-frame code, use [loop hooks](#loop-hooks).
 
@@ -435,129 +775,7 @@ gjs.renderer.removeHook("overlay", drawSelection);   // true if it was added
 - **When they run:** every time a frame is drawn, which `start()` keeps doing after the layout settles. If the animation is stopped, call `gjs.renderer.render()` after changing something a hook draws. Nothing is drawn, and no hooks run, without a canvas.
 - **Only draw:** don't call `render()` or `step()` from a hook, since that runs the hooks again. Changes to the graph, config or highlighting made from a hook may not fully show until the next frame.
 
-## Running the animation
-
-```js
-gjs.start();        // simulate and redraw every frame
-gjs.stop();         // pause
-gjs.isRunning();    // true while running
-
-gjs.step();         // tick the simulation once and draw one frame
-```
-
-`start()` does nothing until a canvas is attached.
-
-GraphJS sizes the canvas when it's attached. If its CSS size changes later, call `resize()`:
-
-```js
-new ResizeObserver(() => gjs.resize()).observe(canvas);
-```
-
-`resize()` is safe to call even when no canvas is attached.
-
-### Loop hooks
-
-Each frame of `start()`, and each `step()`, ticks the simulation once and then draws. Loop hooks run your own code around those two steps:
-
-| Hook | Runs |
-|---|---|
-| `"preTick"` | before the simulation ticks |
-| `"postTick"` | after the tick, before drawing |
-| `"postRender"` | after the frame is drawn |
-
-```js
-// Time each tick
-let tickStart = 0, tickMs = 0;
-gjs.addHook("preTick", () => { tickStart = performance.now(); });
-gjs.addHook("postTick", () => { tickMs = performance.now() - tickStart; });
-
-// Keep every node inside a 1000 x 1000 box
-function keepInBox(gjs) {
-  for (const node of gjs.simulation.nodeList) {
-    node.x = Math.max(-500, Math.min(500, node.x));
-    node.y = Math.max(-500, Math.min(500, node.y));
-  }
-}
-gjs.addHook("postTick", keepInBox);
-
-gjs.removeHook("postTick", keepInBox);   // true if it existed and was removed
-```
-
-- **Arguments:** each hook is called with the GraphJS instance and the frame's timestamp. That's the `requestAnimationFrame` time in the loop, or `performance.now()` for `step()`, and the renderer is given the same one.
-- **When they run:** on every frame, including after the layout settles. The tick does nothing then, but `"preTick"` and `"postTick"` hooks still run.
-- **Stopping:** a hook can call `stop()`. The current frame finishes, and no more are run. Don't call `step()` from a hook, since that runs the hooks again.
-- **Errors and order:** these work as they do for [renderer hooks](#custom-drawing). A hook that throws is logged and the frame carries on, and hooks of a type run in the order they were added.
-- **Drawing:** use renderer hooks instead. They run at a fixed point in the frame with canvas state saved and restored, while a `"postRender"` hook's changes to canvas state carry into the next frame.
-
-### Tweens
-
-A tween animates a number, or an array of numbers, from one value to another. You give it a `set` function, and it's called with each new value:
-
-```js
-// Zoom to 2x over 400 ms
-gjs.tween({
-  set: zoom => { gjs.renderer.view = { zoom }; },
-  from: () => gjs.renderer.view.zoom,   // read when the tween starts
-  to: 2,
-  duration: 400,
-  ease: "inOutQuad",
-  key: "zoom",
-});
-
-// Pan to a node, with the x and y coordinates as one array value
-gjs.tween({
-  set: ([x, y]) => { gjs.renderer.view = { x, y }; },
-  from: () => [gjs.renderer.view.x, gjs.renderer.view.y],
-  to: gjs.simulation.getPosition("alice"),
-  duration: 600,
-  ease: "outCubic",
-  key: "pan",
-});
-
-// Pulse a node's outline forever
-gjs.tween({
-  set: w => gjs.renderer.setNodeConfig("alice", { outlineWidth: w }),
-  from: 1, to: 5, duration: 500,
-  repeat: Infinity, yoyo: true,
-  key: "alice:outline",
-});
-```
-
-| Option | Default | |
-|---|---|---|
-| `set` | | called with each new value |
-| `from` | | start value: a number, an array of numbers, or a function returning one. A function is called once, when the tween starts moving. |
-| `to` | | end value, the same shape as `from` |
-| `duration` | | length of one play |
-| `unit` | `"ms"` | `"ms"` or `"frames"`: what `duration` and `delay` count. Set the default for every tween with the `tweenUnit` option of `new GraphJS()`. |
-| `ease` | `"linear"` | `"linear"`, `"inQuad"`, `"outQuad"`, `"inOutQuad"`, `"inCubic"`, `"outCubic"`, `"inOutCubic"`, `"outBack"`, or your own function from progress (0 to 1) to eased progress |
-| `delay` | `0` | wait before the first play |
-| `repeat` | `0` | extra plays after the first; `Infinity` loops |
-| `yoyo` | `false` | every other play runs backwards |
-| `onFinish` | | called when the tween finishes, but not when it's cancelled |
-| `key` | | names the tween, so it can be looked up, cancelled or replaced |
-
-`tween()` returns the tween. To stop it:
-
-```js
-const pulse = gjs.tween({ /* ... */ });
-pulse.cancel();                   // stop where it is
-pulse.finish();                   // jump to the end (of the current play, if it loops forever)
-await pulse.finished;             // true if it finished, false if it was cancelled
-
-gjs.cancelTween("zoom");          // by key; true if there was one
-gjs.cancelAllTweens();
-gjs.getTween("zoom");             // the active tween with that key, or null
-gjs.isTweening();                 // true while any tween is active
-```
-
-Starting a tween with the key of an active one cancels the old one, so two tweens never fight over the same value. A `from` function then picks up wherever the old one stopped.
-
-- **When they run:** tweens are advanced at the start of each frame of `start()` and each `step()`, before the `"preTick"` hooks. Time only counts while frames run, so a tween doesn't jump ahead after `stop()` and `start()`.
-- **Without the loop:** if you draw only when something changes, call `gjs.stepTweens(time)` before `gjs.renderer.render(time)`, and keep requesting frames while `gjs.isTweening()` is true. It advances tweens without ticking the simulation.
-- **Errors:** a `set` function that throws is logged and the tween is cancelled. Cancel tweens whose node or edge you remove: `setEdgeConfig()` throws for a missing edge.
-- **Speed:** each change to a node or edge config makes the renderer re-read every node's and edge's settings on the next frame, so style tweens get expensive on large graphs. Tweening the view or node positions doesn't have this cost.
-- **Without GraphJS:** `Tween` is also exported from the package root and from `@tang0226/graph-js/tween`. `new Tween(opts)` takes the same options except `key`, and you advance it with `tween.step(ms)` from your own loop.
+## Layout physics
 
 ### Settling
 
@@ -568,7 +786,7 @@ The layout wakes on its own when:
 - nodes or edges are added or removed
 - a config or data change alters a node's `radius`, `mass`, `charge` or `fixed`
 - options are changed with `setOpts()`
-- a node is pinned somewhere new
+- a node is pinned somewhere new, including by dragging it
 
 Changes the library can't see need a manual `heat()`:
 
@@ -583,7 +801,7 @@ gjs.simulation.temp;            // current temperature; 0 means frozen
 
 To cover more ground in each tick, raise `dt`. Temperature still falls once per tick, so the layout freezes after the same number of ticks, but it gets closer to its final shape first, which helps most on large graphs. Values up to about 3 stay stable; above that, nodes start to jitter. Passing a value to `gjs.simulation.tick(dt)` overrides the option for that tick.
 
-## Barnes-Hut
+### Barnes-Hut
 
 Every node repels every other node, so checking each pair takes 100 times as long when a graph gets 10 times larger. Barnes-Hut avoids most of that work: each tick, nodes are sorted into a quadtree (a tree of nested squares), and a distant group of nodes is treated as a single point, carrying the group's total charge at its charge-weighted center. It's on by default, and at 20,000 nodes it calculates repulsion about 40 times faster than checking every pair.
 
@@ -613,7 +831,7 @@ Only repulsion uses Barnes-Hut. Collisions have their own option (see [Collision
 
 Graphs of up to about 20,000 nodes stay usable. Ticks are slowest at the start, while new nodes are still bunched together, and speed up as the layout spreads out. Raising `dt` (see [Settling](#settling)) helps large graphs spread further before they freeze. With `useBarnesHut: false`, a graph that size takes over a second per tick, which is enough to freeze the page.
 
-## Collisions
+### Collisions
 
 After each tick, nodes that overlap are pushed apart until they just touch. A fixed or pinned node doesn't move, and the other node takes the whole push. The `collision` option chooses how overlapping nodes are found:
 
@@ -631,14 +849,23 @@ All three find the same overlaps, but they resolve them in a different order, so
 
 ## TypeScript
 
-The package ships its own type declarations. Option, config, and hook types can be imported from the package root:
+The package ships its own type declarations. Option, config, hook and event types can be imported from the package root:
 
 ```ts
 import { GraphJS } from "@tang0226/graph-js";
-import type { GraphJSOpts, SimNodeConfig, NodeStyleConfig, RendererHook } from "@tang0226/graph-js";
+import type { GraphJSOpts, SimNodeConfig, NodeStyleConfig, RendererHook, GraphJSEvent } from "@tang0226/graph-js";
 
 const opts: GraphJSOpts = { simulation: { collision: "grid" } };
 const sizes: SimNodeConfig = { radius: node => 5 + node.data.weight };
+```
+
+A listener's event is typed from the event name, so `gjs.on("nodedrag", e => e.dx)` needs no annotation. A function shared by several events can name them all, and use the fields they have in common:
+
+```ts
+function onMove(e: GraphJSEvent<"nodedrag" | "pan">) {
+  console.log(e.dx, e.dy);
+}
+gjs.on("nodedrag", onMove).on("pan", onMove);
 ```
 
 The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
@@ -650,17 +877,20 @@ import { Simulation } from "@tang0226/graph-js/simulation";
 
 Members whose names start with `_` are internal and declared `private`, so TypeScript rejects them. Types that aren't exported from the package root are internal too, and may change between versions.
 
-## Upgrading from 0.6
+## Upgrading
+
+### From 0.6
 
 - **Assigning `renderer.view` now checks its values.** Assigning a non-finite `x` or `y`, or a `zoom` that isn't a finite number above 0, throws a `RangeError` and leaves the view unchanged. These values already broke coordinate conversions and rendering. Writing a single field, as in `renderer.view.zoom = 0`, isn't checked.
 - **Edge widths, arrowheads and node outlines now scale with zoom** (see [Edge and outline widths](#edge-and-outline-widths)). At zoom 1 they look the same as before. Zoomed out they get thinner and fade, and zoomed in they get thicker, up to `maxEdgeWidth`. Set `scaleStrokes: false` to keep the old fixed screen sizes.
+- **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
 
-## Upgrading from 0.5
+### From 0.5
 
 - **Internal members are `private` in the type declarations.** TypeScript code that reads or writes a member starting with `_` no longer compiles. Use the public equivalents: for example, `simulation._nodeList` is `simulation.nodeList`, `_springs` is `springs`, `_temp` is `temp`, and `_opts` is `opts`. Hooks are managed with `addHook()` and `removeHook()`. JavaScript code still runs, but internal members aren't supported and can change without notice.
 - **Option and config types can be imported by name** (see [TypeScript](#typescript)). Code that extracted them with helpers like `ConstructorParameters<typeof GraphJS>[0]` can use `GraphJSOpts` and the other named types instead.
 
-## Upgrading from 0.4
+### From 0.4
 
 - **The layout now settles and stops.** It wakes automatically after the changes listed under [Settling](#settling). If you move nodes or change their velocities directly, call `gjs.simulation.heat()` afterwards.
 - **Repulsion now uses [Barnes-Hut](#barnes-hut) by default.** Forces are approximate, so the same graph can settle slightly differently. Set `useBarnesHut: false` to check every pair of nodes as before.
@@ -669,7 +899,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Former internal properties have public names.** For example, `simulation._nodeList` is now `simulation.nodeList`, `_edgePairs` is `edgePairs`, `renderer._nodeStyles` is `nodeStyles`, and `renderer._loadImage()` is `loadImage()`.
 - **`JSON.stringify(graph)` no longer includes `directed`.** Read `graph.directed` instead.
 
-## Upgrading from 0.2
+### From 0.2
 
 The constructor now takes a single options object, with the canvas inside it:
 
