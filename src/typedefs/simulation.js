@@ -1,6 +1,6 @@
 // SIMULATION LAYER
 // Types only. No DOM types here: the headless entry points depend on this file.
-/** @import { NodeId, NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
+/** @import { NodeId, NodeOption, EdgeOption } from './graph.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 /** @import { Simulation } from '../simulation.js' */
 
@@ -60,31 +60,10 @@
  */
 
 /**
- * @typedef { "mass" | "radius" | "charge" | "fixed" } ConfigurableSimNodeProps
- */
-
-/**
- * Partial config specifier
+ * Partial config specifier: each field a value, or a function of the node
  * @typedef {{
- *    [K in keyof Pick<SimNode, ConfigurableSimNodeProps>]?: NodeOption<SimNode[K]>
+ *    [K in "mass" | "radius" | "charge" | "fixed"]?: NodeOption<SimNode[K]>
  * }} SimNodeConfig
- */
-
-/**
- * Fully populated config after merging with defaults.
- * @typedef {Required<SimNodeConfig>} ResolvedSimNodeConfig
- */
-
-/**
- * Sim-node options collapsed into functions
- * @typedef {{
- *    [K in keyof Pick<SimNode, ConfigurableSimNodeProps>]?: NodeAccessor<SimNode[K]>
- * }} SimNodeAccessors
- */
-
-/**
- * Fully populated config accessors
- * @typedef {Required<SimNodeAccessors>} ResolvedSimNodeAccessors
  */
 
 
@@ -96,31 +75,8 @@
  */
 
 /**
- * @typedef { "length" | "stiffness" } ConfigurableSimEdgeProps
- */
-
-/**
- * Partial edge config specifier
- * @typedef {{
- *    [K in keyof Pick<SimEdge, ConfigurableSimEdgeProps>]?: EdgeOption<SimEdge[K]>
- * }} SimEdgeConfig
- */
-
-/**
- * Fully populated edge config after merging with defaults.
- * @typedef {Required<SimEdgeConfig>} ResolvedSimEdgeConfig
- */
-
-/**
- * Edge options collapsed into functions
- * @typedef {{
- *    [K in keyof Pick<SimEdge, ConfigurableSimEdgeProps>]?: EdgeAccessor<SimEdge[K]>
- * }} SimEdgeAccessors
- */
-
-/**
- * Fully populated edge config accessors
- * @typedef {Required<SimEdgeAccessors>} ResolvedSimEdgeAccessors
+ * Partial edge config specifier: each field a value, or a function of the edge
+ * @typedef {{ [K in keyof SimEdge]?: EdgeOption<SimEdge[K]> }} SimEdgeConfig
  */
 
 

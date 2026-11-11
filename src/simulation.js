@@ -4,13 +4,16 @@
 /** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
 /**
  * @import {
- *  SimNode, SimNodeConfig,
- *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
- *  SimEdge, SimEdgeConfig,
- *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
+ *  SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
  *  SimEventMap, SimEventType,
  * } from './typedefs/simulation.js'
+ */
+/**
+ * @import {
+ *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
+ *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
+ * } from './typedefs/internal/simulation.js'
  */
 
 import { BarnesHutContext } from "./barnes-hut.js";

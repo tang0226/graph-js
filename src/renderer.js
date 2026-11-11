@@ -3,10 +3,14 @@
 /** @import { SimNode } from './typedefs/simulation.js' */
 /**
  * @import {
- *  NodeStyle, EdgeStyle,
- *  NodeStyleConfig, EdgeStyleConfig,
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
  *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
+ * } from './typedefs/internal/renderer.js'
+ */
+/**
+ * @import {
+ *  NodeStyle, EdgeStyle,
+ *  NodeStyleConfig, EdgeStyleConfig,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
  *  Canvas, CanvasContext, Size, View,

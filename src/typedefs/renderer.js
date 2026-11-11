@@ -1,6 +1,6 @@
 // RENDERER LAYER
 /** @import { Renderer } from '../renderer.js' */
-/** @import { NodeOption, NodeAccessor, EdgeOption, EdgeAccessor } from './graph.js' */
+/** @import { NodeOption, EdgeOption } from './graph.js' */
 
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
@@ -96,35 +96,6 @@
  * @typedef {{ [K in keyof EdgeStyle]?: EdgeOption<EdgeStyle[K]> }} EdgeStyleConfig
  */
 
-/**
- * Fully resolved node config specifier
- * @typedef {Required<NodeStyleConfig>} ResolvedNodeStyleConfig
- */
-
-/**
- * Fully resolved edge config specifier
- * @typedef {Required<EdgeStyleConfig>} ResolvedEdgeStyleConfig
- */
-
-/**
- * Partial node config accessor functions
- * @typedef {{ [K in keyof NodeStyle]?: NodeAccessor<NodeStyle[K]> }} NodeStyleAccessors
- */
-
-/**
- * Partial edge config accessor functions
- * @typedef {{ [K in keyof EdgeStyle]?: EdgeAccessor<EdgeStyle[K]> }} EdgeStyleAccessors
- */
-
-/**
- * Fully resolved node config accessor functions
- * @typedef {Required<NodeStyleAccessors>} ResolvedNodeStyleAccessors
- */
-
-/**
- * Fully resolved edge config accessor functions
- * @typedef {Required<EdgeStyleAccessors>} ResolvedEdgeStyleAccessors
- */
 
 
 /**

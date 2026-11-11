@@ -1,7 +1,8 @@
 /** @import { GraphJS } from './graphjs.js' */
 /** @import { NodeId } from './typedefs/graph.js' */
 /** @import { Canvas } from './typedefs/renderer.js' */
-/** @import { InteractionOpts, InteractionOptsInput, InteractionEmit, InteractionPress } from './typedefs/interaction.js' */
+/** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
+/** @import { InteractionEmit, InteractionPress } from './typedefs/internal/interaction.js' */
 
 
 import { INTERACTION_DEFAULTS } from "./defaults.js";

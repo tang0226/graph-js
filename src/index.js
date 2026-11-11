@@ -6,8 +6,8 @@ export { Tween, easings } from "./tween.js";
 
 
 // Public types, re-exported so TypeScript users can import them from the
-// package root. These comments have no runtime effect. Types left out here
-// (resolved configs, accessor maps) are internal and may change.
+// package root. These comments have no runtime effect. Internal types live in
+// typedefs/internal/ and aren't re-exported here, so they may change.
 
 // GRAPH LAYER
 /** @typedef {import("./typedefs/graph.js").NodeId} NodeId */
