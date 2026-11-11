@@ -443,11 +443,11 @@ export class Simulation extends Emitter {
    * @param {NodeId} destId - destination node id
    * @param {SimEdgeConfig} [config] - edge config
    * @returns {this} self reference
-   * @throws {Error} throws if edge not found
+   * @throws {ReferenceError} throws if the edge doesn't exist
    */
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) throw new Error(`Simulation: no edge from "${srcId}" to "${destId}"`);
+    if (!gEdge) throw new ReferenceError(`Simulation: no edge from "${srcId}" to "${destId}"`);
     this._edgeConfig.set(gEdge, config);
     return this;
   }

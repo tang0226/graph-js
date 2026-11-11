@@ -1306,7 +1306,7 @@ describe("Simulation: edge config", () => {
 
   test("setEdgeConfig throws for a missing edge", () => {
     const [, sim] = edgeSim({ directed: true });
-    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: 1 }), /Simulation:/);
+    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: 1 }), /^ReferenceError: Simulation: no edge from "a" to "nope"$/);
     assert.throws(() => sim.setEdgeConfig("b", "a", { length: 1 }), /Simulation:/,
       "direction matters in a directed graph");
   });

@@ -167,7 +167,7 @@ export class Graph extends Emitter {
    */
   setNodeData(id, data) {
     const node = this._nodes.get(id);
-    if (!node) throw new ReferenceError(`Cannot find node with id "${id}"`);
+    if (!node) throw new ReferenceError(`Graph: no node with id "${id}"`);
     const prev = node.data;
     node.data = data;
     this._dataVersion++;
@@ -188,8 +188,8 @@ export class Graph extends Emitter {
   addEdge(srcId, destId, data = {}) {
     const src = this._nodes.get(srcId);
     const dest = this._nodes.get(destId);
-    if (!src) throw new ReferenceError(`Cannot find source node with id "${srcId}"`);
-    if (!dest) throw new ReferenceError(`Cannot find destination node with id "${destId}"`);
+    if (!src) throw new ReferenceError(`Graph: no source node with id "${srcId}"`);
+    if (!dest) throw new ReferenceError(`Graph: no destination node with id "${destId}"`);
     if (this._adjacency.get(srcId)?.get(destId)) return false;
     const edge = { src, dest, data };
     this._edges.add(edge);
@@ -251,7 +251,7 @@ export class Graph extends Emitter {
    */
   setEdgeData(srcId, destId, data) {
     const edge = this._adjacency.get(srcId)?.get(destId);
-    if (!edge) throw new ReferenceError(`Cannot find edge with srcId "${srcId}" and destId "${destId}"`);
+    if (!edge) throw new ReferenceError(`Graph: no edge from "${srcId}" to "${destId}"`);
     const prev = edge.data;
     edge.data = data;
     this._dataVersion++;

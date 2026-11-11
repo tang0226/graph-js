@@ -58,8 +58,8 @@ describe("Graph: edges", () => {
   test("addEdge throws a ReferenceError naming the missing endpoint", () => {
     const g = new Graph();
     g.addNode({ id: "a" });
-    assert.throws(() => g.addEdge("zz", "a"), { name: "ReferenceError", message: /"zz"/ });
-    assert.throws(() => g.addEdge("a", "zz"), { name: "ReferenceError", message: /"zz"/ });
+    assert.throws(() => g.addEdge("zz", "a"), { name: "ReferenceError", message: /^Graph: no source node with id "zz"$/ });
+    assert.throws(() => g.addEdge("a", "zz"), { name: "ReferenceError", message: /^Graph: no destination node with id "zz"$/ });
   });
 
   test("duplicate addEdge is rejected and leaves one edge", () => {

@@ -490,7 +490,7 @@ export class GraphJS extends Emitter {
    * @throws {Error} throws if no canvas is attached
    */
   simToCanvas(x, y) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.simToCanvas(x, y);
   }
 
@@ -504,7 +504,7 @@ export class GraphJS extends Emitter {
    * @throws {Error} throws if no canvas is attached
    */
   canvasToSim(cx, cy) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.canvasToSim(cx, cy);
   }
 
@@ -522,23 +522,22 @@ export class GraphJS extends Emitter {
    * @throws {Error} throws if no canvas is attached
    */
   nodeAt(cx, cy, slack = undefined) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.nodeAt(cx, cy, slack);
   }
 
 
   /**
    * Returns the canvas space coordinates of a node based on id, or `null` if
-   * the node id was not found. Delegates to `Simulation.getPosition()`.
+   * the node id was not found. Delegates to `Renderer.getPosition()`.
    * @param {NodeId} id - node id
    * @returns {[number, number] | null} canvas space coordinates of the node,
    *    or `null` if the node id was not found
    * @throws {Error} throws if no canvas is attached
    */
   getPosition(id) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    const p = this._simulation.getPosition(id);
-    return p ? this.simToCanvas(...p) : null;
+    this._requireCanvas();
+    return this._renderer.getPosition(id);
   }
 
 
@@ -552,8 +551,20 @@ export class GraphJS extends Emitter {
    * @throws {Error} throws if no canvas is attached
    */
   pin(id, cx, cy) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
     return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
+  }
+
+
+  /**
+   * Throws unless a canvas is attached. The canvas helpers check here first,
+   * so their error names `GraphJS`, the object the caller used, rather than
+   * the renderer they delegate to.
+   * @returns {void}
+   * @throws {Error} throws if no canvas is attached
+   * @private
+   */
+  _requireCanvas() {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
   }
 
 

@@ -268,8 +268,8 @@ describe("Renderer: style cascade", () => {
   test("setEdgeConfig throws for a missing edge rather than dropping the config", () => {
     const { r } = scene(true, [["a", "b"]]);
     // Reversed ids on a directed graph: the mistake a silent no-op would hide.
-    assert.throws(() => r.setEdgeConfig("b", "a", { color: "red" }), /Renderer:/);
-    assert.throws(() => r.setEdgeConfig("a", "nope", { color: "red" }), /Renderer:/);
+    assert.throws(() => r.setEdgeConfig("b", "a", { color: "red" }), /^ReferenceError: Renderer: no edge from "b" to "a"$/);
+    assert.throws(() => r.setEdgeConfig("a", "nope", { color: "red" }), { name: "ReferenceError", message: /^Renderer:/ });
   });
 
   test("setEdgeConfig accepts either id order in an undirected graph", () => {

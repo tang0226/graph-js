@@ -520,11 +520,11 @@ export class Renderer {
    * @param {NodeId} destId - destination node id
    * @param {EdgeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
-   * @throws {Error} throws if edge not found
+   * @throws {ReferenceError} throws if the edge doesn't exist
    */
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) throw new Error(`Renderer: no edge from "${srcId}" to "${destId}"`);
+    if (!gEdge) throw new ReferenceError(`Renderer: no edge from "${srcId}" to "${destId}"`);
     this._edgeConfig.set(gEdge, config);
     return this;
   }
