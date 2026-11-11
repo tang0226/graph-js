@@ -1,7 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
-import { Simulation, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/simulation.js";
+import { Simulation } from "../src/simulation.js";
+import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/defaults.js";
 
 const RECORD_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
 
@@ -61,7 +62,7 @@ describe("Simulation: config cascade", () => {
     g.addNode({ id: "a", w: 7 });
     const sim = new Simulation(g, {});
     sim.setDefaultNodeConfig({ mass: n => n.data.w, radius: 20, fixed: false });
-    const resolve = () => { sim._nodeConfigDirty = true; sim.sync(); return sim.nodes.get("a"); };
+    const resolve = () => { sim._nodeConfig.markDirty(); sim.sync(); return sim.nodes.get("a"); };
     return [sim, resolve];
   }
 
@@ -120,7 +121,52 @@ describe("Simulation: config cascade", () => {
     sim.sync();
     g.removeNode("n1");
     sim.sync();
-    assert.equal(sim._nodeOverrides.has("n1"), false, "a stale override would reapply if n1 returns");
+    assert.equal(sim._nodeConfig.overrides.has("n1"), false, "a stale override would reapply if n1 returns");
+  });
+});
+
+describe("Simulation: options", () => {
+  test("invalid options throw, naming the option, and change nothing", () => {
+    const sim = new Simulation(chain(3), { friction: 0.5 });
+    for (const [bad, pattern] of [
+      [{ friction: 1.5 }, /^RangeError: Simulation: `friction` must be a finite number from 0 to 1$/],
+      [{ friction: "0.5" }, /^TypeError: Simulation: `friction`/],
+      [{ gravity: -0.1 }, /gravity/],
+      [{ repulsion: NaN }, /repulsion/],
+      [{ maxSpeed: 0 }, /maxSpeed/],
+      [{ dt: 0 }, /dt/],
+      [{ cooling: 0 }, /cooling/],
+      [{ cooling: 1.01 }, /cooling/],
+      [{ freezePoint: -1 }, /freezePoint/],
+      [{ useBarnesHut: "yes" }, /useBarnesHut/],
+      [{ collision: "quadtree" }, /^RangeError: Simulation: `collision` must be one of "grid", "barnesHut", "pairs"$/],
+      [{ barnesHut: { theta: -1 } }, /^RangeError: Simulation: `barnesHut.theta`/],
+      [{ barnesHut: { depth: 3 } }, /^TypeError: Simulation: unknown option `barnesHut.depth`$/],
+      [{ springLength: 80 }, /^TypeError: Simulation: unknown option `springLength`$/],
+    ]) assert.throws(() => sim.setOpts(bad), pattern, JSON.stringify(bad));
+    assert.equal(sim.opts.friction, 0.5);
+  });
+
+  test("a rejected call changes nothing, including its valid options", () => {
+    const sim = new Simulation(chain(3));
+    const before = { ...sim.opts }, theta = sim._barnesHutCtx.theta;
+    assert.throws(() => sim.setOpts({ friction: 0.5, barnesHut: { theta: 0.5 }, gravity: -1 }), RangeError);
+    assert.throws(() => sim.setOpts({ friction: 0.5, barnesHut: { theta: -1 } }), RangeError);
+    assert.deepEqual(sim.opts, before);
+    assert.equal(sim._barnesHutCtx.theta, theta);
+  });
+
+  test("the constructor checks options too", () => {
+    assert.throws(() => new Simulation(chain(2), { dt: -1 }), RangeError);
+    assert.throws(() => new Simulation(chain(2), { frction: 0.5 }), TypeError);
+  });
+
+  test("valid edge values, Infinity for maxSpeed, and undefined values are accepted", () => {
+    const sim = new Simulation(chain(2));
+    sim.setOpts({ friction: 0, gravity: 0, repulsion: 0, cooling: 1, freezePoint: 0, maxSpeed: Infinity });
+    assert.equal(sim.opts.maxSpeed, Infinity);
+    sim.setOpts({ friction: undefined });
+    assert.equal(sim.opts.friction, 0, "undefined keeps the current value");
   });
 });
 
@@ -624,7 +670,156 @@ describe("Simulation: temperature", () => {
   });
 });
 
+describe("Simulation: settle and wake events", () => {
+  /* A layout that cools fast: 0.5^7 < 0.01, so it settles on the 7th tick. */
+  function quick(n = 3) {
+    const sim = new Simulation(chain(n), { cooling: 0.5, freezePoint: 0.01 });
+    const log = [];
+    for (const type of ["settle", "wake"]) sim.on(type, e => log.push(e));
+    return { sim, log };
+  }
+  const ticksToSettle = sim => {
+    let n = 0;
+    while (sim.temp > 0 && n < 1000) { sim.tick(); n++; }
+    return n;
+  };
+
+  test("settle is emitted once, on the tick the layout freezes", () => {
+    const { sim, log } = quick();
+    sim.heat();
+    log.length = 0;
+    for (let i = 0; i < 6; i++) sim.tick();
+    assert.deepEqual(log, [], "still cooling");
+    sim.tick();
+    assert.deepEqual(log.map(e => e.type), ["settle"]);
+    assert.equal(log[0].target, sim);
+    sim.tick().tick();
+    assert.equal(log.length, 1, "a frozen layout doesn't settle again");
+  });
+
+  test("settle comes after the tick has finished, with final positions and zero velocity", () => {
+    const sim = new Simulation(chain(4), { cooling: 0.5, freezePoint: 0.01 });
+    let seen = null;
+    sim.on("settle", e => {
+      seen = {
+        temp: e.target.temp,
+        still: e.target.nodeList.every(n => n.vx === 0 && n.vy === 0),
+        positions: e.target.nodeList.map(n => [n.x, n.y]),
+      };
+    });
+    ticksToSettle(sim);
+    assert.equal(seen.temp, 0);
+    assert.equal(seen.still, true);
+    assert.deepEqual(seen.positions, sim.nodeList.map(n => [n.x, n.y]), "nothing moves after the listener runs");
+  });
+
+  test("wake is emitted when heat() starts a frozen layout", () => {
+    const { sim, log } = quick();
+    ticksToSettle(sim);
+    log.length = 0;
+    sim.heat(0.5);
+    assert.deepEqual(log.map(e => e.type), ["wake"]);
+    assert.equal(log[0].target.temp, 0.5, "the temperature is already set");
+    sim.heat();
+    assert.equal(log.length, 1, "heating a moving layout isn't a wake");
+  });
+
+  test("heat(0) on a moving layout is a settle; on a frozen one it's nothing", () => {
+    const { sim, log } = quick();
+    sim.heat();
+    log.length = 0;
+    sim.heat(0);
+    assert.deepEqual(log.map(e => e.type), ["settle"]);
+    sim.heat(0);
+    sim.heat(-1);
+    assert.equal(log.length, 1);
+  });
+
+  test("changes that heat the layout wake it", () => {
+    const { sim, log } = quick();
+    ticksToSettle(sim);
+    const wakes = () => log.filter(e => e.type === "wake").length;
+    log.length = 0;
+
+    sim.setOpts({ repulsion: 2000 });
+    assert.equal(wakes(), 1, "setOpts");
+    ticksToSettle(sim);
+
+    sim.graph.addNode({ id: "x" });
+    sim.tick();                                // the graph change is picked up on sync
+    assert.equal(wakes(), 2, "a graph change");
+    ticksToSettle(sim);
+
+    sim.pin("n0", 500, 500);
+    assert.equal(wakes(), 3, "pinning somewhere new");
+    ticksToSettle(sim);
+
+    sim.pin("n0", 500, 500);
+    assert.equal(wakes(), 3, "pinning in place doesn't wake it");
+  });
+
+  test("a settle listener can wake the layout again", () => {
+    const { sim, log } = quick();
+    let rewoken = false;
+    sim.on("settle", e => { if (!rewoken) { rewoken = true; e.target.heat(); } });
+    sim.heat();
+    log.length = 0;
+    for (let i = 0; i < 7; i++) sim.tick();   // exactly to the first settle
+    assert.deepEqual(log.map(e => e.type), ["settle", "wake"], "the wake is reported inside the settle");
+    assert.equal(sim.temp, 1);
+    ticksToSettle(sim);
+    assert.deepEqual(log.map(e => e.type), ["settle", "wake", "settle"]);
+  });
+
+  test("a layout that never freezes never settles", () => {
+    const sim = new Simulation(chain(3), { cooling: 1, freezePoint: 0.01 });
+    let settles = 0;
+    sim.on("settle", () => { settles++; });
+    sim.heat();
+    for (let i = 0; i < 50; i++) sim.tick();
+    assert.equal(settles, 0);
+  });
+
+  test("preventDefault has no effect on simulation events", () => {
+    const { sim } = quick();
+    sim.on("settle", e => e.preventDefault());
+    sim.on("wake", e => e.preventDefault());
+    ticksToSettle(sim);
+    assert.equal(sim.temp, 0, "the layout still froze");
+    sim.heat();
+    assert.equal(sim.temp, 1, "and still woke");
+  });
+
+  test("only simulation event names are accepted", () => {
+    const sim = new Simulation(chain(2));
+    assert.throws(() => sim.on("nodeclick", () => {}), /^TypeError: Simulation: unknown event "nodeclick"$/);
+  });
+});
+
 describe("Simulation: pin and unpin", () => {
+  test("unpinning a removed node leaves no override behind", () => {
+    const g = new Graph();
+    g.addNode({}, "a");
+    const sim = new Simulation(g);
+    sim.pin("a", 0, 0);
+    g.removeNode("a");
+    sim.sync();
+    sim.unpin("a");
+    sim.sync();
+    assert.equal(sim._nodeConfig.overrides.has("a"), false);
+    assert.equal(sim.unpin("never-added"), sim, "unknown ids are ignored and still chain");
+  });
+
+  test("unpinning a node added since the last sync still works", () => {
+    const g = new Graph();
+    const sim = new Simulation(g);
+    g.addNode({}, "a");
+    sim.setNodeConfig("a", { fixed: true });
+    sim.unpin("a");
+    sim.sync();
+    assert.equal(sim.nodes.get("a").fixed, false);
+  });
+
   test("pin fixes the node at the given point", () => {
     const sim = new Simulation(chain(3), {});
     sim.pin("n0", 70, -30);
@@ -1134,7 +1329,7 @@ describe("Simulation: edge config", () => {
 
   test("setEdgeConfig throws for a missing edge", () => {
     const [, sim] = edgeSim({ directed: true });
-    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: 1 }), /Simulation:/);
+    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: 1 }), /^ReferenceError: Simulation: no edge from "a" to "nope"$/);
     assert.throws(() => sim.setEdgeConfig("b", "a", { length: 1 }), /Simulation:/,
       "direction matters in a directed graph");
   });
@@ -1186,7 +1381,7 @@ describe("Simulation: edge config", () => {
     sim.setEdgeConfig("a", "b", { length: 200 }).sync();
     g.removeEdge("a", "b");
     sim.sync();
-    assert.equal(sim._edgeOverrides.size, 0);
+    assert.equal(sim._edgeConfig.overrides.size, 0);
     g.addEdge("a", "b");
     assert.equal(spring(sim, "a", "b")[0], SIM_EDGE_DEFAULTS.length, "a re-added edge must not inherit old overrides");
   });

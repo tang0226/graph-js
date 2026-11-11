@@ -1,19 +1,50 @@
-/** @import { NodeData } from './typedefs/graph.js' */
-/** @import { Canvas } from './typedefs/renderer.js' */
+/** @import { NodeData, NodeId } from './typedefs/graph.js' */
+/** @import { Canvas, View } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
+/** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
 /** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
+/** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 
 
 import { Graph } from "./graph.js";
 import { Simulation } from "./simulation.js";
 import { Renderer } from "./renderer.js";
 import { Tween } from "./tween.js";
+import { Interaction } from "./interaction.js";
+import { Emitter } from "./emitter.js";
+import { HookRegistry } from "./hook-registry.js";
+import { keysOf, now } from "./utils.js";
+
+
+/**
+ * Every event name. The type requires exactly the keys of `GraphJSEventMap`,
+ * so adding an event there without adding it here fails type checking.
+ * @type {Record<GraphJSEventType, true>}
+ */
+const EVENT_NAMES = {
+  nodeenter: true, nodeleave: true, nodepress: true, nodeclick: true, nodedblclick: true,
+  nodedragstart: true, nodedrag: true, nodedragend: true,
+  backgroundclick: true,
+  panstart: true, pan: true, panend: true, zoom: true,
+};
+const EVENT_TYPES = keysOf(EVENT_NAMES);
+
+
+/**
+ * Every loop hook type. The type requires exactly the members of
+ * `GraphJSHookType`.
+ * @type {Record<GraphJSHookType, true>}
+ */
+const HOOK_NAMES = { preTick: true, postTick: true, postRender: true };
+const HOOK_TYPES = keysOf(HOOK_NAMES);
 
 
 /**
  * Unified interface over the `Graph`, `Simulation`, and `Renderer` layers.
+ * Emits the events in `GraphJSEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<GraphJSEventMap, GraphJS>}
  */
-export class GraphJS {
+export class GraphJS extends Emitter {
   /** @private @type {Graph} */
   _graph;
   /**
@@ -41,23 +72,36 @@ export class GraphJS {
    * Hook functions by type, run by each frame of `start()` and by `step()`:
    * "preTick" before the simulation ticks, "postTick" between ticking and
    * rendering, and "postRender" after rendering
-   * @type {Record<GraphJSHookType, Set<GraphJSHook>>}
+   * @type {HookRegistry<GraphJSHookType, GraphJSHook>}
    * @private
    */
-  _hooks = {
-    preTick: new Set(),
-    postTick: new Set(),
-    postRender: new Set(),
-  };
+  _hooks = new HookRegistry(HOOK_TYPES, "GraphJS");
 
 
   /**
-   * Handle of the pending animation frame while `start()` is running, or
-   * `null` when stopped
+   * Built-in pointer interaction, or `null` while it's off
+   * @type {Interaction | null}
+   * @private
+   */
+  _interaction = null;
+
+
+  /**
+   * Animation frame handle of the `start()` loop's next frame, or `null` while
+   * the loop is stopped. `isRunning()` reads it.
    * @type {number | null}
    * @private
    */
-  _raf = null;
+  _loopFrame = null;
+
+
+  /**
+   * Animation frame handle of the next on-demand frame from `requestRender()`,
+   * which draws while the loop is stopped, or `null` if none is pending
+   * @type {number | null}
+   * @private
+   */
+  _onDemandFrame = null;
 
 
   /**
@@ -91,6 +135,7 @@ export class GraphJS {
    * @param {GraphJSOpts} opts
    */
   constructor(opts = {}) {
+    super(EVENT_TYPES, "GraphJS");
     const tweenUnit = opts.tweenUnit ?? "ms";
     if (tweenUnit !== "ms" && tweenUnit !== "frames") {
       throw new RangeError(`GraphJS: unknown tweenUnit "${tweenUnit}"`);
@@ -106,6 +151,10 @@ export class GraphJS {
       ? { ...opts.renderer, canvas: opts.canvas }
       : opts.renderer ?? {};
     this._renderer = new Renderer(this._simulation, rendererOpts);
+
+    if (opts.interaction) {
+      this.enableInteraction(opts.interaction === true ? {} : opts.interaction);
+    }
   }
 
 
@@ -118,28 +167,84 @@ export class GraphJS {
 
   /**
    * Attaches a canvas to the `Renderer`. If a canvas is already attached, it
-   * will be removed before attaching the new canvas.
+   * will be removed before attaching the new canvas. If interaction is on,
+   * starts listening for pointer input on the canvas.
    * @param {Canvas} canvas - canvas object to attach
    * @returns {this} self reference
    */
   attach(canvas) {
     if (this.canvas) this.detach();
     this._renderer.attach(canvas);
+    this._interaction?.bind(canvas);
     return this;
   }
 
 
   /**
    * Detaches a canvas from the `Renderer`, if one is attached. Before
-   * detaching, it calls `stop()` to stop the render loop.
+   * detaching, it calls `stop()` to stop the render loop, and stops
+   * listening for pointer input.
    * @returns {this} self reference
    */
   detach() {
     if (!this.canvas) return this;
     this.stop();
+    this._cancelRenderRequest();
+    this._interaction?.unbind();
     this._renderer.detach();
     return this;
   }
+
+
+  /**
+   * Turns on built-in pointer interaction, or updates its options if it's
+   * already on. While a canvas is attached, dragging a node moves it,
+   * dragging the background pans, and the wheel zooms, each emitting events
+   * (see `on()`) whose listeners can call `preventDefault()` to stop the
+   * built-in response. Canvases that can't receive pointer input, such as an
+   * `OffscreenCanvas`, are ignored.
+   * @param {InteractionOptsInput} [opts={}] - options to set. Options left
+   *    `undefined` keep their current value, or their default when turning
+   *    interaction on.
+   * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid
+   */
+  enableInteraction(opts = {}) {
+    if (this._interaction) {
+      this._interaction.setOpts(opts);
+      return this;
+    }
+    this._interaction = new Interaction(this, (type, data) => this._emit(type, data), opts);
+    if (this.canvas) this._interaction.bind(this.canvas);
+    return this;
+  }
+
+
+  /**
+   * Turns off built-in pointer interaction. A drag in progress ends without
+   * events, unpinning the dragged node. Turning interaction on again starts
+   * from the default options.
+   * @returns {this} self reference
+   */
+  disableInteraction() {
+    this._interaction?.unbind();
+    this._interaction = null;
+    return this;
+  }
+
+
+  /**
+   * Returns whether built-in pointer interaction is on.
+   * @returns {boolean} whether interaction is on
+   */
+  isInteractive() { return this._interaction !== null; }
+
+
+  /**
+   * Current interaction options, or `null` while interaction is off
+   * @type {Readonly<InteractionOpts> | null}
+   */
+  get interactionOpts() { return this._interaction?.opts ?? null; }
 
 
   /**
@@ -153,8 +258,8 @@ export class GraphJS {
   /**
    * Adds a node to the `Graph`. Delegates to `Graph.addNode()`.
    * @param {NodeData} [data={}] - data for the node
-   * @param {any} [id=undefined] - node id
-   * @returns {any} - id of the node added
+   * @param {NodeId} [id=undefined] - node id
+   * @returns {NodeId} - id of the node added
    */
   addNode(data = {}, id = undefined) { return this.graph.addNode(data, id); }
 
@@ -162,8 +267,8 @@ export class GraphJS {
   /**
    * Adds an edge to the `Graph` based on source and destination node ids.
    * Delegates to `Graph.addEdge()`.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @param {any} data - data for the edge
    * @returns {boolean} - whether the edge was successfully added
    */
@@ -172,7 +277,7 @@ export class GraphJS {
 
   /**
    * Removes a node from the `Graph`. Delegates to `Graph.removeNode()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {boolean} success of the removal
    */
   removeNode(id) { return this.graph.removeNode(id); }
@@ -181,8 +286,8 @@ export class GraphJS {
   /**
    * Removes an edge from the `Graph` based on source and destination id.
    * Delegates to `Graph.removeEdge()`.
-   * @param {any} srcId - source node id
-   * @param {any} destId - destination node id
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
    * @returns {boolean} success of the removal
    */
   removeEdge(srcId, destId) { return this.graph.removeEdge(srcId, destId); }
@@ -194,14 +299,14 @@ export class GraphJS {
    * @returns {this} self reference
    */
   start() {
-    if (this._raf !== null || !this.canvas) return this;
+    if (this._loopFrame !== null || !this.canvas) return this;
     const frame = (/** @type {number} */ time) => {
-      if (!this.canvas) { this._raf = null; return; }
+      if (!this.canvas) { this._loopFrame = null; return; }
       // Schedule first, so that a hook calling stop() cancels the next frame
-      this._raf = requestAnimationFrame(frame);
+      this._loopFrame = requestAnimationFrame(frame);
       this._frame(time);
     };
-    this._raf = requestAnimationFrame(frame);
+    this._loopFrame = requestAnimationFrame(frame);
     this._tweenClock = null;
     return this;
   }
@@ -212,7 +317,7 @@ export class GraphJS {
    * @returns {this} self reference
    */
   stop() {
-    if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
+    if (this._loopFrame !== null) { cancelAnimationFrame(this._loopFrame); this._loopFrame = null; }
     this._tweenClock = null;
     return this;
   }
@@ -224,7 +329,7 @@ export class GraphJS {
    * @returns {this} self reference
    */
   step() {
-    this._frame(globalThis.performance?.now() ?? Date.now());
+    this._frame(now());
     return this;
   }
 
@@ -233,7 +338,52 @@ export class GraphJS {
    * Returns whether the simulation and renderer animation loop is running.
    * @returns {boolean} whether the animation loop is running
    */
-  isRunning() { return this._raf !== null; }
+  isRunning() { return this._loopFrame !== null; }
+
+
+  /**
+   * Draws a frame on the next animation frame while the loop isn't running,
+   * and keeps drawing one each frame while a tween or highlight fade is in
+   * progress, then stops. Each frame advances tweens and renders, but doesn't
+   * tick the simulation or run loop hooks. Requests made in the same frame
+   * draw once, and a request while the loop runs does nothing, since the
+   * loop draws anyway.
+   *
+   * Call it after changing what's drawn while the loop is stopped, such as
+   * highlighting from a hover listener. Built-in interaction calls it itself.
+   * @returns {this} self reference
+   */
+  requestRender() {
+    if (this._onDemandFrame !== null || this.isRunning() || !this.canvas) return this;
+    if (typeof requestAnimationFrame !== "function") {
+      // No frames to wait for: draw once now
+      const time = now();
+      this.stepTweens(time);
+      this._renderer.render(time);
+      return this;
+    }
+    this._onDemandFrame = requestAnimationFrame(time => {
+      this._onDemandFrame = null;
+      // The loop may have started since, and draws this frame itself
+      if (this.isRunning() || !this.canvas) return;
+      this.stepTweens(time);
+      this._renderer.render(time);
+      if (this.isTweening() || this._renderer.isFading()) this.requestRender();
+    });
+    return this;
+  }
+
+
+  /**
+   * Cancels a pending `requestRender()` frame, if any.
+   * @returns {void}
+   * @private
+   */
+  _cancelRenderRequest() {
+    if (this._onDemandFrame === null) return;
+    cancelAnimationFrame(this._onDemandFrame);
+    this._onDemandFrame = null;
+  }
 
 
   /**
@@ -252,7 +402,7 @@ export class GraphJS {
    * @returns {this} self reference
    */
   addHook(type, f) {
-    this._hooks[type].add(f);
+    this._hooks.add(type, f);
     return this;
   }
 
@@ -265,7 +415,7 @@ export class GraphJS {
    * @returns {boolean} whether the hook existed
    */
   removeHook(type, f) {
-    return this._hooks[type].delete(f);
+    return this._hooks.remove(type, f);
   }
 
 
@@ -278,12 +428,7 @@ export class GraphJS {
    * @private
    */
   _runHooks(type, time) {
-    const hooks = this._hooks[type];
-    if (hooks.size === 0) return;
-    for (const f of [...hooks]) {
-      try { f(this, time); }
-      catch (err) { console.error(`GraphJS: ${type} hook failed`, err); }
-    }
+    this._hooks.run(type, f => f(this, time));
   }
 
 
@@ -382,7 +527,7 @@ export class GraphJS {
    *    `performance.now()`.
    * @returns {this} self reference
    */
-  stepTweens(time = globalThis.performance?.now() ?? Date.now()) {
+  stepTweens(time = now()) {
     if (this._tweens.size === 0) return this;
     const dt = this._tweenClock === null ? 0 : Math.max(time - this._tweenClock, 0);
     this._tweenClock = time;
@@ -400,7 +545,7 @@ export class GraphJS {
    * @throws {Error} throws if no canvas is attached
    */
   simToCanvas(x, y) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.simToCanvas(x, y);
   }
 
@@ -414,7 +559,7 @@ export class GraphJS {
    * @throws {Error} throws if no canvas is attached
    */
   canvasToSim(cx, cy) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.canvasToSim(cx, cy);
   }
 
@@ -427,51 +572,153 @@ export class GraphJS {
    * @param {number} cy - canvas space y coordinate
    * @param {number} [slack] - extra hit radius around each node, in canvas
    *    pixels (defaults to the renderer's default)
-   * @returns {any | null} id of node at coordinates, or `null` if no node
+   * @returns {NodeId | null} id of node at coordinates, or `null` if no node
    *    was found
    * @throws {Error} throws if no canvas is attached
    */
   nodeAt(cx, cy, slack = undefined) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+    this._requireCanvas();
     return this._renderer.nodeAt(cx, cy, slack);
   }
 
 
   /**
    * Returns the canvas space coordinates of a node based on id, or `null` if
-   * the node id was not found. Delegates to `Simulation.getPosition()`.
-   * @param {any} id - node id
+   * the node id was not found. Delegates to `Renderer.getPosition()`.
+   * @param {NodeId} id - node id
    * @returns {[number, number] | null} canvas space coordinates of the node,
    *    or `null` if the node id was not found
    * @throws {Error} throws if no canvas is attached
    */
   getPosition(id) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-    const p = this._simulation.getPosition(id);
-    return p ? this.simToCanvas(...p) : null;
+    this._requireCanvas();
+    return this._renderer.getPosition(id);
   }
 
 
   /**
    * Fixes the node with the specified id to a point in canvas space. Delegates
    * to `Simulation.pin()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @param {number} cx - canvas space x coordinate
    * @param {number} cy - canvas space y coordinate
    * @returns {boolean} whether the node was pinned (`false` if node not found)
    * @throws {Error} throws if no canvas is attached
    */
   pin(id, cx, cy) {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
     return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
+  }
+
+
+  /**
+   * Throws unless a canvas is attached. The canvas helpers check here first,
+   * so their error names `GraphJS`, the object the caller used, rather than
+   * the renderer they delegate to.
+   * @returns {void}
+   * @throws {Error} throws if no canvas is attached
+   * @private
+   */
+  _requireCanvas() {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
   }
 
 
   /**
    * Unpins a node by reverting `fixed` to its default. Delegates to
    * `Simulation.unpin()`.
-   * @param {any} id - node id
+   * @param {NodeId} id - node id
    * @returns {this} self reference
    */
   unpin(id) { this._simulation.unpin(id); return this; }
+
+
+  /**
+   * [read-only, set with `setView()` or the methods below] The `Renderer`'s
+   * current view: the simulation coordinates at the canvas centre, and the
+   * zoom (canvas px per simulation px).
+   *
+   * The view methods delegate to the `Renderer`'s. They don't emit events,
+   * and like other changes made from code, they show on the next render.
+   * @type {Readonly<View>}
+   */
+  get view() { return this._renderer.view; }
+
+
+  /**
+   * Sets some or all of the view. Delegates to `Renderer.setView()`.
+   * @param {Partial<View>} view - view values to set
+   * @returns {this} self reference
+   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
+   *    isn't a finite number above 0
+   */
+  setView(view) { this._renderer.setView(view); return this; }
+
+
+  /**
+   * Returns the view moved so the graph shifts by a distance on the canvas,
+   * without applying it. Delegates to `Renderer.viewPannedBy()`.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {View} the panned view
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  viewPannedBy(dx, dy) { return this._renderer.viewPannedBy(dx, dy); }
+
+
+  /**
+   * Shifts the graph by a distance on the canvas, as dragging the background
+   * does. Delegates to `Renderer.panBy()`.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {this} self reference
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  panBy(dx, dy) { this._renderer.panBy(dx, dy); return this; }
+
+
+  /**
+   * Returns the view at a zoom, anchored at a canvas point or the centre,
+   * without applying it. Delegates to `Renderer.viewZoomedTo()`.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {View} the zoomed view
+   * @throws {RangeError | TypeError | Error} throws as
+   *    `Renderer.viewZoomedTo()` does
+   */
+  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
+    return this._renderer.viewZoomedTo(zoom, cx, cy);
+  }
+
+
+  /**
+   * Sets the zoom, anchored at a canvas point or the centre. Delegates to
+   * `Renderer.zoomTo()`.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as
+   *    `Renderer.viewZoomedTo()` does
+   */
+  zoomTo(zoom, cx = undefined, cy = undefined) {
+    this._renderer.zoomTo(zoom, cx, cy);
+    return this;
+  }
+
+
+  /**
+   * Multiplies the zoom by a factor, anchored at a canvas point or the
+   * centre. Delegates to `Renderer.zoomBy()`.
+   * @param {number} factor - factor to multiply the zoom by
+   * @param {number} [cx] - canvas space x coordinate of the anchor
+   * @param {number} [cy] - canvas space y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `Renderer.zoomBy()`
+   *    does
+   */
+  zoomBy(factor, cx = undefined, cy = undefined) {
+    this._renderer.zoomBy(factor, cx, cy);
+    return this;
+  }
 }

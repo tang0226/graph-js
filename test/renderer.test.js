@@ -237,12 +237,13 @@ describe("Renderer: stroke scaling", () => {
     assert.deepEqual(strokes(ctx)[0], [1, 1], "no fade");
   });
 
-  test("setOpts clamps edge width limits to zero", () => {
+  test("setOpts rejects negative edge width limits, and changes nothing", () => {
     const { r } = scene(false, []);
-    r.setOpts({ minEdgeWidth: -1, maxEdgeWidth: -5, scaleStrokes: false });
-    assert.equal(r.opts.minEdgeWidth, 0);
-    assert.equal(r.opts.maxEdgeWidth, 0);
-    assert.equal(r.opts.scaleStrokes, false);
+    assert.throws(() => r.setOpts({ minEdgeWidth: -1, scaleStrokes: false }), RangeError);
+    assert.throws(() => r.setOpts({ maxEdgeWidth: -5 }), RangeError);
+    assert.deepEqual([r.opts.minEdgeWidth, r.opts.maxEdgeWidth, r.opts.scaleStrokes], [1, 8, true]);
+    r.setOpts({ minEdgeWidth: 0, maxEdgeWidth: Infinity });
+    assert.deepEqual([r.opts.minEdgeWidth, r.opts.maxEdgeWidth], [0, Infinity]);
   });
 });
 
@@ -267,8 +268,8 @@ describe("Renderer: style cascade", () => {
   test("setEdgeConfig throws for a missing edge rather than dropping the config", () => {
     const { r } = scene(true, [["a", "b"]]);
     // Reversed ids on a directed graph: the mistake a silent no-op would hide.
-    assert.throws(() => r.setEdgeConfig("b", "a", { color: "red" }), /Renderer:/);
-    assert.throws(() => r.setEdgeConfig("a", "nope", { color: "red" }), /Renderer:/);
+    assert.throws(() => r.setEdgeConfig("b", "a", { color: "red" }), /^ReferenceError: Renderer: no edge from "b" to "a"$/);
+    assert.throws(() => r.setEdgeConfig("a", "nope", { color: "red" }), { name: "ReferenceError", message: /^Renderer:/ });
   });
 
   test("setEdgeConfig accepts either id order in an undirected graph", () => {
@@ -385,10 +386,12 @@ describe("Renderer: images", () => {
   test("the source is cached as loading, then replaced by the image", async () => {
     const { r, restore } = imageScene();
     try {
-      assert.equal(r._images.get("a.png"), Renderer.IMAGE_LOADING);
+      assert.deepEqual(r.images.get("a.png"), { status: "loading", image: null });
       await flush();
-      assert.notEqual(r._images.get("a.png"), Renderer.IMAGE_LOADING);
-      assert.equal(typeof r._images.get("a.png"), "object");
+      const entry = r.images.get("a.png");
+      assert.equal(entry.status, "loaded");
+      assert.equal(typeof entry.image, "object");
+      assert.ok(entry.image);
     } finally { restore(); }
   });
 
@@ -418,7 +421,7 @@ describe("Renderer: images", () => {
     const { r, ctx, restore } = imageScene(() => true);
     try {
       await flush();
-      assert.equal(r._images.get("a.png"), Renderer.IMAGE_FAILED);
+      assert.deepEqual(r.images.get("a.png"), { status: "failed", image: null });
       ctx.ops.length = 0;
       // The stub ctx throws on a non-image source, matching the browser.
       r.render();
@@ -445,7 +448,7 @@ describe("Renderer: images", () => {
 
       const live = new Set();
       for (const style of r.nodes.values()) if (style.image) live.add(style.image);
-      const dead = [...r._images.keys()].filter(src => !live.has(src));
+      const dead = [...r._imageCache._images.keys()].filter(src => !live.has(src));
       assert.ok(dead.length <= 17, `cache retained ${dead.length} dead entries`);
     } finally { restore(); }
   });
@@ -459,11 +462,11 @@ describe("Renderer: images", () => {
       const sim = new Simulation(g, {});
       const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
       r.sync();
-      assert.equal(r._images.get("late.png"), Renderer.IMAGE_LOADING);
+      assert.equal(r.images.get("late.png").status, "loading");
 
-      r._images.delete("late.png");          // simulate the sweep landing first
+      r._imageCache._images.delete("late.png");          // simulate the sweep landing first
       await flush();                          // then the load completes
-      assert.equal(r._images.has("late.png"), false,
+      assert.equal(r._imageCache._images.has("late.png"), false,
         "an in-flight load must not re-add an entry for a node that is gone");
     } finally { restore(); }
   });
@@ -715,25 +718,25 @@ describe("Renderer: sprites", () => {
   describe("cache", () => {
     const SPRITE_64 = 64 * 64 * 4;
 
-    test("defaults to 64 MB; negative budgets are clamped to 0", async () => {
-      const s = await spriteScene({ opts: { imageCacheMB: -1 } });
-      try {
-        assert.equal(s.r.opts.imageCacheMB, 0);
-        s.r.setOpts({ imageCacheMB: 64 });
-        assert.equal(scene(false, []).r.opts.imageCacheMB, 64);
-      } finally { s.restore(); }
+    test("defaults to 64 MB; negative budgets are rejected", () => {
+      assert.equal(scene(false, []).r.opts.imageCacheMB, 64);
+      assert.throws(() => scene(false, [], { opts: { imageCacheMB: -1 } }), RangeError);
+      const { r } = scene(false, []);
+      assert.throws(() => r.setOpts({ imageCacheMB: NaN }), RangeError);
+      r.setOpts({ imageCacheMB: 0 });
+      assert.equal(r.opts.imageCacheMB, 0);
     });
 
     test("sprites on screen are kept even over budget; unused ones are evicted and closed", async () => {
       const s = await spriteScene({ opts: { imageCacheMB: 0.001 } });
       try {
         s.r.render();
-        assert.equal(s.r._spriteBytes, SPRITE_64, "the visible sprite stays despite the budget");
+        assert.equal(s.r._imageCache._spriteBytes, SPRITE_64, "the visible sprite stays despite the budget");
         const [sprite64] = s.bitmaps;
         s.r.view.zoom = 2;
         s.r.render();
-        assert.deepEqual([...s.r._spriteCache.get("a.png").sprites.keys()], [128]);
-        assert.equal(s.r._spriteBytes, 128 * 128 * 4);
+        assert.deepEqual([...s.r._imageCache._spriteCache.get("a.png").sprites.keys()], [128]);
+        assert.equal(s.r._imageCache._spriteBytes, 128 * 128 * 4);
         assert.equal(sprite64.closed, true, "eviction must free the pixels, not wait for GC");
         assert.equal(s.bitmaps[1].closed, false);
       } finally { s.restore(); }
@@ -747,9 +750,9 @@ describe("Renderer: sprites", () => {
         s.r.render();
         s.r.setOpts({ imageCacheMB: SPRITE_64 / 1024 / 1024 });
         s.r.render();
-        assert.equal(s.r._spriteCache.get("a.png").sprites.size, 1);
-        assert.equal(s.r._spriteCache.get("b.png").sprites.size, 0);
-        assert.equal(s.r._spriteBytes, SPRITE_64);
+        assert.equal(s.r._imageCache._spriteCache.get("a.png").sprites.size, 1);
+        assert.equal(s.r._imageCache._spriteCache.get("b.png").sprites.size, 0);
+        assert.equal(s.r._imageCache._spriteBytes, SPRITE_64);
       } finally { s.restore(); }
     });
 
@@ -759,12 +762,12 @@ describe("Renderer: sprites", () => {
       try {
         s.r.render();
         s.r.render();
-        assert.equal(s.r._spriteBytes, 17 * SPRITE_64);
+        assert.equal(s.r._imageCache._spriteBytes, 17 * SPRITE_64);
         for (const id of ids) s.g.removeNode(id);        // 17 removals pass the GC threshold
         s.r.sync();
-        assert.equal(s.r._spriteBytes, 0);
-        assert.equal(s.r._spriteLru.size, 0);
-        assert.equal(s.r._spriteCache.size, 0);
+        assert.equal(s.r._imageCache._spriteBytes, 0);
+        assert.equal(s.r._imageCache._spriteLru.size, 0);
+        assert.equal(s.r._imageCache._spriteCache.size, 0);
         assert.ok(s.bitmaps.every(b => b.closed), "every dropped sprite is closed");
       } finally { s.restore(); }
     });
@@ -925,6 +928,37 @@ describe("Renderer: resize and canvas kinds", () => {
   });
 });
 
+describe("Renderer: option checks", () => {
+  test("invalid options throw, naming the option, and change nothing", () => {
+    const { r } = scene(false, []);
+    const before = { ...r.opts };
+    for (const [bad, pattern] of [
+      [{ background: 0 }, /^TypeError: Renderer: `background` must be a string$/],
+      [{ renderEdges: 1 }, /renderEdges/],
+      [{ labelMargin: NaN }, /labelMargin/],
+      [{ highlightMode: "fade" }, /highlightMode/],
+      [{ highlightAlpha: NaN }, /^RangeError: Renderer: `highlightAlpha`/],
+      [{ crossOrigin: "anon" }, /crossOrigin/],
+      [{ imageReferrerPolicy: "no-referer" }, /imageReferrerPolicy/],
+      [{ colour: "red" }, /^TypeError: Renderer: unknown option `colour`$/],
+      [{ background: "#000", highlightAlpha: 2 }, /highlightAlpha/],
+    ]) assert.throws(() => r.setOpts(bad), pattern, JSON.stringify(bad));
+    assert.deepEqual(r.opts, before, "a rejected call changes nothing, including its valid options");
+  });
+
+  test("the constructor checks options too", () => {
+    assert.throws(() => scene(false, [], { opts: { labelPosition: "middle" } }), RangeError);
+    assert.throws(() => scene(false, [], { opts: { bg: "#000" } }), TypeError);
+  });
+
+  test("a null crossOrigin and undefined values are accepted", () => {
+    const { r } = scene(false, []);
+    r.setOpts({ crossOrigin: null, background: undefined });
+    assert.equal(r.opts.crossOrigin, null);
+    assert.equal(r.opts.background, "#ffffff", "undefined keeps the current value");
+  });
+});
+
 describe("Renderer: options", () => {
   const sim = () => new Simulation(new Graph(), {});
 
@@ -1039,13 +1073,13 @@ describe("Renderer: labels", () => {
       assert.equal(style.labelScale, 15);
     });
 
-    test("negative label sizes are clamped to 0, in the constructor and setOpts", () => {
-      const { r } = scene(false, [], { opts: { minLabelSize: -1, maxLabelSize: -1 } });
-      assert.equal(r.opts.minLabelSize, 0);
-      assert.equal(r.opts.maxLabelSize, 0);
-      r.setOpts({ minLabelSize: -5, maxLabelSize: -5 });
-      assert.equal(r.opts.minLabelSize, 0);
-      assert.equal(r.opts.maxLabelSize, 0);
+    test("negative label sizes are rejected, in the constructor and setOpts", () => {
+      assert.throws(() => scene(false, [], { opts: { minLabelSize: -1 } }), RangeError);
+      const { r } = scene(false, []);
+      assert.throws(() => r.setOpts({ maxLabelSize: -5 }), RangeError);
+      assert.equal(r.opts.maxLabelSize, Infinity);
+      r.setOpts({ minLabelSize: 0, maxLabelSize: 0 });
+      assert.deepEqual([r.opts.minLabelSize, r.opts.maxLabelSize], [0, 0]);
     });
   });
 
@@ -1077,7 +1111,6 @@ describe("Renderer: labels", () => {
       ["right", [322, 300], "left", "middle"],
       ["left", [278, 300], "right", "middle"],
       ["bottom", [300, 322], "center", "top"],
-      ["sideways", [300, 322], "center", "top"],
     ]) {
       test(`position "${position}" anchors the label at ${at}`, () => {
         const { r, ctx } = lscene({ opts: { labelPosition: position } });
@@ -1087,6 +1120,11 @@ describe("Renderer: labels", () => {
         assert.equal(textState(ctx)[0].textBaseline, textBaseline);
       });
     }
+
+    test("an unknown position is rejected", () => {
+      assert.throws(() => lscene({ opts: { labelPosition: "sideways" } }),
+        /^RangeError: Renderer: `labelPosition` must be one of "bottom", "top", "left", "right"$/);
+    });
 
     test("position and margin can be changed with setOpts", () => {
       const { r, ctx } = lscene();
@@ -1503,7 +1541,7 @@ describe("Renderer: highlighting", () => {
       g.removeNode("a");                 // b moves from slot 1 to slot 0
       g.addNode({ id: "c" });
       r.render();
-      const flags = r._nodeHighlightState;
+      const flags = r._highlighter.nodeState;
       assert.equal(flags.length, sim.nodeList.length);
       assert.equal(flags[sim.nodeIndex.get("b")], 1);
       assert.equal(flags[sim.nodeIndex.get("c")], 0);
@@ -1627,20 +1665,20 @@ describe("Renderer: highlighting", () => {
       assert.equal(r.opts.highlightFadeDuration, 150);
     });
 
-    test("a negative highlightFadeDuration is clamped to 0", () => {
-      assert.equal(hscene({ highlightFadeDuration: -5 }).r.opts.highlightFadeDuration, 0);
+    test("a negative highlightFadeDuration is rejected", () => {
+      assert.throws(() => hscene({ highlightFadeDuration: -5 }), RangeError);
       const { r } = hscene();
-      r.setOpts({ highlightFadeDuration: -1 });
-      assert.equal(r.opts.highlightFadeDuration, 0);
+      assert.throws(() => r.setOpts({ highlightFadeDuration: -1 }), RangeError);
+      assert.equal(r.opts.highlightFadeDuration, 0, "unchanged from the scene's 0");
     });
 
-    test("highlightAlpha is clamped to [0, 1] on every path", () => {
-      assert.equal(hscene({ highlightAlpha: 5 }).r.opts.highlightAlpha, 1);
+    test("highlightAlpha outside [0, 1] is rejected on every path", () => {
+      assert.throws(() => hscene({ highlightAlpha: 5 }), RangeError);
       const { r } = hscene();
-      r.setOpts({ highlightAlpha: -1 });
-      assert.equal(r.opts.highlightAlpha, 0);
-      r.setHighlight({ nodes: ["a"], alpha: 2 });
-      assert.equal(r.opts.highlightAlpha, 1);
+      assert.throws(() => r.setOpts({ highlightAlpha: -1 }), RangeError);
+      assert.throws(() => r.setHighlight({ nodes: ["a"], alpha: 2 }), RangeError);
+      assert.equal(r.opts.highlightAlpha, 0.15);
+      assert.equal(r.hasHighlight(), false, "a rejected setHighlight changes nothing");
     });
 
     test("setHighlight's mode and alpha are kept; omitting them leaves the options alone", () => {
@@ -1933,6 +1971,14 @@ describe("Renderer: picking", () => {
     return [x, y + px];
   };
 
+  test("a node removed from the graph isn't found, even before the simulation syncs", () => {
+    const { g, sim, r } = scene(false, []);
+    assert.equal(r.nodeAt(300, 300), "a");
+    g.removeNode("a");
+    assert.ok(sim.nodes.has("a"), "the simulation hasn't synced yet");
+    assert.equal(r.nodeAt(300, 300), null);
+  });
+
   test("the default slack is 2 canvas pixels at every zoom", () => {
     const { r } = scene(false, []);
     for (const zoom of [0.5, 1, 4]) {
@@ -1972,5 +2018,116 @@ describe("Renderer: picking", () => {
     // Canvas (400,300) is 100px from both nodes; 80px of slack reaches both
     assert.equal(r.nodeAt(400, 300), null);
     assert.equal(r.nodeAt(400, 300, 80 + EPS), "b");
+  });
+});
+
+describe("Renderer: view", () => {
+  const plain = () => new Renderer(new Simulation(new Graph(), {}), {});
+  // 800x600 canvas, so canvas (400, 300) is the view centre
+  const attached = () => {
+    const r = plain();
+    r.attach(makeCanvas());
+    return r;
+  };
+  const view = r => ({ ...r.view });
+
+  test("setView sets part or all of the view, in place", () => {
+    const r = plain();
+    const live = r.view;
+    assert.equal(r.setView({ zoom: 2 }), r);
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 2 });
+    r.setView({ x: 5, y: -5, zoom: 0.5 });
+    assert.deepEqual(view(r), { x: 5, y: -5, zoom: 0.5 });
+    r.setView({ x: undefined });
+    assert.deepEqual(view(r), { x: 5, y: -5, zoom: 0.5 }, "undefined values are left alone");
+    assert.equal(r.view, live, "the view object is updated, not replaced");
+  });
+
+  test("setView rejects bad values and changes nothing", () => {
+    const r = plain();
+    for (const bad of [{ x: NaN }, { y: Infinity }, { zoom: 0 }, { zoom: -1 }, { zoom: Infinity }, { x: 1, zoom: 0 }]) {
+      assert.throws(() => r.setView(bad), RangeError, JSON.stringify(bad));
+    }
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 1 });
+  });
+
+  test("assigning the view is checked the same way", () => {
+    const r = plain();
+    r.view = { x: 3, zoom: 2 };
+    assert.deepEqual(view(r), { x: 3, y: 0, zoom: 2 });
+    assert.throws(() => { r.view = { zoom: 0 }; }, RangeError);
+    assert.throws(() => { r.view = { x: 1, y: NaN }; }, RangeError);
+    assert.deepEqual(view(r), { x: 3, y: 0, zoom: 2 }, "a rejected assignment changes nothing");
+  });
+
+  test("panBy shifts the graph on the canvas by the distance given, at any zoom", () => {
+    const r = attached();
+    for (const zoom of [1, 2, 0.5]) {
+      r.setView({ x: 10, y: 20, zoom });
+      const before = r.simToCanvas(0, 0);
+      assert.equal(r.panBy(30, -40), r);
+      const after = r.simToCanvas(0, 0);
+      assert.deepEqual([after[0] - before[0], after[1] - before[1]].map(r2), [30, -40]);
+    }
+  });
+
+  test("viewPannedBy returns the panned view without applying it", () => {
+    const r = plain();
+    r.setView({ zoom: 2 });
+    const v = r.viewPannedBy(10, 20);
+    assert.deepEqual(v, { x: -5, y: -10, zoom: 2 });
+    assert.notEqual(v, r.view);
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 2 });
+    assert.throws(() => r.viewPannedBy(NaN, 0), RangeError);
+    assert.throws(() => r.panBy(0, Infinity), RangeError);
+  });
+
+  test("zoomTo keeps the anchor point fixed, or the centre without one", () => {
+    const r = attached();
+    r.setView({ x: 10, y: 20, zoom: 1 });
+    const anchor = r.canvasToSim(100, 500);
+    assert.equal(r.zoomTo(3, 100, 500), r);
+    assert.equal(r.view.zoom, 3);
+    assert.deepEqual(r.simToCanvas(...anchor).map(r2), [100, 500]);
+
+    const centre = r.canvasToSim(400, 300);
+    r.zoomTo(0.5);
+    assert.equal(r.view.zoom, 0.5);
+    assert.deepEqual(r.simToCanvas(...centre).map(r2), [400, 300], "the centre stays");
+  });
+
+  test("zoomBy multiplies the zoom, anchored the same way", () => {
+    const r = attached();
+    r.setView({ x: 0, y: 0, zoom: 2 });
+    const anchor = r.canvasToSim(700, 100);
+    assert.equal(r.zoomBy(1.5, 700, 100), r);
+    assert.equal(r.view.zoom, 3);
+    assert.deepEqual(r.simToCanvas(...anchor).map(r2), [700, 100]);
+    r.zoomBy(0.5);
+    assert.equal(r.view.zoom, 1.5);
+    for (const bad of [0, -2, NaN]) assert.throws(() => r.zoomBy(bad), RangeError);
+  });
+
+  test("viewZoomedTo returns the zoomed view without applying it", () => {
+    const r = attached();
+    const v = r.viewZoomedTo(2, 600, 300);
+    assert.deepEqual(v, { x: 100, y: 0, zoom: 2 }, "sim (200, 0) stays at canvas (600, 300)");
+    assert.deepEqual(view(r), { x: 0, y: 0, zoom: 1 });
+  });
+
+  test("zooming rejects bad zooms and half or non-finite anchors", () => {
+    const r = attached();
+    for (const bad of [0, -1, NaN, Infinity]) assert.throws(() => r.zoomTo(bad), RangeError);
+    assert.throws(() => r.zoomTo(2, 100), TypeError);
+    assert.throws(() => r.zoomTo(2, undefined, 100), TypeError);
+    assert.throws(() => r.zoomTo(2, NaN, 100), RangeError);
+    assert.equal(r.view.zoom, 1);
+  });
+
+  test("without a canvas, panning and centre zooms work, but anchored zooms throw", () => {
+    const r = plain();
+    r.panBy(10, 0).zoomTo(2).zoomBy(2);
+    assert.deepEqual(view(r), { x: -10, y: 0, zoom: 4 });
+    assert.throws(() => r.zoomTo(2, 0, 0), /no canvas/);
   });
 });

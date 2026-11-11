@@ -1,29 +1,36 @@
 /** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs/simulation.js' */
 
-/** @type {BarnesHutOpts} */
-const DEFAULT_BH_CONFIG = {
-  capacity: 1024,
-  theta: 0.9,
-  maxDepth: 20,
-};
+import { growF64, growI32 } from "./utils.js";
+import { BARNES_HUT_DEFAULTS } from "./defaults.js";
+import { checkEach, checkKnownKeys, checkNumber } from "./validate.js";
 
+
+/** Every Barnes-Hut option name */
+const OPTION_NAMES = new Set(Object.keys(BARNES_HUT_DEFAULTS));
 
 
 /**
- * Copies a typed array into a new, larger one of the same type.
- * @param {Float64Array} a - array to copy
- * @param {number} n - new length
- * @returns {Float64Array} new array
+ * Throws if Barnes-Hut options are invalid, without changing anything.
+ * @param {string} owner - name that starts the error message
+ * @param {BarnesHutOptsInput} opts - options to check
+ * @param {string} [prefix] - prefix for option names in the message, such as
+ *    "barnesHut."
+ * @returns {void}
+ * @throws {TypeError | RangeError} throws if an option is invalid
  */
-const growF64 = (a, n) => { const b = new Float64Array(n); b.set(a); return b; };
+export function checkBarnesHutOpts(owner, opts, prefix = "") {
+  checkKnownKeys(owner, opts, OPTION_NAMES, prefix);
+  /** @type {Record<keyof BarnesHutOpts, (v: any) => void>} */
+  const rules = {
+    // 0 is allowed: the cell pool grows from any capacity
+    capacity: v => checkNumber(owner, prefix + "capacity", v, { min: 0, integer: true }),
+    maxDepth: v => checkNumber(owner, prefix + "maxDepth", v, { min: 0, integer: true }),
+    theta: v => checkNumber(owner, prefix + "theta", v, { min: 0 }),
+  };
+  checkEach(opts, rules);
+}
 
-/**
- * Copies a typed array into a new, larger one of the same type.
- * @param {Int32Array} a - array to copy
- * @param {number} n - new length
- * @returns {Int32Array} new array
- */
-const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
+
 
 
 
@@ -32,21 +39,21 @@ const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
  */
 export class BarnesHutContext {
   /** @private @type {number} */
-  _capacity = DEFAULT_BH_CONFIG.capacity;
+  _capacity = BARNES_HUT_DEFAULTS.capacity;
   /**
    * Cell pool capacity
    */
   get capacity() { return this._capacity; }
 
   /** @private @type {number} */
-  _maxDepth = DEFAULT_BH_CONFIG.maxDepth;
+  _maxDepth = BARNES_HUT_DEFAULTS.maxDepth;
   /**
    * Max depth of quadtree
    */
   get maxDepth() { return this._maxDepth; }
 
   /** @private @type {number} */
-  _theta = DEFAULT_BH_CONFIG.theta;
+  _theta = BARNES_HUT_DEFAULTS.theta;
   /**
    * Barnes-Hut theta value
    */
@@ -159,20 +166,20 @@ export class BarnesHutContext {
 
 
   /**
+   * Sets options. Options left `undefined` keep their current value, and
+   * nothing changes if any option is invalid.
    * @param {BarnesHutOptsInput} [opts={}] - options to set
    * @returns {void}
+   * @throws {TypeError | RangeError} throws if an option is invalid
    */
   setOpts(opts = {}) {
+    checkBarnesHutOpts("BarnesHutContext", opts);
     if (opts.capacity !== undefined) {
-      this._capacity = Math.max(opts.capacity, 0);
+      this._capacity = opts.capacity;
       this._reallocate();
     }
-    if (opts.maxDepth !== undefined) {
-      this._maxDepth = Math.max(opts.maxDepth, 0);
-    }
-    if (opts.theta !== undefined) {
-      this._theta = Math.max(opts.theta, 0);
-    }
+    if (opts.maxDepth !== undefined) this._maxDepth = opts.maxDepth;
+    if (opts.theta !== undefined) this._theta = opts.theta;
   }
 
 

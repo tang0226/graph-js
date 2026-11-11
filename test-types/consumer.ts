@@ -12,14 +12,19 @@ import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpat
 // Public types, re-exported from the package root
 import type {
   NodeId, NodeData, GraphNode, GraphEdge, GraphOpts,
+  GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
+  GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
   SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
   BarnesHutOpts, BarnesHutOptsInput,
+  SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
+  GraphJSPointerEventData, GraphJSNodeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
+  InteractionOptsInput, InteractionOpts,
   TweenValue, TweenUnit, Easing, EasingName, TweenOpts,
 } from "@tang0226/graph-js";
 
@@ -52,7 +57,14 @@ const directed: boolean = gjs.graph.directed;
 
 // Chainable methods return the facade, never an inner layer
 gjs.resize().stop().step();
+gjs.requestRender().requestRender().stop();   // draws on demand, and chains
 gjs.unpin("b").stop();
+// Pinning changes the simulation, so it's on GraphJS and the simulation, not the renderer
+gjs.simulation.pin("b", 0, 0);
+// @ts-expect-error -- not on the renderer
+gjs.renderer.pin("b", 0, 0);
+// @ts-expect-error -- not on the renderer
+gjs.renderer.unpin("b");
 
 // nodeAt takes an optional slack in canvas pixels, on the facade and the renderer
 gjs.nodeAt(10, 10);
@@ -111,6 +123,100 @@ gjs.addHook("overlay", timed);
 // @ts-expect-error -- a loop hook receives the GraphJS instance, not a renderer
 gjs.addHook("postRender", (hr: Renderer) => { hr.view.zoom; });
 
+// Events: the listener's event is typed by its name, on chains, off returns a boolean
+const onClick = (e: GraphJSEvent<"nodeclick">) => {
+  const id: NodeId = e.id;
+  const [x, y]: [number, number] = [e.x, e.y];
+  const dom: MouseEvent = e.originalEvent;
+  const type: "nodeclick" = e.type;
+  const owner: GraphJS = e.target;
+  if (!e.defaultPrevented) e.preventDefault();
+};
+const listenerRemoved: boolean = gjs.on("nodeclick", onClick).on("nodedrag", e => { e.id; }).off("nodeclick", onClick);
+gjs.on("backgroundclick", e => { const x: number = e.x; });
+// @ts-expect-error -- background clicks have no node
+gjs.on("backgroundclick", e => { e.id; });
+// View events carry the view they move to; pan also carries the pointer's movement
+gjs.on("pan", e => { const [dx, dy]: [number, number] = [e.dx, e.dy]; const z: number = e.view.zoom; e.preventDefault(); });
+gjs.on("panstart", e => { const v: Readonly<View> = e.view; });
+gjs.on("zoom", e => { const wheel: MouseEvent = e.originalEvent; const z: number = e.view.zoom; });
+// @ts-expect-error -- only pan events carry movement
+gjs.on("panend", e => { e.dx; });
+gjs.on("nodedrag", e => { const [dx, dy]: [number, number] = [e.dx, e.dy]; const id: NodeId = e.id; });
+// @ts-expect-error -- only drag moves carry movement, not their start
+gjs.on("nodedragstart", e => { e.dx; });
+gjs.on("nodepress", e => { const pressed: NodeId = e.id; const at: number = e.x; e.preventDefault(); });
+// @ts-expect-error -- a press has no movement
+gjs.on("nodepress", e => { e.dx; });
+// @ts-expect-error -- the event's view is read-only
+gjs.on("zoom", e => { e.view.zoom = 2; });
+// @ts-expect-error -- not an event name
+gjs.on("click", () => {});
+// @ts-expect-error -- a nodeclick listener can't be added for another event's type
+gjs.on("backgroundclick", onClick);
+// @ts-expect-error -- the event is read-only
+gjs.on("nodeclick", e => { e.type = "nodeclick"; });
+
+// View: read-only view, chainable changes, and computed views to apply later
+const viewNow: Readonly<View> = gjs.view;
+// @ts-expect-error -- the view is changed through setView and the view methods
+gjs.view.zoom = 2;
+gjs.setView({ zoom: 2 }).panBy(10, -5).zoomTo(1.5).zoomTo(2, 100, 100).zoomBy(1.2).zoomBy(0.8, 50, 50).stop();
+const target: View = gjs.viewZoomedTo(3, 400, 300);
+const panned: View = gjs.viewPannedBy(20, 0);
+gjs.tween({ set: ([x, y, z]) => gjs.setView({ x, y, zoom: z }), from: [viewNow.x, viewNow.y, viewNow.zoom], to: [target.x, target.y, target.zoom], duration: 400 });
+// @ts-expect-error -- a pan needs both distances
+gjs.panBy(10);
+// The same methods on the Renderer chain the Renderer
+const rChained: Renderer = r.setView({ x: 1 }).panBy(1, 1).zoomTo(2).zoomBy(1.1, 10, 10);
+const rTarget: View = r.viewZoomedTo(2, 10, 10);
+const rPanned: View = r.viewPannedBy(5, 5);
+
+// Interaction: opt-in by option or method, with typed options
+new GraphJS({ interaction: true });
+new GraphJS({ interaction: { dragNodes: false, dragThreshold: 6, maxZoom: Infinity } });
+// @ts-expect-error -- not an interaction option
+new GraphJS({ interaction: { scrollZoom: true } });
+// @ts-expect-error -- a threshold is a number
+gjs.enableInteraction({ dragThreshold: "4px" });
+const interactive: boolean = gjs.enableInteraction({ zoom: false }).disableInteraction().isInteractive();
+const iOpts: Readonly<InteractionOpts> | null = gjs.interactionOpts;
+// @ts-expect-error -- possibly null while interaction is off
+gjs.interactionOpts.zoom;
+const iInput: InteractionOptsInput = { pan: false };
+// @ts-expect-error -- the Interaction instance is internal
+gjs._interaction;
+
+// Graph events live on the graph, and are typed by name
+const onAdd = (e: GraphEvent<"nodeadd">) => { const id: NodeId = e.id; const node: GraphNode = e.node; const g: Graph = e.target; };
+const onEdge: GraphListener<"edgeadd" | "edgeremove"> = e => { const edge: GraphEdge = e.edge; const t: GraphEventType = e.type; };
+gjs.graph.on("nodeadd", onAdd).on("edgeadd", onEdge).on("edgeremove", onEdge);
+gjs.graph.on("edgedatachange", e => { const d: GraphEdgeEventData & GraphDataChangeEventData = e; });
+const nodeEventData: GraphNodeEventData = { id: "a", node: { id: "a", data: {} } };
+const graphMap: GraphEventMap["nodedatachange"] = { ...nodeEventData, prev: {} };
+// @ts-expect-error -- a removed node has no previous data
+gjs.graph.on("noderemove", e => { e.prev; });
+// @ts-expect-error -- graph events aren't on the facade
+gjs.on("nodeadd", () => {});
+
+// Simulation events live on the simulation, not the facade
+const onSettle = (e: SimEvent<"settle">) => { const s: Simulation = e.target; };
+const simListener: SimListener<"wake"> = e => { const k: SimEventType = e.type; };
+gjs.simulation.on("settle", onSettle).on("wake", simListener);
+const simEvents: SimEventMap = { settle: {}, wake: {} };
+// @ts-expect-error -- the facade's events are interaction events
+gjs.on("settle", () => {});
+// @ts-expect-error -- emitting is internal to the simulation
+gjs.simulation._emit("settle", {});
+
+// Image entries carry a status, and the image once loaded
+const entry: Readonly<ImageEntry> | undefined = gjs.renderer.images.get("a.png");
+if (entry?.status === "loaded") { const el: HTMLImageElement | null = entry.image; }
+// @ts-expect-error -- not a status
+const badStatus: ImageEntry["status"] = "pending";
+// @ts-expect-error -- the sentinel constants are gone
+Renderer.IMAGE_LOADING;
+
 // Internal members are private, so consumers can't depend on them
 // @ts-expect-error -- private
 gjs.simulation._temp;
@@ -118,6 +224,8 @@ gjs.simulation._temp;
 r._hooks;
 // @ts-expect-error -- private
 gjs._frame(0);
+// @ts-expect-error -- private
+gjs._emit("nodeclick", { id: "a", x: 0, y: 0, originalEvent: new MouseEvent("click") });
 
 // Layers are usable on their own
 const sim: Simulation = new Simulation(new Graph(), {});
@@ -143,6 +251,30 @@ const hookType: RendererHookType = "overlay";
 const hook: RendererHook = ring;
 const loopType: GraphJSHookType = "postTick";
 const loopHook: GraphJSHook = timed;
+const eventType: GraphJSEventType = "nodedragend";
+// Event data pieces each hold one concern, and events combine them
+const pointerData: GraphJSPointerEventData = { x: 0, y: 0, originalEvent: new MouseEvent("click") };
+const nodeData: GraphJSNodeEventData = { id: "a" };
+const move: GraphJSMoveEventData = { dx: 1, dy: 2 };
+const viewData: GraphJSViewEventData = { view: { x: 0, y: 0, zoom: 1 } };
+// @ts-expect-error -- pieces don't overlap: movement has no pointer position
+const movePosition: GraphJSMoveEventData = { x: 0, y: 0, dx: 1, dy: 2 };
+const clickData: GraphJSEventMap["nodeclick"] = { ...pointerData, ...nodeData };
+const panData: GraphJSEventMap["pan"] = { ...pointerData, ...viewData, ...move };
+const nodeDragData: GraphJSEventMap["nodedrag"] = { ...pointerData, ...nodeData, ...move };
+// @ts-expect-error -- a drag event needs its movement
+const stillData: GraphJSEventMap["nodedrag"] = clickData;
+const bgClickData: GraphJSEventMap["backgroundclick"] = pointerData;
+// @ts-expect-error -- a background click has no node
+const bgClick: GraphJSEventMap["backgroundclick"] = { x: 0, y: 0, originalEvent: new MouseEvent("click"), id: "a" };
+// One handler can serve both drags through the shared movement piece
+const onMove = (e: GraphJSEvent<"pan" | "nodedrag">) => { const m: GraphJSMoveEventData = e; const p: GraphJSPointerEventData = e; };
+gjs.on("pan", onMove).on("nodedrag", onMove);
+// A handler for every node event reads the node piece
+const onNode = (e: GraphJSEvent<"nodeenter" | "nodeleave" | "nodeclick">) => { const id: NodeId = e.id; };
+gjs.on("nodeenter", onNode).on("nodeleave", onNode).on("nodeclick", onNode);
+const listener: GraphJSListener<"nodeclick"> = onClick;
+const anyListener: GraphJSListener = e => { const t: GraphJSEventType = e.type; const ev: GraphJSEvent = e; };
 
 // Tweens: the setter gets a number for number tweens, an array for array tweens
 new GraphJS({ tweenUnit: "frames" });

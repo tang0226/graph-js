@@ -3,93 +3,71 @@
 /** @import { SimNode } from './typedefs/simulation.js' */
 /**
  * @import {
+ *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
+ *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
+ * } from './typedefs/internal/renderer.js'
+ */
+/**
+ * @import {
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
- *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
- *  NodeStyleAccessors, EdgeStyleAccessors,
- *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
- *  Canvas, CanvasContext, Size, View,
+ *  Canvas, CanvasContext, Size, View, ImageEntry,
  * } from './typedefs/renderer.js'
  */
 
 
 import { Simulation } from "./simulation.js";
-import { asFn, clamp, circleRectCollision } from "./utils.js";
+import { circleRectCollision, keysOf, now } from "./utils.js";
+import { ConfigCascade } from "./config-cascade.js";
+import { ImageCache, pickSpriteSize } from "./image-cache.js";
+import { Highlighter } from "./highlighter.js";
+import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
+import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
+import { HookRegistry } from "./hook-registry.js";
 
-
-/** @type {RendererOpts} */
-const RENDERER_DEFAULTS = {
-  background: "#ffffff",
-  renderEdges: true,
-  renderLabels: true,
-  labelFont: "Arial",
-  labelPosition: "bottom",
-  labelMargin: 2,
-  minLabelSize: 6,
-  maxLabelSize: Infinity,
-  scaleStrokes: true,
-  minEdgeWidth: 1,
-  maxEdgeWidth: 8,
-  highlightMode: "dim",
-  highlightAlpha: 0.15,
-  highlightFadeDuration: 150,
-  imageReferrerPolicy: "no-referrer",
-  crossOrigin: "anonymous",
-  imageCacheMB: 64,
-};
-
-/** @type {NodeStyle} */
-const NODE_STYLE_DEFAULTS = {
-  color: "#ffffff",
-  outlineColor: "#000000",
-  outlineWidth: 1,
-  image: null,
-  label: null,
-  renderLabel: true,
-  labelScale: 15,
-  labelTextColor: "#000000",
-};
-
-/** @type {EdgeStyle} */
-const EDGE_STYLE_DEFAULTS = {
-  color: "#000000",
-  width: 1,
-  arrow: null,
-  arrowSize: 10,
-  bow: 14,
-};
 
 /**
- * Converts a full node config object to accessor functions
- * @param {ResolvedNodeStyleConfig} config - config to convert
- * @returns {ResolvedNodeStyleAccessors} accessors
+ * Every drawing hook type. The type requires exactly the members of
+ * `RendererHookType`.
+ * @type {Record<RendererHookType, true>}
  */
-const toNodeAccessors = config => ({
-  color: asFn(config.color),
-  outlineColor: asFn(config.outlineColor),
-  outlineWidth: asFn(config.outlineWidth),
-  image: asFn(config.image),
-  label: asFn(config.label),
-  renderLabel: asFn(config.renderLabel),
-  labelScale: asFn(config.labelScale),
-  labelTextColor: asFn(config.labelTextColor),
-});
+const HOOK_NAMES = { background: true, overlay: true };
+const HOOK_TYPES = keysOf(HOOK_NAMES);
+
+/** Every renderer option name, including the setup and config options */
+const OPTION_NAMES = new Set([...Object.keys(RENDERER_DEFAULTS), "canvas", "nodeConfig", "edgeConfig"]);
+
+/** Every `ReferrerPolicy` value, for `imageReferrerPolicy` */
+const REFERRER_POLICIES = [
+  "", "no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin",
+  "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url",
+];
 
 /**
- * Converts a full edge config object to accessor functions
- * @param {ResolvedEdgeStyleConfig} config - config to convert
- * @returns {ResolvedEdgeStyleAccessors} accessors
+ * A check per renderer option
+ * @type {Record<keyof RendererOpts, (v: any) => void>}
  */
-const toEdgeAccessors = config => ({
-  color: asFn(config.color),
-  width: asFn(config.width),
-  arrow: asFn(config.arrow),
-  arrowSize: asFn(config.arrowSize),
-  bow: asFn(config.bow),
-});
-
+const OPTION_RULES = {
+  background:            v => checkString("Renderer", "background", v),
+  renderEdges:           v => checkBoolean("Renderer", "renderEdges", v),
+  renderLabels:          v => checkBoolean("Renderer", "renderLabels", v),
+  labelFont:             v => checkString("Renderer", "labelFont", v),
+  labelPosition:         v => checkOneOf("Renderer", "labelPosition", v, ["bottom", "top", "left", "right"]),
+  labelMargin:           v => checkNumber("Renderer", "labelMargin", v),
+  minLabelSize:          v => checkNumber("Renderer", "minLabelSize", v, { min: 0 }),
+  maxLabelSize:          v => checkNumber("Renderer", "maxLabelSize", v, { min: 0, allowInfinity: true }),
+  scaleStrokes:          v => checkBoolean("Renderer", "scaleStrokes", v),
+  minEdgeWidth:          v => checkNumber("Renderer", "minEdgeWidth", v, { min: 0 }),
+  maxEdgeWidth:          v => checkNumber("Renderer", "maxEdgeWidth", v, { min: 0, allowInfinity: true }),
+  highlightMode:         v => checkOneOf("Renderer", "highlightMode", v, ["dim", "hide"]),
+  highlightAlpha:        v => checkNumber("Renderer", "highlightAlpha", v, { min: 0, max: 1 }),
+  highlightFadeDuration: v => checkNumber("Renderer", "highlightFadeDuration", v, { min: 0 }),
+  imageReferrerPolicy:   v => checkOneOf("Renderer", "imageReferrerPolicy", v, REFERRER_POLICIES),
+  crossOrigin:           v => checkOneOf("Renderer", "crossOrigin", v, ["anonymous", "use-credentials", null]),
+  imageCacheMB:          v => checkNumber("Renderer", "imageCacheMB", v, { min: 0, allowInfinity: true }),
+};
 
 /**
  * Font size (px) labels are measured and drawn at. Each label is scaled to its
@@ -107,85 +85,15 @@ const MIN_EDGE_FADE = 0.05;
     skipped. */
 const MIN_OUTLINE_WIDTH = 0.05;
 
-/** Sizes (device px) that sprites of node images are made at. */
-const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
-
 /** Below this on-screen diameter (device px), an image node is drawn as a
     circle in the image's average colour. */
 const IMAGE_DOT_THRESHOLD = 6;
-
-/** Most sprites built in one frame. Nodes past the limit reuse a nearby
-    sprite (or the uncached path) until a later frame builds theirs. */
-const MAX_SPRITE_BUILDS_PER_FRAME = 16;
-
-/**
- * A sprite is one cached copy of a node image at one size from
- * `SPRITE_SIZES`: square, centre-cropped and already clipped to a circle, so
- * drawing it is a single `drawImage()`. Each image can have several sprites,
- * one per size it has been drawn at. An `ImageBitmap` where `OffscreenCanvas`
- * is available, otherwise a canvas.
- * @typedef {ImageBitmap | Canvas} Sprite
- */
-
-/**
- * Cached sprites of one image source, keyed by size, and its average
- * colour: `undefined` until computed, `null` if unreadable (e.g. a
- * cross-origin image).
- * @typedef {{ sprites: Map<number, Sprite>, avg: string | null | undefined }} SpriteEntry
- */
-
-/**
- * Picks the sprite size to draw an image at: the smallest size at least
- * as large as the on-screen size, but never larger than the source.
- * @param {number} needed - on-screen diameter in device px
- * @param {number} side - shorter side of the source image
- * @returns {number} sprite size in px
- */
-const pickSpriteSize = (needed, side) => {
-  let max = side < SPRITE_SIZES[0] ? Math.max(1, Math.floor(side)) : SPRITE_SIZES[0];
-  for (const t of SPRITE_SIZES) if (t <= side) max = t;
-  for (const t of SPRITE_SIZES) if (t >= needed) return Math.min(t, max);
-  return max;
-};
-
-/**
- * Gets a canvas's 2D context. Typed through a cast because `getContext` on a
- * `HTMLCanvasElement | OffscreenCanvas` union resolves unreliably in tsc.
- * @param {Canvas} canvas - canvas
- * @returns {CanvasContext | null} 2D context
- */
-const ctx2d = canvas => /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
-
-/**
- * Moves each alpha toward its target (1 when highlighted, `dim` otherwise) by
- * at most `step`.
- * @param {Float64Array} alphas - current alphas, updated in place
- * @param {Uint8Array} flags - highlight flags parallel to `alphas`
- * @param {number} dim - target alpha for non-highlighted elements
- * @param {number} step - largest alpha change allowed
- * @returns {boolean} whether every alpha has reached its target
- */
-const stepAlphas = (alphas, flags, dim, step) => {
-  let settled = true;
-  for (let i = 0; i < alphas.length; i++) {
-    const target = flags[i] ? 1 : dim, a = alphas[i];
-    if (a === target) continue;
-    let next = a < target ? Math.min(a + step, target) : Math.max(a - step, target);
-    if (Math.abs(next - target) < 1e-9) next = target;   // absorb float drift
-    alphas[i] = next;
-    if (next !== target) settled = false;
-  }
-  return settled;
-};
 
 
 /**
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
  */
 export class Renderer {
-  static IMAGE_LOADING = "loading";
-  static IMAGE_FAILED = "failed";
-
   /** @private @type {Graph} */
   _graph;
   /**
@@ -239,15 +147,17 @@ export class Renderer {
   /** @private @type {View} */
   _view = { x: 0, y: 0, zoom: 1 };
   /**
-   * Current viewing window of the `Renderer`. Directly mutable. Contains
-   * center simulation coordinates and a zoom factor (canvasPx/simPx).
+   * Current viewing window of the `Renderer`. Contains center simulation
+   * coordinates and a zoom factor (canvasPx/simPx). Assigning to it sets the
+   * values given, checked as `setView()` checks them.
    * @returns {View}
    */
   get view() { return this._view; }
   /**
    * @param {Partial<View>} v - view props to assign
+   * @throws {RangeError} throws as `setView()` does
    */
-  set view(v) { Object.assign(this._view, v); }
+  set view(v) { this.setView(v); }
 
 
   /** @private @type {Map<NodeId, NodeStyle>} */
@@ -270,8 +180,14 @@ export class Renderer {
   get edges() { return this._edges; }
 
 
-  /** @private @type {ResolvedNodeStyleConfig} */
-  _defaultNodeConfig = {...NODE_STYLE_DEFAULTS};
+  /**
+   * Node style config: the default node style config, and per-node overrides
+   * keyed by node id. A node's own overrides take priority over the default
+   * config, which takes priority over the global defaults.
+   * @type {ConfigCascade<ResolvedNodeStyleConfig, ResolvedNodeStyleAccessors, NodeId>}
+   * @private
+   */
+  _nodeConfig = new ConfigCascade(NODE_STYLE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultNodeConfig()`]
    * Current default node style config. During style resolution, it takes
@@ -279,60 +195,25 @@ export class Renderer {
    * nodes using `setNodeConfig()`.
    * @returns {Readonly<ResolvedNodeStyleConfig>}
    */
-  get defaultNodeConfig() { return this._defaultNodeConfig; }
+  get defaultNodeConfig() { return this._nodeConfig.defaults; }
 
 
-  /** @private @type {ResolvedEdgeStyleConfig} */
-  _defaultEdgeConfig = {...EDGE_STYLE_DEFAULTS};
   /**
+   * Edge style config: the default edge style config, and per-edge overrides
+   * keyed by edge object. An edge's own overrides take priority over the
+   * default config, which takes priority over the global defaults.
+   * @type {ConfigCascade<ResolvedEdgeStyleConfig, ResolvedEdgeStyleAccessors, GraphEdge>}
+   * @private
+   */
+  _edgeConfig = new ConfigCascade(EDGE_STYLE_DEFAULTS);
+  /**
+   * [read-only, set with `setDefaultEdgeConfig()`]
    * Current default edge style config. During style resolution, it takes
    * precedence over global config defaults, but can be overriden for specific
-   * edges in `_edgeOverrides`.
+   * edges using `setEdgeConfig()`.
    * @returns {Readonly<ResolvedEdgeStyleConfig>}
    */
-  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
-
-
-  /**
-   * Node-specific style config overrides. Node style config here takes
-   * precedence over global defaults and the `Renderer`'s current
-   * `_defaultNodeConfig`
-   * @type {Map<NodeId, NodeStyleAccessors>}
-   * @private
-   */
-  _nodeOverrides = new Map();
-
-  /**
-   * Edge-specific style config overrides. Edge style config here takes
-   * precedence over global defaults and the `Renderer`'s current
-   * `_defaultEdgeConfig`
-   * @type {Map<GraphEdge, EdgeStyleAccessors>}
-   * @private
-   */
-  _edgeOverrides = new Map();
-
-  /**
-   * `_defaultNodeConfig` as cached functions. Used to apply the `Renderer`'s
-   * default config when resolving a node's raw style.
-   * @type {ResolvedNodeStyleAccessors}
-   * @private
-   */
-  _nodeAccessors = toNodeAccessors(NODE_STYLE_DEFAULTS);
-
-  /**
-   * `_defaultEdgeConfig` as cached functions. Used to apply the `Renderer`'s
-   * default config when resolving a edge's raw style.
-   * @type {ResolvedEdgeStyleAccessors}
-   * @private
-   */
-  _edgeAccessors = toEdgeAccessors(EDGE_STYLE_DEFAULTS);
-
-  /**
-   * Whether a style config changed since the last effective `sync()`
-   * @type {boolean}
-   * @private
-   */
-  _stylesDirty = false;
+  get defaultEdgeConfig() { return this._edgeConfig.defaults; }
 
 
   /** @private @type {NodeStyle[]} */
@@ -366,55 +247,23 @@ export class Renderer {
   _edgeBow = new Int8Array(0);
 
 
-  /** @private @type {Set<NodeId>}*/
-  _highlightedNodes = new Set();
+  /**
+   * Highlight state: highlighted elements, per-slot flags, and the alphas
+   * that fade toward them
+   * @type {Highlighter}
+   * @private
+   */
+  _highlighter = new Highlighter();
   /**
    * Ids of highlighted nodes. Modified via `highlight()`.
    * @returns {ReadonlySet<NodeId>}
    */
-  get highlightedNodes() { return this._highlightedNodes; }
-
-
-  /**
-   * Array of highlight state flags parallel to `Simulation.nodeList`
-   * @type {Uint8Array}
-   * @private
-   */
-  _nodeHighlightState = new Uint8Array(0);
-
-
-  /** @private @type {Set<GraphEdge>}*/
-  _highlightedEdges = new Set();
+  get highlightedNodes() { return this._highlighter.nodes; }
   /**
    * Highlighted edge objects. Modified via `highlight()`.
    * @returns {ReadonlySet<GraphEdge>}
    */
-  get highlightedEdges() { return this._highlightedEdges; }
-
-
-  /**
-   * Array of highlight state flags parallel to `Simulation.edgeList`
-   * @type {Uint8Array}
-   * @private
-   */
-  _edgeHighlightState = new Uint8Array(0);
-
-
-  /**
-   * Current drawing alpha of each node, parallel to `Simulation.nodeList`.
-   * Eased toward its highlight target over `highlightFadeDuration`.
-   * @type {Float64Array}
-   * @private
-   */
-  _nodeAlpha = new Float64Array(0);
-
-
-  /**
-   * Current drawing alpha of each edge, parallel to `Simulation.edgeList`.
-   * @type {Float64Array}
-   * @private
-   */
-  _edgeAlpha = new Float64Array(0);
+  get highlightedEdges() { return this._highlighter.edges; }
 
 
   /**
@@ -446,24 +295,6 @@ export class Renderer {
 
 
   /**
-   * Whether any element's alpha may still differ from its target. Set by
-   * anything that changes targets; cleared once a step finds all settled.
-   * @type {boolean}
-   * @private
-   */
-  _fadeActive = false;
-
-
-  /**
-   * Timestamp of the previous `render()`, or `null` when a fade has just
-   * started.
-   * @type {number | null}
-   * @private
-   */
-  _lastFrameTime = null;
-
-
-  /**
    * The canvas context's `globalAlpha` during the current faded draw.
    * @type {number}
    * @private
@@ -471,13 +302,18 @@ export class Renderer {
   _frameAlpha = 1;
 
 
-  /** @private @type {Map<string, HTMLImageElement | string>} */
-  _images = new Map();
   /**
-   * Cache of node image elements, keyed by source string.
-   * @returns {ReadonlyMap<string, HTMLImageElement | string>}
+   * Node images and their cached sprites
+   * @type {ImageCache}
+   * @private
    */
-  get images () { return this._images; }
+  _imageCache = new ImageCache();
+  /**
+   * [read-only] Node images, keyed by source: each entry's load `status`,
+   * and the `image` once it has loaded
+   * @returns {ReadonlyMap<string, Readonly<ImageEntry>>}
+   */
+  get images() { return this._imageCache.images; }
 
 
   /**
@@ -500,62 +336,12 @@ export class Renderer {
 
 
   /**
-   * Pre-clipped sprites and average colours, keyed by image source.
-   * @type {Map<string, SpriteEntry>}
-   * @private
-   */
-  _spriteCache = new Map();
-
-
-  /**
-   * Recency order of cached sprites, least recently used first, keyed
-   * `size:src`. `frame` is the last frame the sprite was drawn in.
-   * @type {Map<string, { src: string, size: number, bytes: number, frame: number }>}
-   * @private
-   */
-  _spriteLru = new Map();
-
-
-  /** Total bytes held by cached sprites. @type {number} @private */
-  _spriteBytes = 0;
-
-
-  /** Counter incremented once per `render()`. @type {number} @private */
-  _frameId = 0;
-
-
-  /** Sprites built during the current frame. @type {number} @private */
-  _spriteBuilds = 0;
-
-
-  /**
-   * Reusable canvases sprites are built in, one per size. Only used with
-   * `OffscreenCanvas`, whose builds are handed off as `ImageBitmap`s.
-   * @type {Map<number, OffscreenCanvas>}
-   * @private
-   */
-  _spriteCanvases = new Map();
-
-
-  /**
-   * Scratch canvases for shrinking images by halves. Dropped after a frame
-   * that used them, so large sources don't pin memory.
-   * @type {Canvas[]}
-   * @private
-   */
-  _imgScratch = [];
-
-
-  /**
    * Hook functions by type, run by `render()`: "background" hooks after the
    * background fill, "overlay" hooks after everything else is drawn
-   * @type {Record<RendererHookType, Set<RendererHook>>}
+   * @type {HookRegistry<RendererHookType, RendererHook>}
    * @private
    */
-  _hooks = {
-    overlay: new Set(),
-    background: new Set(),
-  };
+  _hooks = new HookRegistry(HOOK_TYPES, "Renderer");
 
   
   /**
@@ -588,79 +374,25 @@ export class Renderer {
   constructor(simulation, opts = {}) {
     this._simulation = simulation;
     this._graph = simulation.graph;
-    const DF = RENDERER_DEFAULTS;
-    this._opts = {
-      background: opts.background ?? DF.background,
-      renderEdges: opts.renderEdges ?? DF.renderEdges,
-
-      renderLabels: opts.renderLabels ?? DF.renderLabels,
-      labelFont: opts.labelFont ?? DF.labelFont,
-      labelPosition: opts.labelPosition ?? DF.labelPosition,
-      labelMargin: opts.labelMargin ?? DF.labelMargin,
-      minLabelSize: Math.max(opts.minLabelSize ?? DF.minLabelSize, 0),
-      maxLabelSize: Math.max(opts.maxLabelSize ?? DF.maxLabelSize, 0),
-
-      scaleStrokes: opts.scaleStrokes ?? DF.scaleStrokes,
-      minEdgeWidth: Math.max(opts.minEdgeWidth ?? DF.minEdgeWidth, 0),
-      maxEdgeWidth: Math.max(opts.maxEdgeWidth ?? DF.maxEdgeWidth, 0),
-      
-      highlightMode: opts.highlightMode ?? DF.highlightMode,
-
-      highlightAlpha: clamp(
-        opts.highlightAlpha ?? DF.highlightAlpha, 0, 1),
-      
-      highlightFadeDuration: Math.max(
-        opts.highlightFadeDuration ?? DF.highlightFadeDuration, 0),
-      
-      imageCacheMB: Math.max(opts.imageCacheMB ?? DF.imageCacheMB, 0),
-      
-      imageReferrerPolicy: opts.imageReferrerPolicy ?? DF.imageReferrerPolicy,
-      
-      crossOrigin: opts.crossOrigin === undefined ?
-        DF.crossOrigin : opts.crossOrigin,
-    };
-
-    if (opts.canvas) this.attach(opts.canvas);
-
-    this.setDefaultNodeConfig(opts.nodeConfig ?? {});
-    this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
-    
+    this.setOpts(opts);
     this.sync();
   }
 
 
   /**
-   * Sets properties of `opts` using a partial object.
+   * Sets options. Options left `undefined` keep their current value. Nothing
+   * changes if any option is invalid.
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
    */
-  setOpts({
-    canvas, nodeConfig, edgeConfig,
-    minLabelSize, maxLabelSize, minEdgeWidth, maxEdgeWidth,
-    highlightAlpha, highlightFadeDuration, imageCacheMB,
-    ...opts
-  } = {}) {
-    Object.assign(this._opts, opts);
-    if (minLabelSize !== undefined) {
-      this._opts.minLabelSize = Math.max(minLabelSize, 0);
-    }
-    if (maxLabelSize !== undefined) {
-      this._opts.maxLabelSize = Math.max(maxLabelSize, 0);
-    }
-    if (minEdgeWidth !== undefined) {
-      this._opts.minEdgeWidth = Math.max(minEdgeWidth, 0);
-    }
-    if (maxEdgeWidth !== undefined) {
-      this._opts.maxEdgeWidth = Math.max(maxEdgeWidth, 0);
-    }
-    if (highlightAlpha !== undefined) {
-      this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
-    }
-    if (highlightFadeDuration !== undefined) {
-      this._opts.highlightFadeDuration = Math.max(highlightFadeDuration, 0);
-    }
-    if (imageCacheMB !== undefined) {
-      this._opts.imageCacheMB = Math.max(imageCacheMB, 0);
+  setOpts(optsInput = {}) {
+    checkKnownKeys("Renderer", optsInput, OPTION_NAMES);
+    const { canvas, nodeConfig, edgeConfig, ...opts } = optsInput;
+    checkEach(opts, OPTION_RULES);
+
+    for (const key of /** @type {(keyof RendererOpts)[]} */ (Object.keys(opts))) {
+      if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
     }
     // Cached label widths were measured in the old font
     if (opts.labelFont !== undefined) {
@@ -668,7 +400,7 @@ export class Renderer {
       this._labelsDirty = true;
     }
     // Mode and alpha set the dimmed target, so ease toward the new value
-    if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._startFade();
+    if (opts.highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
@@ -683,7 +415,8 @@ export class Renderer {
    * @throws {TypeError} throws if the canvas has no 2D context
    */
   attach(canvas) {
-    const ctx = canvas.getContext("2d");
+    // Cast: tsc resolves `getContext` on the canvas union unreliably
+    const ctx = /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
     if (!ctx) throw new TypeError("Renderer: canvas has no 2D context");
     this._canvas = canvas;
     this._ctx = ctx;
@@ -740,9 +473,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setDefaultNodeConfig(config = {}) {
-    this._defaultNodeConfig = { ...NODE_STYLE_DEFAULTS, ...this._defaultNodeConfig, ...config };
-    this._nodeAccessors = toNodeAccessors(this._defaultNodeConfig);
-    this._stylesDirty = true;
+    this._nodeConfig.setDefaults(config);
     return this;
   }
 
@@ -754,15 +485,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setNodeConfig(id, config = {}) {
-    /** @type {Record<string, any>} */
-    const merged = { ...this._nodeOverrides.get(id), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._nodeOverrides.set(
-      id,
-      /** @type {NodeStyleAccessors} */
-      merged
-    );
-    this._stylesDirty = true;
+    this._nodeConfig.set(id, config);
     return this;
   }
 
@@ -773,8 +496,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
-    this._nodeOverrides.delete(id);
-    this._stylesDirty = true;
+    this._nodeConfig.clear(id);
     return this;
   }
 
@@ -785,9 +507,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   setDefaultEdgeConfig(config = {}) {
-    this._defaultEdgeConfig = { ...EDGE_STYLE_DEFAULTS, ...this._defaultEdgeConfig, ...config };
-    this._edgeAccessors = toEdgeAccessors(this._defaultEdgeConfig);
-    this._stylesDirty = true;
+    this._edgeConfig.setDefaults(config);
     return this;
   }
 
@@ -798,20 +518,12 @@ export class Renderer {
    * @param {NodeId} destId - destination node id
    * @param {EdgeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
-   * @throws {Error} throws if edge not found
+   * @throws {ReferenceError} throws if the edge doesn't exist
    */
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) throw new Error(`Renderer: no edge from "${srcId}" to "${destId}"`);
-    /** @type {Record<string, any>} */
-    const merged = { ...this._edgeOverrides.get(gEdge), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._edgeOverrides.set(
-      gEdge,
-      /** @type {EdgeStyleAccessors} */
-      merged
-    );
-    this._stylesDirty = true;
+    if (!gEdge) throw new ReferenceError(`Renderer: no edge from "${srcId}" to "${destId}"`);
+    this._edgeConfig.set(gEdge, config);
     return this;
   }
 
@@ -824,9 +536,7 @@ export class Renderer {
    */
   clearEdgeConfig(srcId, destId) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) return this;
-    this._edgeOverrides.delete(gEdge);
-    this._stylesDirty = true;
+    if (gEdge) this._edgeConfig.clear(gEdge);
     return this;
   }
 
@@ -838,7 +548,7 @@ export class Renderer {
    * @private
    */
   _resolveNode(gNode, rNode) {
-    const acc = this._nodeAccessors, g = this._graph, o = this._nodeOverrides.get(gNode.id);
+    const acc = this._nodeConfig.accessors, g = this._graph, o = this._nodeConfig.overrides.get(gNode.id);
     rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
     rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
     rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
@@ -857,7 +567,7 @@ export class Renderer {
    * @private
    */
   _resolveEdge(gEdge, rEdge) {
-    const acc = this._edgeAccessors, g = this._graph, o = this._edgeOverrides.get(gEdge);
+    const acc = this._edgeConfig.accessors, g = this._graph, o = this._edgeConfig.overrides.get(gEdge);
     rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
     rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
     rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
@@ -899,22 +609,19 @@ export class Renderer {
   addHighlight({ nodes = [], edges = [] } = {}) {
     // Sync graph structure first
     this.sync();
-    
+
+    const hl = this._highlighter;
     for (const id of nodes) {
       const i = this.simulation.nodeIndex.get(id);
-      if (i === undefined) continue;
-      this._nodeHighlightState[i] = 1;
-      this._highlightedNodes.add(id);
+      if (i !== undefined) hl.addNode(id, i);
     }
     for (const idPair of edges) {
       const edge = this.graph.getEdge(...idPair);
       if (!edge) continue;
       const i = this.simulation.edgeIndex.get(edge);
-      if (i === undefined) continue;
-      this._edgeHighlightState[i] = 1;
-      this._highlightedEdges.add(edge);
+      if (i !== undefined) hl.addEdge(edge, i);
     }
-    this._startFade();
+    hl.startFade();
     return this;
   }
 
@@ -931,32 +638,21 @@ export class Renderer {
     // Sync graph structure first
     this.sync();
 
-    this._startFade();
+    const hl = this._highlighter;
+    hl.startFade();
 
     // Clear all if no elements are defined
     if (!nodes && !edges) {
-      this._highlightedNodes.clear();
-      this._nodeHighlightState.fill(0);
-      this._highlightedEdges.clear();
-      this._edgeHighlightState.fill(0);
+      hl.clear();
       return this;
     }
     if (nodes) {
-      for (const id of nodes) {
-        this._highlightedNodes.delete(id);
-        const i = this.simulation.nodeIndex.get(id);
-        if (i === undefined) continue;
-        this._nodeHighlightState[i] = 0;
-      }
+      for (const id of nodes) hl.removeNode(id, this.simulation.nodeIndex.get(id));
     }
     if (edges) {
       for (const idPair of edges) {
         const edge = this.graph.getEdge(...idPair);
-        if (!edge) continue;
-        this._highlightedEdges.delete(edge);
-        const i = this.simulation.edgeIndex.get(edge);
-        if (i === undefined) continue;
-        this._edgeHighlightState[i] = 0;
+        if (edge) hl.removeEdge(edge, this.simulation.edgeIndex.get(edge));
       }
     }
     return this;
@@ -966,9 +662,7 @@ export class Renderer {
   /**
    * @returns {boolean} whether the renderer has any highlighted elements
    */
-  hasHighlight() {
-    return this._highlightedNodes.size > 0 || this._highlightedEdges.size > 0;
-  }
+  hasHighlight() { return this._highlighter.has(); }
 
 
   /**
@@ -976,32 +670,7 @@ export class Renderer {
    * demand should keep calling `render()` while this is `true`.
    * @returns {boolean} whether a highlight fade is in progress
    */
-  isFading() { return this._fadeActive; }
-
-
-  /**
-   * Marks alpha targets as changed. Restarts the frame clock if no fade was
-   * running, so time spent idle isn't applied to the first step.
-   * @returns {void}
-   * @private
-   */
-  _startFade() {
-    if (this._fadeActive) return;
-    this._fadeActive = true;
-    this._lastFrameTime = null;
-  }
-
-
-  /**
-   * Target alpha for non-highlighted elements: 1 with no highlight, 0 when
-   * hiding, otherwise `highlightAlpha`.
-   * @returns {number} target alpha
-   * @private
-   */
-  _dimmedAlpha() {
-    if (!this.hasHighlight()) return 1;
-    return this._opts.highlightMode === "hide" ? 0 : this._opts.highlightAlpha;
-  }
+  isFading() { return this._highlighter.isFading(); }
 
 
   /**
@@ -1034,23 +703,15 @@ export class Renderer {
 
 
   /**
-   * Starts loading an image into the cache, keyed by its source. The entry
-   * holds `IMAGE_LOADING` until the request settles, then the loaded image or
-   * `IMAGE_FAILED`. Uses the renderer's current `crossOrigin` and
+   * Starts loading an image into the cache, keyed by its source. Its entry in
+   * `images` has the status "loading" until the request settles, then
+   * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
    * `imageReferrerPolicy`. A source that is already cached is not requested again.
    * @param {string} src - image source; also the cache key
    * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
    */
   loadImage(src) {
-    if (this._images.has(src)) return false;
-    this._images.set(src, Renderer.IMAGE_LOADING);
-    const img = new Image();
-    img.crossOrigin = this._opts.crossOrigin;
-    img.referrerPolicy = this._opts.imageReferrerPolicy;
-    img.onload  = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, img); };
-    img.onerror = () => { if (this._images.get(src) === Renderer.IMAGE_LOADING) this._images.set(src, Renderer.IMAGE_FAILED); };
-    img.src = src;
-    return true;
+    return this._imageCache.load(src, this._opts.crossOrigin, this._opts.imageReferrerPolicy);
   }
 
 
@@ -1060,269 +721,10 @@ export class Renderer {
    * @private
    */
   _garbageCollectImages() {
+    /** @type {Set<string>} */
     const live = new Set();
     for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
-    for (const src of this._images.keys()) {
-      if (live.has(src)) continue;
-      this._images.delete(src);
-      this._dropSprites(src);
-    }
-  }
-
-
-  /**
-   * Creates a canvas for building sprites, or returns `null` where no
-   * canvas can be made (e.g. Node), in which case images are drawn uncached.
-   * @param {number} w - width
-   * @param {number} h - height
-   * @returns {Canvas | null} new canvas
-   * @private
-   */
-  _createCanvas(w, h) {
-    if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
-    const doc = globalThis.document;
-    if (typeof doc?.createElement !== "function") return null;
-    const canvas = doc.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    return canvas;
-  }
-
-
-  /**
-   * Returns scratch canvas `i`, grown to at least `size` square.
-   * @param {number} i - scratch slot (0 or 1)
-   * @param {number} size - minimum side
-   * @returns {Canvas | null} scratch canvas
-   * @private
-   */
-  _scratchCanvas(i, size) {
-    const s = this._imgScratch[i];
-    if (s && s.width >= size && s.height >= size) return s;
-    const c = this._createCanvas(size, size);
-    if (c) this._imgScratch[i] = c;
-    return c;
-  }
-
-
-  /**
-   * Returns the canvas to build a sprite of `size` in. With
-   * `OffscreenCanvas`, one canvas per size is reused: each build is handed
-   * off with `transferToImageBitmap()`, which also leaves the canvas blank.
-   * Otherwise each sprite needs its own canvas.
-   * @param {number} size - sprite size
-   * @returns {Canvas | null} build canvas
-   * @private
-   */
-  _spriteCanvas(size) {
-    if (typeof OffscreenCanvas === "undefined") return this._createCanvas(size, size);
-    let canvas = this._spriteCanvases.get(size);
-    if (!canvas) {
-      canvas = new OffscreenCanvas(size, size);
-      this._spriteCanvases.set(size, canvas);
-    }
-    return canvas;
-  }
-
-
-  /**
-   * Builds a pre-clipped square sprite: centre-cropped, shrunk by halves
-   * (each step at most 2x, to avoid aliasing), then masked to a circle.
-   * Starts from the smallest cached sprite larger than `size` when there
-   * is one, rather than the full source. Also fills in the entry's average
-   * colour from the first sprite of 64 px or less.
-   * @param {HTMLImageElement} img - loaded source image
-   * @param {SpriteEntry} entry - cache entry for `img`
-   * @param {number} size - sprite size in px
-   * @returns {Sprite | null} the sprite, or `null` if no canvas could be made
-   * @private
-   */
-  _buildSprite(img, entry, size) {
-    const out = this._spriteCanvas(size);
-    const outCtx = out && ctx2d(out);
-    if (!out || !outCtx) return null;
-
-    /** @type {CanvasImageSource} */
-    let src = img;
-    let cur = Math.min(img.width, img.height);
-    let sx = (img.width - cur) / 2, sy = (img.height - cur) / 2;
-    for (const [t, sprite] of entry.sprites) {
-      if (t > size && t < cur) { src = sprite; cur = t; sx = sy = 0; }
-    }
-
-    for (let k = 0; cur > 2 * size; k ^= 1) {
-      const half = Math.ceil(cur / 2);
-      const scratch = this._scratchCanvas(k, half);
-      const sCtx = scratch && ctx2d(scratch);
-      if (!sCtx) return null;
-      sCtx.clearRect(0, 0, half, half);
-      sCtx.imageSmoothingQuality = "high";
-      sCtx.drawImage(src, sx, sy, cur, cur, 0, 0, half, half);
-      src = /** @type {Canvas} */ (scratch);
-      sx = sy = 0;
-      cur = half;
-    }
-
-    outCtx.clearRect(0, 0, size, size);
-    outCtx.imageSmoothingQuality = "high";
-    outCtx.drawImage(src, sx, sy, cur, cur, 0, 0, size, size);
-
-    // Pre-clip: keep only the pixels inside the circle
-    outCtx.globalCompositeOperation = "destination-in";
-    outCtx.beginPath();
-    outCtx.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
-    outCtx.fill();
-    outCtx.globalCompositeOperation = "source-over";
-
-    // Pixels can only be read before the hand-off below
-    if (size <= 64 && entry.avg === undefined) entry.avg = this._averageColor(out);
-
-    return "transferToImageBitmap" in out ? out.transferToImageBitmap() : out;
-  }
-
-
-  /**
-   * Alpha-weighted average colour of a small canvas, or `null` when its
-   * pixels can't be read (a canvas tainted by a cross-origin image throws).
-   * @param {Canvas} canvas - canvas (at most 64 px)
-   * @returns {string | null} CSS colour
-   * @private
-   */
-  _averageColor(canvas) {
-    try {
-      const ctx = ctx2d(canvas);
-      if (!ctx) return null;
-      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let r = 0, g = 0, b = 0, a = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        const w = data[i + 3];
-        r += data[i] * w; g += data[i + 1] * w; b += data[i + 2] * w; a += w;
-      }
-      if (!a) return null;
-      return `rgb(${Math.round(r / a)}, ${Math.round(g / a)}, ${Math.round(b / a)})`;
-    } catch {
-      return null;
-    }
-  }
-
-
-  /**
-   * Returns a sprite of `src` to draw at `size`, building it if this
-   * frame's build limit allows, otherwise the nearest cached sprite
-   * (larger first). Marks the returned sprite as used this frame.
-   * @param {string} src - image source
-   * @param {HTMLImageElement} img - loaded source image
-   * @param {number} size - wanted sprite size
-   * @returns {Sprite | null} sprite, or `null` if none is available
-   * @private
-   */
-  _getSprite(src, img, size) {
-    let entry = this._spriteCache.get(src);
-    if (!entry) {
-      entry = { sprites: new Map(), avg: undefined };
-      this._spriteCache.set(src, entry);
-    }
-
-    let sprite = entry.sprites.get(size);
-    if (!sprite && this._spriteBuilds < MAX_SPRITE_BUILDS_PER_FRAME) {
-      const built = this._buildSprite(img, entry, size);
-      if (built) {
-        this._spriteBuilds++;
-        sprite = built;
-        entry.sprites.set(size, built);
-        const bytes = size * size * 4;
-        this._spriteLru.set(`${size}:${src}`, { src, size, bytes, frame: this._frameId });
-        this._spriteBytes += bytes;
-      }
-    }
-
-    // Over the build limit: the nearest cached sprite, preferring larger
-    if (!sprite) {
-      let best = 0;
-      for (const t of entry.sprites.keys()) {
-        const better = !best
-          || (t >= size && (best < size || t < best))   // smallest larger
-          || (t < size && best < size && t > best);     // else largest smaller
-        if (better) best = t;
-      }
-      if (!best) return null;
-      size = best;
-      sprite = entry.sprites.get(best);
-    }
-
-    const key = `${size}:${src}`;
-    const rec = this._spriteLru.get(key);
-    if (rec) {
-      this._spriteLru.delete(key);
-      rec.frame = this._frameId;
-      this._spriteLru.set(key, rec);
-    }
-    return sprite ?? null;
-  }
-
-
-  /**
-   * Average colour of an image for drawing it as a dot, building its
-   * smallest sprite first if needed. `null` if unavailable.
-   * @param {string} src - image source
-   * @param {HTMLImageElement} img - loaded source image
-   * @returns {string | null} CSS colour
-   * @private
-   */
-  _imageAverage(src, img) {
-    const avg = this._spriteCache.get(src)?.avg;
-    if (avg !== undefined) return avg;
-    this._getSprite(src, img, pickSpriteSize(0, Math.min(img.width, img.height)));
-    return this._spriteCache.get(src)?.avg ?? null;
-  }
-
-
-  /**
-   * Removes one sprite from the cache and frees its pixels.
-   * @param {string} src - image source
-   * @param {number} size - sprite size
-   * @returns {void}
-   * @private
-   */
-  _deleteSprite(src, size) {
-    const entry = this._spriteCache.get(src);
-    const sprite = entry?.sprites.get(size);
-    if (sprite && "close" in sprite) sprite.close();   // frees now, not at GC
-    entry?.sprites.delete(size);
-    const key = `${size}:${src}`;
-    const rec = this._spriteLru.get(key);
-    if (rec) this._spriteBytes -= rec.bytes;
-    this._spriteLru.delete(key);
-  }
-
-
-  /**
-   * Evicts least recently used sprites until within `imageCacheMB`,
-   * stopping at the first one drawn this frame: what is on screen always
-   * stays cached.
-   * @returns {void}
-   * @private
-   */
-  _evictSprites() {
-    const budget = this._opts.imageCacheMB * 1024 * 1024;
-    for (const rec of this._spriteLru.values()) {
-      if (this._spriteBytes <= budget || rec.frame === this._frameId) break;
-      this._deleteSprite(rec.src, rec.size);
-    }
-  }
-
-
-  /**
-   * Drops every cached sprite of an image source.
-   * @param {string} src - image source
-   * @returns {void}
-   * @private
-   */
-  _dropSprites(src) {
-    const entry = this._spriteCache.get(src);
-    if (!entry) return;
-    for (const size of [...entry.sprites.keys()]) this._deleteSprite(src, size);
-    this._spriteCache.delete(src);
+    this._imageCache.collect(live);
   }
 
 
@@ -1341,7 +743,7 @@ export class Renderer {
    * @returns {this} self reference
    */
   addHook(type, f) {
-    this._hooks[type].add(f);
+    this._hooks.add(type, f);
     return this;
   }
 
@@ -1354,7 +756,7 @@ export class Renderer {
    * @returns {boolean} - whether the hook existed
    */
   removeHook(type, f) {
-    return this._hooks[type].delete(f);
+    return this._hooks.remove(type, f);
   }
 
 
@@ -1366,14 +768,13 @@ export class Renderer {
    * @private
    */
   _runHooks(type, time) {
-    const hooks = this._hooks[type];
-    if (hooks.size === 0 || !this._ctx) return;
-    for (const f of [...hooks]) {
-      this._ctx.save();
+    const ctx = this._ctx;
+    if (!ctx) return;
+    this._hooks.run(type, f => {
+      ctx.save();
       try { f(this, time); }
-      catch (err) { console.error(`Renderer: ${type} hook failed`, err); }
-      finally { this._ctx.restore(); }
-    }
+      finally { ctx.restore(); }
+    });
   }
 
 
@@ -1387,11 +788,13 @@ export class Renderer {
     this._simulation.sync();
 
     if (this._syncedDataVersion !== this._graph.dataVersion) {
-      this._stylesDirty = true;
+      this._nodeConfig.markDirty();
+      this._edgeConfig.markDirty();
       this._syncedDataVersion = this._graph.dataVersion;
     }
 
-    if (this._syncedSimulation === this._simulation.version && !this._stylesDirty) return false;
+    const stylesDirty = this._nodeConfig.dirty || this._edgeConfig.dirty;
+    if (this._syncedSimulation === this._simulation.version && !stylesDirty) return false;
     
     // Update node styles and seed new ones
     for (const [id, gNode] of this._graph.nodes) {
@@ -1402,11 +805,7 @@ export class Renderer {
         this._nodes.set(id, rNode);
       }
       // Load node image into cache
-      if (rNode.image) {
-        const img = this._images.get(rNode.image)
-        if (!img)
-          this.loadImage(rNode.image);
-      }
+      if (rNode.image) this.loadImage(rNode.image);
     }
 
     // Update edge styles and seed new ones
@@ -1416,7 +815,8 @@ export class Renderer {
       else this._edges.set(gEdge, this._seedEdge(gEdge));
     }
 
-    this._stylesDirty = false;
+    this._nodeConfig.markClean();
+    this._edgeConfig.markClean();
     this._labelsDirty = true;
 
     if (this._syncedSimulation === this._simulation.version) return true;
@@ -1425,19 +825,16 @@ export class Renderer {
        is running, carry each surviving element's alpha across by its style
        object, which persists through syncs. Pruning below can also end the
        highlight, so this is decided first. */
-    const carryAlpha = this._fadeActive || this.hasHighlight();
-    const oldNodeAlpha = carryAlpha ?
-      new Map(this._nodeStyles.map((s, i) => [s, this._nodeAlpha[i]])) : null;
-    const oldEdgeAlpha = carryAlpha ?
-      new Map(this._edgeStyles.map((s, i) => [s, this._edgeAlpha[i]])) : null;
+    const hl = this._highlighter;
+    const snap = hl.snapshot(this._nodeStyles, this._edgeStyles);
 
     // Delete old node styles
     for (const id of this._nodes.keys()) {
       if (!this._graph.nodes.has(id)) {
         if (this._nodes.get(id)?.image) this._imageDebt++;
         this._nodes.delete(id);
-        this._nodeOverrides.delete(id);
-        this._highlightedNodes.delete(id);
+        this._nodeConfig.prune(id);
+        hl.forgetNode(id);
       }
     }
     if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
@@ -1446,8 +843,8 @@ export class Renderer {
     for (const gEdge of this._edges.keys()) {
       if (!this._graph.edges.has(gEdge)) {
         this._edges.delete(gEdge);
-        this._edgeOverrides.delete(gEdge);
-        this._highlightedEdges.delete(gEdge);
+        this._edgeConfig.prune(gEdge);
+        hl.forgetEdge(gEdge);
       }
     }
 
@@ -1483,30 +880,9 @@ export class Renderer {
       this._edgeBow[k] = this._graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
     }
 
-    // Highlight state
-    this._nodeHighlightState = new Uint8Array(sim.nodeList.length);
-    for (const [i, node] of sim.nodeList.entries()) {
-      this._nodeHighlightState[i] = this._highlightedNodes.has(node.id) ? 1 : 0;
-    }
-
-    this._edgeHighlightState = new Uint8Array(sim.edgeList.length);
-    for (const [i, edge] of sim.edgeList.entries()) {
-      this._edgeHighlightState[i] = this._highlightedEdges.has(edge) ? 1 : 0;
-    }
-
-    // Highlight alphas: survivors keep theirs, new elements start at target
-    const dim = this._dimmedAlpha();
-    this._nodeAlpha = new Float64Array(this._nodeStyles.length);
-    for (const [i, style] of this._nodeStyles.entries()) {
-      this._nodeAlpha[i] = oldNodeAlpha?.get(style) ??
-        (this._nodeHighlightState[i] ? 1 : dim);
-    }
-    this._edgeAlpha = new Float64Array(this._edgeStyles.length);
-    for (const [i, style] of this._edgeStyles.entries()) {
-      this._edgeAlpha[i] = oldEdgeAlpha?.get(style) ??
-        (this._edgeHighlightState[i] ? 1 : dim);
-    }
-    if (carryAlpha) this._startFade();
+    // Highlight flags and alphas: survivors keep theirs, new elements start at target
+    hl.reslot(snap, sim.nodeList, sim.edgeList, this._nodeStyles, this._edgeStyles,
+      this._opts.highlightMode, this._opts.highlightAlpha);
 
     this._syncedSimulation = this._simulation.version;
     this._version++;
@@ -1545,6 +921,116 @@ export class Renderer {
 
 
   /**
+   * Sets some or all of the view. Nothing changes if any value is invalid.
+   * Like other changes, it shows on the next render.
+   * @param {Partial<View>} view - view values to set; `undefined` values are
+   *    left alone
+   * @returns {this} self reference
+   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
+   *    isn't a finite number above 0
+   */
+  setView(view) {
+    const { x, y, zoom } = view;
+    if (x !== undefined && !Number.isFinite(x)) throw new RangeError("Renderer: view `x` must be finite");
+    if (y !== undefined && !Number.isFinite(y)) throw new RangeError("Renderer: view `y` must be finite");
+    if (zoom !== undefined) checkZoom(zoom, "view `zoom`");
+    const v = this._view;
+    if (x !== undefined) v.x = x;
+    if (y !== undefined) v.y = y;
+    if (zoom !== undefined) v.zoom = zoom;
+    return this;
+  }
+
+
+  /**
+   * Returns the view moved so the graph shifts by a distance on the canvas,
+   * as dragging the background does, without applying it.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {View} the panned view
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  viewPannedBy(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      throw new RangeError("Renderer: pan distances must be finite");
+    }
+    const v = this._view;
+    return { x: v.x - dx / v.zoom, y: v.y - dy / v.zoom, zoom: v.zoom };
+  }
+
+
+  /**
+   * Shifts the graph by a distance on the canvas, as dragging the background
+   * does.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {this} self reference
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
+   */
+  panBy(dx, dy) { return this.setView(this.viewPannedBy(dx, dy)); }
+
+
+  /**
+   * Returns the view at a zoom, without applying it. With an anchor point,
+   * the graph under that point stays where it is, as zooming with the wheel
+   * does; without one, the canvas centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {View} the zoomed view
+   * @throws {RangeError} throws if the zoom isn't a finite number above 0,
+   *    or the anchor isn't finite
+   * @throws {TypeError} throws if only one anchor coordinate is given
+   * @throws {Error} throws if an anchor is given and no canvas is attached
+   */
+  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
+    checkZoom(zoom, "zoom");
+    const v = this._view;
+    if (cx === undefined && cy === undefined) return { x: v.x, y: v.y, zoom };
+    if (cx === undefined || cy === undefined) {
+      throw new TypeError("Renderer: a zoom anchor needs both coordinates");
+    }
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+      throw new RangeError("Renderer: zoom anchor must be finite");
+    }
+    const [sx, sy] = this.canvasToSim(cx, cy);
+    const size = /** @type {Size} */ (this._size);
+    return { x: sx - (cx - size.w / 2) / zoom, y: sy - (cy - size.h / 2) / zoom, zoom };
+  }
+
+
+  /**
+   * Sets the zoom. With an anchor point, the graph under that point stays
+   * where it is, as zooming with the wheel does; without one, the canvas
+   * centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does
+   */
+  zoomTo(zoom, cx = undefined, cy = undefined) {
+    return this.setView(this.viewZoomedTo(zoom, cx, cy));
+  }
+
+
+  /**
+   * Multiplies the zoom by a factor: above 1 zooms in, below 1 zooms out.
+   * Anchored as `zoomTo()` is.
+   * @param {number} factor - factor to multiply the zoom by
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does,
+   *    or if the factor isn't a finite number above 0
+   */
+  zoomBy(factor, cx = undefined, cy = undefined) {
+    checkZoom(factor, "zoom factor");
+    return this.zoomTo(this._view.zoom * factor, cx, cy);
+  }
+
+
+  /**
    * Draws a node on the canvas, positioned and sized according to a `SimNode`
    * object and styled according to a `NodeStyle` object.
    * @param {SimNode} sNode - simulation's node body object
@@ -1559,12 +1045,12 @@ export class Renderer {
     this._ctx.beginPath();
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
     const src = nodeStyle.image;
-    const img = src && this._images.get(src);
-    if (src && img && typeof img !== "string") {
+    const img = src ? this._imageCache.loaded(src) : null;
+    if (src && img) {
       const needed = 2 * r * this._dpr;     // on-screen diameter, device px
       if (needed < IMAGE_DOT_THRESHOLD) {
         // Too small to show detail: a dot in the image's average colour
-        this._ctx.fillStyle = this._imageAverage(src, img) ?? nodeStyle.color;
+        this._ctx.fillStyle = this._imageCache.average(src, img) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
         const side = Math.min(img.width, img.height);
@@ -1572,7 +1058,7 @@ export class Renderer {
         // A sprite smaller than the node is stretched, which blurs it. When the
         // source has more detail than that sprite (past the largest sprite
         // size, or between two sizes), draw the source instead.
-        const sprite = size < needed && size < side ? null : this._getSprite(src, img, size);
+        const sprite = size < needed && size < side ? null : this._imageCache.sprite(src, img, size);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
@@ -1936,28 +1422,6 @@ export class Renderer {
 
 
   /**
-   * Eases every element's alpha toward its target by the time elapsed since
-   * the previous frame. Covers off-screen elements too, so they don't come
-   * back into view mid-fade.
-   * @param {number} time - current timestamp in milliseconds
-   * @returns {void}
-   * @private
-   */
-  _stepFade(time) {
-    const dt = this._lastFrameTime === null ? 0 : time - this._lastFrameTime;
-    this._lastFrameTime = time;
-    if (!this._fadeActive) return;
-
-    const duration = this._opts.highlightFadeDuration;
-    const step = duration > 0 ? Math.max(dt, 0) / duration : Infinity;
-    const dim = this._dimmedAlpha();
-    const nodesSettled = stepAlphas(this._nodeAlpha, this._nodeHighlightState, dim, step);
-    const edgesSettled = stepAlphas(this._edgeAlpha, this._edgeHighlightState, dim, step);
-    if (nodesSettled && edgesSettled) this._fadeActive = false;
-  }
-
-
-  /**
    * Sets the context alpha for the next element, writing it only when it
    * changes.
    * @param {number} alpha - element alpha
@@ -1982,12 +1446,14 @@ export class Renderer {
    *    `requestAnimationFrame` timestamp when rendering from a loop.
    * @returns {boolean} whether the `sync()` and render took place
    */
-  render(time = globalThis.performance?.now() ?? Date.now()) {
+  render(time = now()) {
     if (!this._ctx || !this._size) return false;
     this.sync();
-    this._stepFade(time);
-    this._frameId++;
-    this._spriteBuilds = 0;
+    // Eases every alpha toward its target, off-screen elements included, so
+    // they don't come back into view mid-fade
+    const opts = this._opts;
+    this._highlighter.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
+    this._imageCache.beginFrame();
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
     const inFrame = this._cull();
@@ -2023,19 +1489,21 @@ export class Renderer {
     }
     const dpr = this._dpr;
 
-    if (this.hasHighlight() || this._fadeActive) {
+    const hl = this._highlighter;
+    if (hl.has() || hl.isFading()) {
+      const { nodeState, nodeAlpha, edgeState, edgeAlpha } = hl;
       this._frameAlpha = 1;
       for (const flag of [0, 1]) {
         for (const i of inFrame.edgesI) {
-          if (this._edgeHighlightState[i] === flag && this._useAlpha(this._edgeAlpha[i]))
-            this._renderEdgeByIndex(i, this._edgeAlpha[i]);
+          if (edgeState[i] === flag && this._useAlpha(edgeAlpha[i]))
+            this._renderEdgeByIndex(i, edgeAlpha[i]);
         }
         for (const i of inFrame.nodesI) {
-          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
             this._renderNodeByIndex(i);
         }
         for (const i of inFrame.labelsI) {
-          if (this._nodeHighlightState[i] === flag && this._useAlpha(this._nodeAlpha[i]))
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
             this._renderNodeLabelByIndex(i);
         }
         // Highlighted nodes are drawn next, in canvas space
@@ -2051,15 +1519,15 @@ export class Renderer {
 
     this._runHooks("overlay", time);
 
-    this._evictSprites();
-    if (this._spriteBuilds) this._imgScratch = [];
+    this._imageCache.endFrame(this._opts.imageCacheMB * 1024 * 1024);
 
     return true;
   }
 
 
   /**
-   * Returns the id of a node at a specific point on the canvas
+   * Returns the id of a node at a specific point on the canvas. A node
+   * removed from the graph isn't found, even before the simulation syncs.
    * @param {number} cx - canvas x coordinate
    * @param {number} cy - canvas y coordinate
    * @param {number} [slack] - slack, in canvas pixels
@@ -2071,9 +1539,11 @@ export class Renderer {
     const [x, y] = this.canvasToSim(cx, cy);
     const nodes = this._simulation.nodeList;
     const s = Math.max(slack, 0) / this._view.zoom; // radius slack
+    const graphNodes = this._graph.nodes;
     for (let i = nodes.length - 1; i >= 0; i--) {
       const node = nodes[i], r = node.radius + s;
-      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r) return node.id;
+      // The node list lags the graph until the next sync: skip removed nodes
+      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r && graphNodes.has(node.id)) return node.id;
     }
     return null;
   }
@@ -2091,26 +1561,17 @@ export class Renderer {
     const p = this._simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
+}
 
-
-  /**
-   * Finds a node by id and pins it to specified coordinates in canvas space
-   * @param {NodeId} id - node id
-   * @param {number} cx - canvas x coordinate to pin to
-   * @param {number} cy - canvas y coordinate to pin to
-   * @returns {boolean} whether the node was pinned (`false` if node not found)
-   * @throws {Error} throws when no canvas is attached
-   */
-  pin(id, cx, cy) {
-    if (!this._canvas) throw new Error("Renderer: no canvas attached");
-    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
+/**
+ * Throws unless a zoom, or zoom factor, is a finite number above 0.
+ * @param {number} zoom - value to check
+ * @param {string} name - name for the error message
+ * @returns {void}
+ * @throws {RangeError} throws if the value is invalid
+ */
+function checkZoom(zoom, name) {
+  if (!(zoom > 0 && Number.isFinite(zoom))) {
+    throw new RangeError(`Renderer: ${name} must be a finite number above 0`);
   }
-
-
-  /**
-   * Unpins a node by id by reverting `fixed` to its default.
-   * @param {NodeId} id - node id
-   * @returns {this} self reference
-   */
-  unpin(id) { this._simulation.unpin(id); return this; }
 }

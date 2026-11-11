@@ -4,59 +4,72 @@
 /** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
 /**
  * @import {
- *  SimNode, SimNodeConfig, SimNodeAccessors,
- *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
- *  SimEdge, SimEdgeConfig, SimEdgeAccessors,
- *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
+ *  SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
+ *  SimEventMap, SimEventType,
  * } from './typedefs/simulation.js'
  */
+/**
+ * @import {
+ *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
+ *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
+ * } from './typedefs/internal/simulation.js'
+ */
 
-import { asFn } from "./utils.js";
-import { BarnesHutContext } from "./barnes-hut.js";
+import { BarnesHutContext, checkBarnesHutOpts } from "./barnes-hut.js";
+import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
+import { Emitter } from "./emitter.js";
+import { keysOf } from "./utils.js";
+import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
+import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf } from "./validate.js";
 
 
-/** @type {{ mass: number, radius: number, charge: number, fixed: boolean }} */
-export const SIM_NODE_DEFAULTS = { mass: 1, radius: 20, charge: 1, fixed: false };
-
-/**
- * @param {ResolvedSimNodeConfig} config
- * @returns {ResolvedSimNodeAccessors}
- */
-const toNodeAccessors = config => ({
-  mass: asFn(config.mass),
-  radius: asFn(config.radius),
-  charge: asFn(config.charge),
-  fixed: asFn(config.fixed),
-});
-
-
-/** @type {{ length: number, stiffness: number }} */
-export const SIM_EDGE_DEFAULTS = { length: 50, stiffness: 0.015 };
+/** Every simulation option name, including the nested config and Barnes-Hut options */
+const OPTION_NAMES = new Set([...Object.keys(SIM_DEFAULTS), "nodeConfig", "edgeConfig", "barnesHut"]);
 
 /**
- * @param {ResolvedSimEdgeConfig} config
- * @returns {ResolvedSimEdgeAccessors}
+ * A check per simulation option
+ * @type {Record<keyof SimOpts, (v: any) => void>}
  */
-const toEdgeAccessors = config => ({
-  length: asFn(config.length),
-  stiffness: asFn(config.stiffness),
-});
+const OPTION_RULES = {
+  friction:     v => checkNumber("Simulation", "friction", v, { min: 0, max: 1 }),
+  gravity:      v => checkNumber("Simulation", "gravity", v, { min: 0 }),
+  repulsion:    v => checkNumber("Simulation", "repulsion", v, { min: 0 }),
+  minDistSq:    v => checkNumber("Simulation", "minDistSq", v, { min: 0 }),
+  maxSpeed:     v => checkNumber("Simulation", "maxSpeed", v, { min: 0, aboveMin: true, allowInfinity: true }),
+  dt:           v => checkNumber("Simulation", "dt", v, { min: 0, aboveMin: true }),
+  cooling:      v => checkNumber("Simulation", "cooling", v, { min: 0, max: 1, aboveMin: true }),
+  freezePoint:  v => checkNumber("Simulation", "freezePoint", v, { min: 0 }),
+  useBarnesHut: v => checkBoolean("Simulation", "useBarnesHut", v),
+  collision:    v => checkOneOf("Simulation", "collision", v, ["grid", "barnesHut", "pairs"]),
+};
+
+
+/**
+ * Every simulation event name. The type requires exactly the keys of
+ * `SimEventMap`, so adding an event there without adding it here fails type
+ * checking.
+ * @type {Record<SimEventType, true>}
+ */
+const SIM_EVENT_NAMES = { settle: true, wake: true };
+const SIM_EVENT_TYPES = keysOf(SIM_EVENT_NAMES);
 
 
 /**
  * Simulates repulsion, springs, friction, gravity,
  * and collision resolution for an underlying `Graph` instance.
+ * Emits the events in `SimEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<SimEventMap, Simulation>}
  */
-export class Simulation {
+export class Simulation extends Emitter {
   /** @private @type {Graph} */
   _graph;
   get graph() { return this._graph; }
 
 
   /** @private @type {SimOpts} */
-  _opts;
+  _opts = { ...SIM_DEFAULTS };
   /**
    * [read-only, set with `setOpts()`]
    * Simulation physics options
@@ -234,79 +247,37 @@ export class Simulation {
 
 
   /**
-   * Node-specific config overrides, keyed by node id.
-   * Node props specified here get first priority over the simulation's current
-   * default node config and the global default node config.
-   * @type {Map<NodeId, SimNodeAccessors>}
+   * Node config: the default node config, and per-node overrides keyed by
+   * node id. A node's own overrides take priority over the default config,
+   * which takes priority over `SIM_NODE_DEFAULTS`.
+   * @type {ConfigCascade<ResolvedSimNodeConfig, ResolvedSimNodeAccessors, NodeId>}
    * @private
    */
-  _nodeOverrides = new Map();
-
-
-  /** @private @type {ResolvedSimNodeConfig} */
-  _defaultNodeConfig = {...SIM_NODE_DEFAULTS};
+  _nodeConfig = new ConfigCascade(SIM_NODE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultNodeConfig()` or `setOpts()`]
    * Current default node config. Takes precedence over the global default config,
    * but can be overridden for specific nodes using `setNodeConfig()`.
    * @returns {Readonly<ResolvedSimNodeConfig>}
    */
-  get defaultNodeConfig() { return this._defaultNodeConfig; }
+  get defaultNodeConfig() { return this._nodeConfig.defaults; }
 
 
   /**
-   * `defaultNodeConfig` as cached functions. Used to apply the simulation's
-   * default node config when resolving a `SimNode`'s raw configuration.
-   * @type {ResolvedSimNodeAccessors}
+   * Edge config: the default edge config, and per-edge overrides keyed by
+   * edge object. An edge's own overrides take priority over the default
+   * config, which takes priority over `SIM_EDGE_DEFAULTS`.
+   * @type {ConfigCascade<ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors, GraphEdge>}
    * @private
    */
-  _nodeAccessors = toNodeAccessors(SIM_NODE_DEFAULTS);
-
-
-  /**
-   * Set to `true` whenever any node config (default or override) is changed.
-   * Set back to `false` once those changes are applied in `sync()`.
-   * @private
-   * @type {boolean} */
-  _nodeConfigDirty = false;
-
-
-  /**
-   * Edge-specific config overrides, keyed by edge object.
-   * Edge props specified here get first priority over the simulation's current
-   * default edge config and the global default edge config.
-   * @type {Map<GraphEdge, SimEdgeAccessors>}
-   * @private
-   */
-  _edgeOverrides = new Map();
-
-
-  /** @private @type {ResolvedSimEdgeConfig} */
-  _defaultEdgeConfig = {...SIM_EDGE_DEFAULTS};
+  _edgeConfig = new ConfigCascade(SIM_EDGE_DEFAULTS);
   /**
    * [read-only, set with `setDefaultEdgeConfig()` or `setOpts()`]
    * Current default edge config. Takes precedence over the global default
    * config, but can be overridden for specific edges using `setEdgeConfig()`.
    * @returns {Readonly<ResolvedSimEdgeConfig>}
    */
-  get defaultEdgeConfig() { return this._defaultEdgeConfig; }
-
-
-  /**
-   * `defaultEdgeConfig` as cached functions. Used to apply the simulation's
-   * default edge config when resolving an edge's spring settings.
-   * @type {ResolvedSimEdgeAccessors}
-   * @private
-   */
-  _edgeAccessors = toEdgeAccessors(SIM_EDGE_DEFAULTS);
-
-
-  /**
-   * Set to `true` whenever any edge config (default or override) is changed.
-   * Set back to `false` once those changes are applied in `sync()`.
-   * @private
-   * @type {boolean} */
-  _edgeConfigDirty = false;
+  get defaultEdgeConfig() { return this._edgeConfig.defaults; }
 
 
   /** @private @type {number} */
@@ -316,7 +287,8 @@ export class Simulation {
    * Temperature value that forces are multiplied by. Decays each tick
    * according to the rate of `opts.cooling`. Once it is lower than
    * `opts.freezePoint`, it is set to zero. Reset by the `heat()` function,
-   * which is called after config or settings changes.
+   * which is called after config or settings changes. The `settle` and
+   * `wake` events report it reaching zero and leaving it.
    */
   get temp() { return this._temp; }
 
@@ -326,7 +298,7 @@ export class Simulation {
    * @type {BarnesHutContext}
    * @private
    */
-  _barnesHutCtx;
+  _barnesHutCtx = new BarnesHutContext();
 
   /**
    * Grid used when `opts.collision` is `"grid"`
@@ -369,35 +341,30 @@ export class Simulation {
    * @param {SimOptsInput} [opts={}] - physics engine and node body options
    */
   constructor(graph, opts = {}) {
+    super(SIM_EVENT_TYPES, "Simulation");
     this._graph = graph;
 
-    this._opts = {
-      friction:        opts.friction ?? 0.9,
-      gravity:         opts.gravity ?? 0.002,
-      repulsion:       opts.repulsion ?? 1000,
-      minDistSq:       opts.minDistSq ?? 100,
-      maxSpeed:        opts.maxSpeed ?? 100,
-      dt:              opts.dt ?? 1,
-      cooling:         opts.cooling ?? 0.98,
-      freezePoint:     opts.freezePoint ?? 0.01,
-      useBarnesHut:    opts.useBarnesHut ?? true,
-      collision:       opts.collision ?? "grid",
-    };
-
-    this.setDefaultNodeConfig(opts.nodeConfig ?? {});
-    this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
-    this._barnesHutCtx = new BarnesHutContext(opts.barnesHut ?? {});
+    this.setOpts(opts);
     this.sync();
   }
 
 
   /**
-   * Sets properties of `opts` using a partial object.
+   * Sets options, and wakes the layout. Options left `undefined` keep their
+   * current value. Nothing changes if any option is invalid.
    * @param {SimOptsInput} [optsInput={}] - options to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
    */
-  setOpts({nodeConfig, edgeConfig, barnesHut, ...opts} = {}) {
-    Object.assign(this._opts, opts);
+  setOpts(optsInput = {}) {
+    checkKnownKeys("Simulation", optsInput, OPTION_NAMES);
+    const { nodeConfig, edgeConfig, barnesHut, ...opts } = optsInput;
+    checkEach(opts, OPTION_RULES);
+    if (barnesHut !== undefined) checkBarnesHutOpts("Simulation", barnesHut, "barnesHut.");
+
+    for (const key of /** @type {(keyof SimOpts)[]} */ (Object.keys(opts))) {
+      if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
+    }
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
     if (barnesHut) this._barnesHutCtx.setOpts(barnesHut);
@@ -407,13 +374,16 @@ export class Simulation {
 
 
   /**
-   * Sets the simulation's temp value
-   * @param {number} [t=1] - temperature to set
+   * Sets the simulation's temp value. Emits `wake` if that starts a frozen
+   * layout moving, or `settle` if setting 0 stops a moving one.
+   * @param {number} [t=1] - temperature to set; values below 0 set 0
    * @returns {this} self reference
    */
   heat(t = 1) {
-    if (t >= 0) this._temp = t;
-    else this._temp = 0;
+    const wasFrozen = this._temp === 0;
+    this._temp = t >= 0 ? t : 0;
+    if (wasFrozen && this._temp > 0) this._emit("wake", {});
+    else if (!wasFrozen && this._temp === 0) this._emit("settle", {});
     return this;
   }
 
@@ -422,17 +392,11 @@ export class Simulation {
    * Sets the default physical attributes for all nodes.
    * `sync()` will update all nodes with the new defaults, except for
    * specific overrides
-   * @param {SimNodeConfig} config 
+   * @param {SimNodeConfig} config
    * @returns {this} self reference
    */
   setDefaultNodeConfig(config = {}) {
-    this._defaultNodeConfig = {
-      ...SIM_NODE_DEFAULTS,
-      ...this._defaultNodeConfig,
-      ...config
-    };
-    this._nodeAccessors = toNodeAccessors(this._defaultNodeConfig);
-    this._nodeConfigDirty = true;
+    this._nodeConfig.setDefaults(config);
     return this;
   }
 
@@ -444,15 +408,7 @@ export class Simulation {
    * @returns {this} self reference
    */
   setNodeConfig(id, config = {}) {
-    /** @type {Record<string, any>} */
-    const merged = { ...this._nodeOverrides.get(id), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._nodeOverrides.set(
-      id,
-      /** @type {SimNodeAccessors} */
-      merged,
-    );
-    this._nodeConfigDirty = true;
+    this._nodeConfig.set(id, config);
     return this;
   }
 
@@ -463,8 +419,7 @@ export class Simulation {
    * @returns {this} self reference
    */
   clearNodeConfig(id) {
-    this._nodeOverrides.delete(id);
-    this._nodeConfigDirty = true;
+    this._nodeConfig.clear(id);
     return this;
   }
 
@@ -477,13 +432,7 @@ export class Simulation {
    * @returns {this} self reference
    */
   setDefaultEdgeConfig(config = {}) {
-    this._defaultEdgeConfig = {
-      ...SIM_EDGE_DEFAULTS,
-      ...this._defaultEdgeConfig,
-      ...config
-    };
-    this._edgeAccessors = toEdgeAccessors(this._defaultEdgeConfig);
-    this._edgeConfigDirty = true;
+    this._edgeConfig.setDefaults(config);
     return this;
   }
 
@@ -494,20 +443,12 @@ export class Simulation {
    * @param {NodeId} destId - destination node id
    * @param {SimEdgeConfig} [config] - edge config
    * @returns {this} self reference
-   * @throws {Error} throws if edge not found
+   * @throws {ReferenceError} throws if the edge doesn't exist
    */
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) throw new Error(`Simulation: no edge from "${srcId}" to "${destId}"`);
-    /** @type {Record<string, any>} */
-    const merged = { ...this._edgeOverrides.get(gEdge), ...config };
-    for (const k in merged) merged[k] = asFn(merged[k]);
-    this._edgeOverrides.set(
-      gEdge,
-      /** @type {SimEdgeAccessors} */
-      merged,
-    );
-    this._edgeConfigDirty = true;
+    if (!gEdge) throw new ReferenceError(`Simulation: no edge from "${srcId}" to "${destId}"`);
+    this._edgeConfig.set(gEdge, config);
     return this;
   }
 
@@ -520,9 +461,7 @@ export class Simulation {
    */
   clearEdgeConfig(srcId, destId) {
     const gEdge = this._graph.getEdge(srcId, destId);
-    if (!gEdge) return this;
-    this._edgeOverrides.delete(gEdge);
-    this._edgeConfigDirty = true;
+    if (gEdge) this._edgeConfig.clear(gEdge);
     return this;
   }
 
@@ -535,9 +474,9 @@ export class Simulation {
    * @private
    */
   _resolveNode(gNode, sNode) {
-    const acc = this._nodeAccessors,
+    const acc = this._nodeConfig.accessors,
           g = this._graph,
-          o = this._nodeOverrides.get(gNode.id);
+          o = this._nodeConfig.overrides.get(gNode.id);
     const mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
     const radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
     const charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
@@ -564,9 +503,9 @@ export class Simulation {
    * @private
    */
   _resolveEdge(gEdge) {
-    const acc = this._edgeAccessors,
+    const acc = this._edgeConfig.accessors,
           g = this._graph,
-          o = this._edgeOverrides.get(gEdge);
+          o = this._edgeConfig.overrides.get(gEdge);
     const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
     const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
     return [
@@ -593,7 +532,7 @@ export class Simulation {
       this._nodeCharge[i] = sNode.charge;
       this._nodeFixed[i] = sNode.fixed ? 1 : 0;
     }
-    this._nodeConfigDirty = false;
+    this._nodeConfig.markClean();
     return changed;
   }
 
@@ -634,7 +573,7 @@ export class Simulation {
       if (lens[s] !== len || ks[s] !== k) changed = true;
       lens[s] = len; ks[s] = k;
     }
-    this._edgeConfigDirty = false;
+    this._edgeConfig.markClean();
     return changed;
   }
 
@@ -693,18 +632,18 @@ export class Simulation {
    */
   sync() {
     if (this._syncedGraphDataVersion !== this._graph.dataVersion) {
-      this._nodeConfigDirty = true;
-      this._edgeConfigDirty = true;
+      this._nodeConfig.markDirty();
+      this._edgeConfig.markDirty();
       this._syncedGraphDataVersion = this._graph.dataVersion;
     }
     const structural = this._syncedGraphVersion !== this._graph.version;
-    if (!structural && !this._nodeConfigDirty && !this._edgeConfigDirty)
+    if (!structural && !this._nodeConfig.dirty && !this._edgeConfig.dirty)
       return false;
 
     if (structural) this._syncStructure();
 
-    const nodesChanged = this._nodeConfigDirty && this._packNodeConfig();
-    const edgesChanged = this._edgeConfigDirty && this._packEdgeConfig();
+    const nodesChanged = this._nodeConfig.dirty && this._packNodeConfig();
+    const edgesChanged = this._edgeConfig.dirty && this._packEdgeConfig();
     if (structural || nodesChanged || edgesChanged) this.heat();
     return true;
   }
@@ -728,7 +667,7 @@ export class Simulation {
     for (const id of this._nodes.keys()) {
       if (!this._graph.nodes.has(id)) {
         this._nodes.delete(id);
-        this._nodeOverrides.delete(id);
+        this._nodeConfig.prune(id);
       }
     }
 
@@ -753,8 +692,8 @@ export class Simulation {
     }
 
     // Delete overrides of old edges
-    for (const gEdge of this._edgeOverrides.keys()) {
-      if (!this._graph.edges.has(gEdge)) this._edgeOverrides.delete(gEdge);
+    for (const gEdge of this._edgeConfig.overrides.keys()) {
+      if (!this._graph.edges.has(gEdge)) this._edgeConfig.prune(gEdge);
     }
 
     const pairs = [], springs = [], springEdges = [], n = this._nodes.size;
@@ -791,8 +730,8 @@ export class Simulation {
     this._springLength = new Float64Array(this._springs.length / 2);
     this._springStiffness = new Float64Array(this._springs.length / 2);
 
-    this._nodeConfigDirty = true;
-    this._edgeConfigDirty = true;
+    this._nodeConfig.markDirty();
+    this._edgeConfig.markDirty();
     this._syncedGraphVersion = this._graph.version;
     this._version++;
   }
@@ -977,7 +916,8 @@ export class Simulation {
     }
 
     this._temp *= this._opts.cooling;
-    if (this._temp < this._opts.freezePoint) {
+    const settled = this._temp < this._opts.freezePoint;
+    if (settled) {
       this._temp = 0;
       // Drop residual velocities
       for (let i = 0; i < list.length; i++) { list[i].vx = 0; list[i].vy = 0; }
@@ -985,6 +925,8 @@ export class Simulation {
 
     // Enforce radius
     this._enforceRadius();
+    // Last, so listeners see the tick's final positions
+    if (settled) this._emit("settle", {});
     return this;
   }
 
@@ -1039,9 +981,14 @@ export class Simulation {
 
 
   /**
-   * Unpins a node by id by reverting `fixed` to its default.
+   * Unpins a node by id by reverting `fixed` to its default. Does nothing for
+   * a node that isn't in the graph, so unpinning a removed node doesn't leave
+   * an override behind for a later node with the same id.
    * @param {NodeId} id - node id
    * @returns {this} self reference
    */
-  unpin(id) { this.setNodeConfig(id, { fixed: undefined }); return this; }
+  unpin(id) {
+    if (this._graph.nodes.has(id)) this.setNodeConfig(id, { fixed: undefined });
+    return this;
+  }
 }
