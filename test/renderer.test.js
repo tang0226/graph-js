@@ -385,10 +385,10 @@ describe("Renderer: images", () => {
   test("the source is cached as loading, then replaced by the image", async () => {
     const { r, restore } = imageScene();
     try {
-      assert.equal(r._images.get("a.png"), Renderer.IMAGE_LOADING);
+      assert.equal(r._imageCache._images.get("a.png"), Renderer.IMAGE_LOADING);
       await flush();
-      assert.notEqual(r._images.get("a.png"), Renderer.IMAGE_LOADING);
-      assert.equal(typeof r._images.get("a.png"), "object");
+      assert.notEqual(r._imageCache._images.get("a.png"), Renderer.IMAGE_LOADING);
+      assert.equal(typeof r._imageCache._images.get("a.png"), "object");
     } finally { restore(); }
   });
 
@@ -418,7 +418,7 @@ describe("Renderer: images", () => {
     const { r, ctx, restore } = imageScene(() => true);
     try {
       await flush();
-      assert.equal(r._images.get("a.png"), Renderer.IMAGE_FAILED);
+      assert.equal(r._imageCache._images.get("a.png"), Renderer.IMAGE_FAILED);
       ctx.ops.length = 0;
       // The stub ctx throws on a non-image source, matching the browser.
       r.render();
@@ -445,7 +445,7 @@ describe("Renderer: images", () => {
 
       const live = new Set();
       for (const style of r.nodes.values()) if (style.image) live.add(style.image);
-      const dead = [...r._images.keys()].filter(src => !live.has(src));
+      const dead = [...r._imageCache._images.keys()].filter(src => !live.has(src));
       assert.ok(dead.length <= 17, `cache retained ${dead.length} dead entries`);
     } finally { restore(); }
   });
@@ -459,11 +459,11 @@ describe("Renderer: images", () => {
       const sim = new Simulation(g, {});
       const r = new Renderer(sim, { canvas, nodeConfig: { image: n => n.data.img ?? null } });
       r.sync();
-      assert.equal(r._images.get("late.png"), Renderer.IMAGE_LOADING);
+      assert.equal(r._imageCache._images.get("late.png"), Renderer.IMAGE_LOADING);
 
-      r._images.delete("late.png");          // simulate the sweep landing first
+      r._imageCache._images.delete("late.png");          // simulate the sweep landing first
       await flush();                          // then the load completes
-      assert.equal(r._images.has("late.png"), false,
+      assert.equal(r._imageCache._images.has("late.png"), false,
         "an in-flight load must not re-add an entry for a node that is gone");
     } finally { restore(); }
   });
@@ -728,12 +728,12 @@ describe("Renderer: sprites", () => {
       const s = await spriteScene({ opts: { imageCacheMB: 0.001 } });
       try {
         s.r.render();
-        assert.equal(s.r._spriteBytes, SPRITE_64, "the visible sprite stays despite the budget");
+        assert.equal(s.r._imageCache._spriteBytes, SPRITE_64, "the visible sprite stays despite the budget");
         const [sprite64] = s.bitmaps;
         s.r.view.zoom = 2;
         s.r.render();
-        assert.deepEqual([...s.r._spriteCache.get("a.png").sprites.keys()], [128]);
-        assert.equal(s.r._spriteBytes, 128 * 128 * 4);
+        assert.deepEqual([...s.r._imageCache._spriteCache.get("a.png").sprites.keys()], [128]);
+        assert.equal(s.r._imageCache._spriteBytes, 128 * 128 * 4);
         assert.equal(sprite64.closed, true, "eviction must free the pixels, not wait for GC");
         assert.equal(s.bitmaps[1].closed, false);
       } finally { s.restore(); }
@@ -747,9 +747,9 @@ describe("Renderer: sprites", () => {
         s.r.render();
         s.r.setOpts({ imageCacheMB: SPRITE_64 / 1024 / 1024 });
         s.r.render();
-        assert.equal(s.r._spriteCache.get("a.png").sprites.size, 1);
-        assert.equal(s.r._spriteCache.get("b.png").sprites.size, 0);
-        assert.equal(s.r._spriteBytes, SPRITE_64);
+        assert.equal(s.r._imageCache._spriteCache.get("a.png").sprites.size, 1);
+        assert.equal(s.r._imageCache._spriteCache.get("b.png").sprites.size, 0);
+        assert.equal(s.r._imageCache._spriteBytes, SPRITE_64);
       } finally { s.restore(); }
     });
 
@@ -759,12 +759,12 @@ describe("Renderer: sprites", () => {
       try {
         s.r.render();
         s.r.render();
-        assert.equal(s.r._spriteBytes, 17 * SPRITE_64);
+        assert.equal(s.r._imageCache._spriteBytes, 17 * SPRITE_64);
         for (const id of ids) s.g.removeNode(id);        // 17 removals pass the GC threshold
         s.r.sync();
-        assert.equal(s.r._spriteBytes, 0);
-        assert.equal(s.r._spriteLru.size, 0);
-        assert.equal(s.r._spriteCache.size, 0);
+        assert.equal(s.r._imageCache._spriteBytes, 0);
+        assert.equal(s.r._imageCache._spriteLru.size, 0);
+        assert.equal(s.r._imageCache._spriteCache.size, 0);
         assert.ok(s.bitmaps.every(b => b.closed), "every dropped sprite is closed");
       } finally { s.restore(); }
     });
