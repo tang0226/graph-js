@@ -69,13 +69,21 @@ describe("BarnesHutContext: options", () => {
     assert.equal(ctx.theta, 0.4);
   });
 
-  test("setOpts clamps negatives to zero and leaves omitted options alone", () => {
+  test("setOpts rejects invalid values and changes nothing", () => {
+    const ctx = new BarnesHutContext({ capacity: 8, maxDepth: 5, theta: 0.4 });
+    for (const bad of [
+      { capacity: -5 }, { capacity: 2.5 }, { maxDepth: -1 }, { maxDepth: Infinity },
+      { theta: -1 }, { theta: NaN }, { theta: "0.5" }, { capacity: 16, theta: -1 },
+    ]) assert.throws(() => ctx.setOpts(bad), /^(Range|Type)Error: BarnesHutContext: /, JSON.stringify(bad));
+    assert.throws(() => ctx.setOpts({ depth: 3 }), /^TypeError: BarnesHutContext: unknown option `depth`$/);
+    assert.deepEqual([ctx.capacity, ctx.maxDepth, ctx.theta], [8, 5, 0.4], "a rejected call changes nothing");
+  });
+
+  test("setOpts accepts 0 and leaves omitted options alone", () => {
     const ctx = new BarnesHutContext({ theta: 0.4 });
-    ctx.setOpts({ capacity: -5, maxDepth: -1 });
-    assert.equal(ctx.capacity, 0);
-    assert.equal(ctx.maxDepth, 0);
-    assert.equal(ctx.theta, 0.4);
-    ctx.setOpts({ theta: -1 });
+    ctx.setOpts({ capacity: 0, maxDepth: 0 });
+    assert.deepEqual([ctx.capacity, ctx.maxDepth, ctx.theta], [0, 0, 0.4]);
+    ctx.setOpts({ theta: 0 });
     assert.equal(ctx.theta, 0);
   });
 

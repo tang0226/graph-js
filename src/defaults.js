@@ -1,12 +1,29 @@
 // Default options and configs for every layer, in one place. Internal: not
 // listed in package.json `exports`, so not part of the public API. Each is
 // frozen, so nothing can change a default for every instance at once.
-/** @import { BarnesHutOpts } from './typedefs/simulation.js' */
+/** @import { SimOpts, BarnesHutOpts } from './typedefs/simulation.js' */
 /** @import { RendererOpts, NodeStyle, EdgeStyle } from './typedefs/renderer.js' */
 /** @import { InteractionOpts } from './typedefs/interaction.js' */
 
 
 // SIMULATION
+
+/**
+ * Default simulation options
+ * @type {Readonly<SimOpts>}
+ */
+export const SIM_DEFAULTS = Object.freeze({
+  friction: 0.9,
+  gravity: 0.002,
+  repulsion: 1000,
+  minDistSq: 100,
+  maxSpeed: 100,
+  dt: 1,
+  cooling: 0.98,
+  freezePoint: 0.01,
+  useBarnesHut: true,
+  collision: "grid",
+});
 
 /**
  * Default physical config of every node

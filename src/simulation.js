@@ -16,12 +16,34 @@
  * } from './typedefs/internal/simulation.js'
  */
 
-import { BarnesHutContext } from "./barnes-hut.js";
+import { BarnesHutContext, checkBarnesHutOpts } from "./barnes-hut.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
 import { Emitter } from "./emitter.js";
 import { keysOf } from "./utils.js";
-import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
+import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
+import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf } from "./validate.js";
+
+
+/** Every simulation option name, including the nested config and Barnes-Hut options */
+const OPTION_NAMES = new Set([...Object.keys(SIM_DEFAULTS), "nodeConfig", "edgeConfig", "barnesHut"]);
+
+/**
+ * A check per simulation option
+ * @type {Record<keyof SimOpts, (v: any) => void>}
+ */
+const OPTION_RULES = {
+  friction:     v => checkNumber("Simulation", "friction", v, { min: 0, max: 1 }),
+  gravity:      v => checkNumber("Simulation", "gravity", v, { min: 0 }),
+  repulsion:    v => checkNumber("Simulation", "repulsion", v, { min: 0 }),
+  minDistSq:    v => checkNumber("Simulation", "minDistSq", v, { min: 0 }),
+  maxSpeed:     v => checkNumber("Simulation", "maxSpeed", v, { min: 0, aboveMin: true, allowInfinity: true }),
+  dt:           v => checkNumber("Simulation", "dt", v, { min: 0, aboveMin: true }),
+  cooling:      v => checkNumber("Simulation", "cooling", v, { min: 0, max: 1, aboveMin: true }),
+  freezePoint:  v => checkNumber("Simulation", "freezePoint", v, { min: 0 }),
+  useBarnesHut: v => checkBoolean("Simulation", "useBarnesHut", v),
+  collision:    v => checkOneOf("Simulation", "collision", v, ["grid", "barnesHut", "pairs"]),
+};
 
 
 /**
@@ -47,7 +69,7 @@ export class Simulation extends Emitter {
 
 
   /** @private @type {SimOpts} */
-  _opts;
+  _opts = { ...SIM_DEFAULTS };
   /**
    * [read-only, set with `setOpts()`]
    * Simulation physics options
@@ -276,7 +298,7 @@ export class Simulation extends Emitter {
    * @type {BarnesHutContext}
    * @private
    */
-  _barnesHutCtx;
+  _barnesHutCtx = new BarnesHutContext();
 
   /**
    * Grid used when `opts.collision` is `"grid"`
@@ -322,33 +344,27 @@ export class Simulation extends Emitter {
     super(SIM_EVENT_TYPES, "Simulation");
     this._graph = graph;
 
-    this._opts = {
-      friction:        opts.friction ?? 0.9,
-      gravity:         opts.gravity ?? 0.002,
-      repulsion:       opts.repulsion ?? 1000,
-      minDistSq:       opts.minDistSq ?? 100,
-      maxSpeed:        opts.maxSpeed ?? 100,
-      dt:              opts.dt ?? 1,
-      cooling:         opts.cooling ?? 0.98,
-      freezePoint:     opts.freezePoint ?? 0.01,
-      useBarnesHut:    opts.useBarnesHut ?? true,
-      collision:       opts.collision ?? "grid",
-    };
-
-    this.setDefaultNodeConfig(opts.nodeConfig ?? {});
-    this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
-    this._barnesHutCtx = new BarnesHutContext(opts.barnesHut ?? {});
+    this.setOpts(opts);
     this.sync();
   }
 
 
   /**
-   * Sets properties of `opts` using a partial object.
+   * Sets options, and wakes the layout. Options left `undefined` keep their
+   * current value. Nothing changes if any option is invalid.
    * @param {SimOptsInput} [optsInput={}] - options to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
    */
-  setOpts({nodeConfig, edgeConfig, barnesHut, ...opts} = {}) {
-    Object.assign(this._opts, opts);
+  setOpts(optsInput = {}) {
+    checkKnownKeys("Simulation", optsInput, OPTION_NAMES);
+    const { nodeConfig, edgeConfig, barnesHut, ...opts } = optsInput;
+    checkEach(opts, OPTION_RULES);
+    if (barnesHut !== undefined) checkBarnesHutOpts("Simulation", barnesHut, "barnesHut.");
+
+    for (const key of /** @type {(keyof SimOpts)[]} */ (Object.keys(opts))) {
+      if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
+    }
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
     if (barnesHut) this._barnesHutCtx.setOpts(barnesHut);

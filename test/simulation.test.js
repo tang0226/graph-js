@@ -125,6 +125,51 @@ describe("Simulation: config cascade", () => {
   });
 });
 
+describe("Simulation: options", () => {
+  test("invalid options throw, naming the option, and change nothing", () => {
+    const sim = new Simulation(chain(3), { friction: 0.5 });
+    for (const [bad, pattern] of [
+      [{ friction: 1.5 }, /^RangeError: Simulation: `friction` must be a finite number from 0 to 1$/],
+      [{ friction: "0.5" }, /^TypeError: Simulation: `friction`/],
+      [{ gravity: -0.1 }, /gravity/],
+      [{ repulsion: NaN }, /repulsion/],
+      [{ maxSpeed: 0 }, /maxSpeed/],
+      [{ dt: 0 }, /dt/],
+      [{ cooling: 0 }, /cooling/],
+      [{ cooling: 1.01 }, /cooling/],
+      [{ freezePoint: -1 }, /freezePoint/],
+      [{ useBarnesHut: "yes" }, /useBarnesHut/],
+      [{ collision: "quadtree" }, /^RangeError: Simulation: `collision` must be one of "grid", "barnesHut", "pairs"$/],
+      [{ barnesHut: { theta: -1 } }, /^RangeError: Simulation: `barnesHut.theta`/],
+      [{ barnesHut: { depth: 3 } }, /^TypeError: Simulation: unknown option `barnesHut.depth`$/],
+      [{ springLength: 80 }, /^TypeError: Simulation: unknown option `springLength`$/],
+    ]) assert.throws(() => sim.setOpts(bad), pattern, JSON.stringify(bad));
+    assert.equal(sim.opts.friction, 0.5);
+  });
+
+  test("a rejected call changes nothing, including its valid options", () => {
+    const sim = new Simulation(chain(3));
+    const before = { ...sim.opts }, theta = sim._barnesHutCtx.theta;
+    assert.throws(() => sim.setOpts({ friction: 0.5, barnesHut: { theta: 0.5 }, gravity: -1 }), RangeError);
+    assert.throws(() => sim.setOpts({ friction: 0.5, barnesHut: { theta: -1 } }), RangeError);
+    assert.deepEqual(sim.opts, before);
+    assert.equal(sim._barnesHutCtx.theta, theta);
+  });
+
+  test("the constructor checks options too", () => {
+    assert.throws(() => new Simulation(chain(2), { dt: -1 }), RangeError);
+    assert.throws(() => new Simulation(chain(2), { frction: 0.5 }), TypeError);
+  });
+
+  test("valid edge values, Infinity for maxSpeed, and undefined values are accepted", () => {
+    const sim = new Simulation(chain(2));
+    sim.setOpts({ friction: 0, gravity: 0, repulsion: 0, cooling: 1, freezePoint: 0, maxSpeed: Infinity });
+    assert.equal(sim.opts.maxSpeed, Infinity);
+    sim.setOpts({ friction: undefined });
+    assert.equal(sim.opts.friction, 0, "undefined keeps the current value");
+  });
+});
+
 describe("Simulation: validation", () => {
   function resolved(cfg) {
     const g = new Graph();

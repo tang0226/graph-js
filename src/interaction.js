@@ -6,6 +6,11 @@
 
 
 import { INTERACTION_DEFAULTS } from "./defaults.js";
+import { checkBoolean, checkKnownKeys, checkNumber } from "./validate.js";
+
+
+/** Every interaction option name */
+const OPTION_NAMES = new Set(Object.keys(INTERACTION_DEFAULTS));
 
 
 /**
@@ -90,21 +95,18 @@ export class Interaction {
    * @throws {TypeError | RangeError} throws if an option is invalid
    */
   setOpts(opts) {
+    const owner = "Interaction";
+    checkKnownKeys(owner, opts, OPTION_NAMES);
     const next = { ...this._opts };
-    for (const key of /** @type {(keyof InteractionOpts)[]} */ (Object.keys(INTERACTION_DEFAULTS))) {
+    for (const key of /** @type {(keyof InteractionOpts)[]} */ ([...OPTION_NAMES])) {
       if (opts[key] !== undefined) /** @type {any} */ (next)[key] = opts[key];
     }
-    for (const key of /** @type {const} */ (["dragNodes", "pan", "zoom"])) {
-      if (typeof next[key] !== "boolean") throw new TypeError(`Interaction: \`${key}\` must be a boolean`);
-    }
-    if (!(next.dragThreshold >= 0 && Number.isFinite(next.dragThreshold)))
-      throw new RangeError("Interaction: `dragThreshold` must be a finite number, 0 or more");
-    if (!(next.zoomSpeed > 0 && Number.isFinite(next.zoomSpeed)))
-      throw new RangeError("Interaction: `zoomSpeed` must be a finite number above 0");
-    if (!(next.minZoom > 0 && Number.isFinite(next.minZoom)))
-      throw new RangeError("Interaction: `minZoom` must be a finite number above 0");
-    if (!(next.maxZoom >= next.minZoom))
-      throw new RangeError("Interaction: `maxZoom` must be at least `minZoom`");
+    for (const key of /** @type {const} */ (["dragNodes", "pan", "zoom"])) checkBoolean(owner, key, next[key]);
+    checkNumber(owner, "dragThreshold", next.dragThreshold, { min: 0 });
+    checkNumber(owner, "zoomSpeed", next.zoomSpeed, { min: 0, aboveMin: true });
+    checkNumber(owner, "minZoom", next.minZoom, { min: 0, aboveMin: true });
+    checkNumber(owner, "maxZoom", next.maxZoom, { min: 0, aboveMin: true, allowInfinity: true });
+    if (next.maxZoom < next.minZoom) throw new RangeError("Interaction: `maxZoom` must be at least `minZoom`");
     this._opts = next;
     return this;
   }

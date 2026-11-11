@@ -19,11 +19,12 @@
 
 
 import { Simulation } from "./simulation.js";
-import { clamp, circleRectCollision, keysOf, now } from "./utils.js";
+import { circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache, IMAGE_LOADING, IMAGE_FAILED, pickSpriteSize } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
+import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
 import { HookRegistry } from "./hook-registry.js";
 
 
@@ -34,6 +35,39 @@ import { HookRegistry } from "./hook-registry.js";
  */
 const HOOK_NAMES = { background: true, overlay: true };
 const HOOK_TYPES = keysOf(HOOK_NAMES);
+
+/** Every renderer option name, including the setup and config options */
+const OPTION_NAMES = new Set([...Object.keys(RENDERER_DEFAULTS), "canvas", "nodeConfig", "edgeConfig"]);
+
+/** Every `ReferrerPolicy` value, for `imageReferrerPolicy` */
+const REFERRER_POLICIES = [
+  "", "no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin",
+  "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url",
+];
+
+/**
+ * A check per renderer option
+ * @type {Record<keyof RendererOpts, (v: any) => void>}
+ */
+const OPTION_RULES = {
+  background:            v => checkString("Renderer", "background", v),
+  renderEdges:           v => checkBoolean("Renderer", "renderEdges", v),
+  renderLabels:          v => checkBoolean("Renderer", "renderLabels", v),
+  labelFont:             v => checkString("Renderer", "labelFont", v),
+  labelPosition:         v => checkOneOf("Renderer", "labelPosition", v, ["bottom", "top", "left", "right"]),
+  labelMargin:           v => checkNumber("Renderer", "labelMargin", v),
+  minLabelSize:          v => checkNumber("Renderer", "minLabelSize", v, { min: 0 }),
+  maxLabelSize:          v => checkNumber("Renderer", "maxLabelSize", v, { min: 0, allowInfinity: true }),
+  scaleStrokes:          v => checkBoolean("Renderer", "scaleStrokes", v),
+  minEdgeWidth:          v => checkNumber("Renderer", "minEdgeWidth", v, { min: 0 }),
+  maxEdgeWidth:          v => checkNumber("Renderer", "maxEdgeWidth", v, { min: 0, allowInfinity: true }),
+  highlightMode:         v => checkOneOf("Renderer", "highlightMode", v, ["dim", "hide"]),
+  highlightAlpha:        v => checkNumber("Renderer", "highlightAlpha", v, { min: 0, max: 1 }),
+  highlightFadeDuration: v => checkNumber("Renderer", "highlightFadeDuration", v, { min: 0 }),
+  imageReferrerPolicy:   v => checkOneOf("Renderer", "imageReferrerPolicy", v, REFERRER_POLICIES),
+  crossOrigin:           v => checkOneOf("Renderer", "crossOrigin", v, ["anonymous", "use-credentials", null]),
+  imageCacheMB:          v => checkNumber("Renderer", "imageCacheMB", v, { min: 0, allowInfinity: true }),
+};
 
 /**
  * Font size (px) labels are measured and drawn at. Each label is scaled to its
@@ -342,79 +376,25 @@ export class Renderer {
   constructor(simulation, opts = {}) {
     this._simulation = simulation;
     this._graph = simulation.graph;
-    const DF = RENDERER_DEFAULTS;
-    this._opts = {
-      background: opts.background ?? DF.background,
-      renderEdges: opts.renderEdges ?? DF.renderEdges,
-
-      renderLabels: opts.renderLabels ?? DF.renderLabels,
-      labelFont: opts.labelFont ?? DF.labelFont,
-      labelPosition: opts.labelPosition ?? DF.labelPosition,
-      labelMargin: opts.labelMargin ?? DF.labelMargin,
-      minLabelSize: Math.max(opts.minLabelSize ?? DF.minLabelSize, 0),
-      maxLabelSize: Math.max(opts.maxLabelSize ?? DF.maxLabelSize, 0),
-
-      scaleStrokes: opts.scaleStrokes ?? DF.scaleStrokes,
-      minEdgeWidth: Math.max(opts.minEdgeWidth ?? DF.minEdgeWidth, 0),
-      maxEdgeWidth: Math.max(opts.maxEdgeWidth ?? DF.maxEdgeWidth, 0),
-      
-      highlightMode: opts.highlightMode ?? DF.highlightMode,
-
-      highlightAlpha: clamp(
-        opts.highlightAlpha ?? DF.highlightAlpha, 0, 1),
-      
-      highlightFadeDuration: Math.max(
-        opts.highlightFadeDuration ?? DF.highlightFadeDuration, 0),
-      
-      imageCacheMB: Math.max(opts.imageCacheMB ?? DF.imageCacheMB, 0),
-      
-      imageReferrerPolicy: opts.imageReferrerPolicy ?? DF.imageReferrerPolicy,
-      
-      crossOrigin: opts.crossOrigin === undefined ?
-        DF.crossOrigin : opts.crossOrigin,
-    };
-
-    if (opts.canvas) this.attach(opts.canvas);
-
-    this.setDefaultNodeConfig(opts.nodeConfig ?? {});
-    this.setDefaultEdgeConfig(opts.edgeConfig ?? {});
-    
+    this.setOpts(opts);
     this.sync();
   }
 
 
   /**
-   * Sets properties of `opts` using a partial object.
+   * Sets options. Options left `undefined` keep their current value. Nothing
+   * changes if any option is invalid.
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
    */
-  setOpts({
-    canvas, nodeConfig, edgeConfig,
-    minLabelSize, maxLabelSize, minEdgeWidth, maxEdgeWidth,
-    highlightAlpha, highlightFadeDuration, imageCacheMB,
-    ...opts
-  } = {}) {
-    Object.assign(this._opts, opts);
-    if (minLabelSize !== undefined) {
-      this._opts.minLabelSize = Math.max(minLabelSize, 0);
-    }
-    if (maxLabelSize !== undefined) {
-      this._opts.maxLabelSize = Math.max(maxLabelSize, 0);
-    }
-    if (minEdgeWidth !== undefined) {
-      this._opts.minEdgeWidth = Math.max(minEdgeWidth, 0);
-    }
-    if (maxEdgeWidth !== undefined) {
-      this._opts.maxEdgeWidth = Math.max(maxEdgeWidth, 0);
-    }
-    if (highlightAlpha !== undefined) {
-      this._opts.highlightAlpha = clamp(highlightAlpha, 0, 1);
-    }
-    if (highlightFadeDuration !== undefined) {
-      this._opts.highlightFadeDuration = Math.max(highlightFadeDuration, 0);
-    }
-    if (imageCacheMB !== undefined) {
-      this._opts.imageCacheMB = Math.max(imageCacheMB, 0);
+  setOpts(optsInput = {}) {
+    checkKnownKeys("Renderer", optsInput, OPTION_NAMES);
+    const { canvas, nodeConfig, edgeConfig, ...opts } = optsInput;
+    checkEach(opts, OPTION_RULES);
+
+    for (const key of /** @type {(keyof RendererOpts)[]} */ (Object.keys(opts))) {
+      if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
     }
     // Cached label widths were measured in the old font
     if (opts.labelFont !== undefined) {
@@ -422,7 +402,7 @@ export class Renderer {
       this._labelsDirty = true;
     }
     // Mode and alpha set the dimmed target, so ease toward the new value
-    if (highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
+    if (opts.highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
     if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
     if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);

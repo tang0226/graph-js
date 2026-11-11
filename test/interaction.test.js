@@ -159,6 +159,14 @@ describe("Interaction: enabling", () => {
     } finally { restoreWindow(); }
   });
 
+  test("unknown option names throw", () => {
+    const { gjs, restoreWindow } = setup(true);
+    try {
+      assert.throws(() => gjs.enableInteraction({ scrollZoom: true }), /^TypeError: Interaction: unknown option `scrollZoom`$/);
+      assert.throws(() => new GraphJS({ interaction: { drag: false } }), TypeError);
+    } finally { restoreWindow(); }
+  });
+
   test("invalid options throw and change nothing", () => {
     const { gjs, restoreWindow } = setup(true);
     try {

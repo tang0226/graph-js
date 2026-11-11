@@ -153,6 +153,15 @@ gjs.renderer.setOpts({ background: "#15171c", renderEdges: false });
 
 Interaction options are changed with `enableInteraction()` (see [Built-in interaction](#built-in-interaction)).
 
+Options are checked when they're set, in the constructor and in `setOpts()`. An unknown option name throws a `TypeError`, and so does a value of the wrong type; a value outside its range throws a `RangeError`. Nothing changes if any option in the call is invalid, and options left `undefined` keep their current value.
+
+```js
+gjs.renderer.setOpts({ highlightAlpha: 1.5 });   // RangeError: Renderer: `highlightAlpha` must be a finite number from 0 to 1
+gjs.simulation.setOpts({ frction: 0.8 });         // TypeError: Simulation: unknown option `frction`
+```
+
+Values worked out from your node and edge data are treated differently: a config function that returns an invalid value for one node, such as `NaN` for its radius, falls back to the default for that node, so one bad data point doesn't stop a frame.
+
 ### Attaching and resizing the canvas
 
 A `GraphJS` instance can be created without a canvas. The canvas element can be attached any time after instantiation.
@@ -977,6 +986,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Assigning `renderer.view` now checks its values.** Assigning a non-finite `x` or `y`, or a `zoom` that isn't a finite number above 0, throws a `RangeError` and leaves the view unchanged. These values already broke coordinate conversions and rendering. Writing a single field, as in `renderer.view.zoom = 0`, isn't checked.
 - **Edge widths, arrowheads and node outlines now scale with zoom** (see [Edge and outline widths](#edge-and-outline-widths)). At zoom 1 they look the same as before. Zoomed out they get thinner and fade, and zoomed in they get thicker, up to `maxEdgeWidth`. Set `scaleStrokes: false` to keep the old fixed screen sizes.
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
+- **Invalid options now throw instead of being clamped or accepted.** `new GraphJS()`, the layer constructors and every `setOpts()` check their options (see [Changing options](#changing-options)). Previously `Renderer` clamped some out-of-range values, such as a negative `minEdgeWidth` or a `highlightAlpha` above 1, and accepted others, such as an unknown `labelPosition`, while `Simulation` accepted anything. Values that were silently fixed before now throw a `RangeError`, and misspelled option names throw a `TypeError` instead of being ignored. To keep forgiving input, clamp values yourself before passing them in.
 - **`SIM_NODE_DEFAULTS` and `SIM_EDGE_DEFAULTS` are no longer exported** from `@tang0226/graph-js/simulation`. Read the defaults a simulation is using from `simulation.defaultNodeConfig` and `simulation.defaultEdgeConfig` instead, and change them with `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. Changing the exported objects changed defaults for every simulation at once, which was never supported.
 
 ### From 0.5

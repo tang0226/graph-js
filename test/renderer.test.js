@@ -237,12 +237,13 @@ describe("Renderer: stroke scaling", () => {
     assert.deepEqual(strokes(ctx)[0], [1, 1], "no fade");
   });
 
-  test("setOpts clamps edge width limits to zero", () => {
+  test("setOpts rejects negative edge width limits, and changes nothing", () => {
     const { r } = scene(false, []);
-    r.setOpts({ minEdgeWidth: -1, maxEdgeWidth: -5, scaleStrokes: false });
-    assert.equal(r.opts.minEdgeWidth, 0);
-    assert.equal(r.opts.maxEdgeWidth, 0);
-    assert.equal(r.opts.scaleStrokes, false);
+    assert.throws(() => r.setOpts({ minEdgeWidth: -1, scaleStrokes: false }), RangeError);
+    assert.throws(() => r.setOpts({ maxEdgeWidth: -5 }), RangeError);
+    assert.deepEqual([r.opts.minEdgeWidth, r.opts.maxEdgeWidth, r.opts.scaleStrokes], [1, 8, true]);
+    r.setOpts({ minEdgeWidth: 0, maxEdgeWidth: Infinity });
+    assert.deepEqual([r.opts.minEdgeWidth, r.opts.maxEdgeWidth], [0, Infinity]);
   });
 });
 
@@ -715,13 +716,13 @@ describe("Renderer: sprites", () => {
   describe("cache", () => {
     const SPRITE_64 = 64 * 64 * 4;
 
-    test("defaults to 64 MB; negative budgets are clamped to 0", async () => {
-      const s = await spriteScene({ opts: { imageCacheMB: -1 } });
-      try {
-        assert.equal(s.r.opts.imageCacheMB, 0);
-        s.r.setOpts({ imageCacheMB: 64 });
-        assert.equal(scene(false, []).r.opts.imageCacheMB, 64);
-      } finally { s.restore(); }
+    test("defaults to 64 MB; negative budgets are rejected", () => {
+      assert.equal(scene(false, []).r.opts.imageCacheMB, 64);
+      assert.throws(() => scene(false, [], { opts: { imageCacheMB: -1 } }), RangeError);
+      const { r } = scene(false, []);
+      assert.throws(() => r.setOpts({ imageCacheMB: NaN }), RangeError);
+      r.setOpts({ imageCacheMB: 0 });
+      assert.equal(r.opts.imageCacheMB, 0);
     });
 
     test("sprites on screen are kept even over budget; unused ones are evicted and closed", async () => {
@@ -925,6 +926,37 @@ describe("Renderer: resize and canvas kinds", () => {
   });
 });
 
+describe("Renderer: option checks", () => {
+  test("invalid options throw, naming the option, and change nothing", () => {
+    const { r } = scene(false, []);
+    const before = { ...r.opts };
+    for (const [bad, pattern] of [
+      [{ background: 0 }, /^TypeError: Renderer: `background` must be a string$/],
+      [{ renderEdges: 1 }, /renderEdges/],
+      [{ labelMargin: NaN }, /labelMargin/],
+      [{ highlightMode: "fade" }, /highlightMode/],
+      [{ highlightAlpha: NaN }, /^RangeError: Renderer: `highlightAlpha`/],
+      [{ crossOrigin: "anon" }, /crossOrigin/],
+      [{ imageReferrerPolicy: "no-referer" }, /imageReferrerPolicy/],
+      [{ colour: "red" }, /^TypeError: Renderer: unknown option `colour`$/],
+      [{ background: "#000", highlightAlpha: 2 }, /highlightAlpha/],
+    ]) assert.throws(() => r.setOpts(bad), pattern, JSON.stringify(bad));
+    assert.deepEqual(r.opts, before, "a rejected call changes nothing, including its valid options");
+  });
+
+  test("the constructor checks options too", () => {
+    assert.throws(() => scene(false, [], { opts: { labelPosition: "middle" } }), RangeError);
+    assert.throws(() => scene(false, [], { opts: { bg: "#000" } }), TypeError);
+  });
+
+  test("a null crossOrigin and undefined values are accepted", () => {
+    const { r } = scene(false, []);
+    r.setOpts({ crossOrigin: null, background: undefined });
+    assert.equal(r.opts.crossOrigin, null);
+    assert.equal(r.opts.background, "#ffffff", "undefined keeps the current value");
+  });
+});
+
 describe("Renderer: options", () => {
   const sim = () => new Simulation(new Graph(), {});
 
@@ -1039,13 +1071,13 @@ describe("Renderer: labels", () => {
       assert.equal(style.labelScale, 15);
     });
 
-    test("negative label sizes are clamped to 0, in the constructor and setOpts", () => {
-      const { r } = scene(false, [], { opts: { minLabelSize: -1, maxLabelSize: -1 } });
-      assert.equal(r.opts.minLabelSize, 0);
-      assert.equal(r.opts.maxLabelSize, 0);
-      r.setOpts({ minLabelSize: -5, maxLabelSize: -5 });
-      assert.equal(r.opts.minLabelSize, 0);
-      assert.equal(r.opts.maxLabelSize, 0);
+    test("negative label sizes are rejected, in the constructor and setOpts", () => {
+      assert.throws(() => scene(false, [], { opts: { minLabelSize: -1 } }), RangeError);
+      const { r } = scene(false, []);
+      assert.throws(() => r.setOpts({ maxLabelSize: -5 }), RangeError);
+      assert.equal(r.opts.maxLabelSize, Infinity);
+      r.setOpts({ minLabelSize: 0, maxLabelSize: 0 });
+      assert.deepEqual([r.opts.minLabelSize, r.opts.maxLabelSize], [0, 0]);
     });
   });
 
@@ -1077,7 +1109,6 @@ describe("Renderer: labels", () => {
       ["right", [322, 300], "left", "middle"],
       ["left", [278, 300], "right", "middle"],
       ["bottom", [300, 322], "center", "top"],
-      ["sideways", [300, 322], "center", "top"],
     ]) {
       test(`position "${position}" anchors the label at ${at}`, () => {
         const { r, ctx } = lscene({ opts: { labelPosition: position } });
@@ -1087,6 +1118,11 @@ describe("Renderer: labels", () => {
         assert.equal(textState(ctx)[0].textBaseline, textBaseline);
       });
     }
+
+    test("an unknown position is rejected", () => {
+      assert.throws(() => lscene({ opts: { labelPosition: "sideways" } }),
+        /^RangeError: Renderer: `labelPosition` must be one of "bottom", "top", "left", "right"$/);
+    });
 
     test("position and margin can be changed with setOpts", () => {
       const { r, ctx } = lscene();
@@ -1627,20 +1663,20 @@ describe("Renderer: highlighting", () => {
       assert.equal(r.opts.highlightFadeDuration, 150);
     });
 
-    test("a negative highlightFadeDuration is clamped to 0", () => {
-      assert.equal(hscene({ highlightFadeDuration: -5 }).r.opts.highlightFadeDuration, 0);
+    test("a negative highlightFadeDuration is rejected", () => {
+      assert.throws(() => hscene({ highlightFadeDuration: -5 }), RangeError);
       const { r } = hscene();
-      r.setOpts({ highlightFadeDuration: -1 });
-      assert.equal(r.opts.highlightFadeDuration, 0);
+      assert.throws(() => r.setOpts({ highlightFadeDuration: -1 }), RangeError);
+      assert.equal(r.opts.highlightFadeDuration, 0, "unchanged from the scene's 0");
     });
 
-    test("highlightAlpha is clamped to [0, 1] on every path", () => {
-      assert.equal(hscene({ highlightAlpha: 5 }).r.opts.highlightAlpha, 1);
+    test("highlightAlpha outside [0, 1] is rejected on every path", () => {
+      assert.throws(() => hscene({ highlightAlpha: 5 }), RangeError);
       const { r } = hscene();
-      r.setOpts({ highlightAlpha: -1 });
-      assert.equal(r.opts.highlightAlpha, 0);
-      r.setHighlight({ nodes: ["a"], alpha: 2 });
-      assert.equal(r.opts.highlightAlpha, 1);
+      assert.throws(() => r.setOpts({ highlightAlpha: -1 }), RangeError);
+      assert.throws(() => r.setHighlight({ nodes: ["a"], alpha: 2 }), RangeError);
+      assert.equal(r.opts.highlightAlpha, 0.15);
+      assert.equal(r.hasHighlight(), false, "a rejected setHighlight changes nothing");
     });
 
     test("setHighlight's mode and alpha are kept; omitting them leaves the options alone", () => {
