@@ -16,7 +16,7 @@
 
 
 import { Simulation } from "./simulation.js";
-import { asFn, clamp, circleRectCollision } from "./utils.js";
+import { asFn, clamp, circleRectCollision, now } from "./utils.js";
 
 
 /** @type {RendererOpts} */
@@ -2094,7 +2094,7 @@ export class Renderer {
    *    `requestAnimationFrame` timestamp when rendering from a loop.
    * @returns {boolean} whether the `sync()` and render took place
    */
-  render(time = globalThis.performance?.now() ?? Date.now()) {
+  render(time = now()) {
     if (!this._ctx || !this._size) return false;
     this.sync();
     this._stepFade(time);

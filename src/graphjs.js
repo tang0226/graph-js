@@ -12,6 +12,7 @@ import { Renderer } from "./renderer.js";
 import { Tween } from "./tween.js";
 import { Interaction } from "./interaction.js";
 import { Emitter } from "./emitter.js";
+import { now } from "./utils.js";
 
 
 /**
@@ -310,7 +311,7 @@ export class GraphJS extends Emitter {
    * @returns {this} self reference
    */
   step() {
-    this._frame(globalThis.performance?.now() ?? Date.now());
+    this._frame(now());
     return this;
   }
 
@@ -468,7 +469,7 @@ export class GraphJS extends Emitter {
    *    `performance.now()`.
    * @returns {this} self reference
    */
-  stepTweens(time = globalThis.performance?.now() ?? Date.now()) {
+  stepTweens(time = now()) {
     if (this._tweens.size === 0) return this;
     const dt = this._tweenClock === null ? 0 : Math.max(time - this._tweenClock, 0);
     this._tweenClock = time;

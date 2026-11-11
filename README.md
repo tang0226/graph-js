@@ -694,7 +694,7 @@ gjs.on("zoom", () => gjs.cancelTween("camera"));
 
 ### Graph events
 
-The graph emits these as nodes and edges change, whether through `gjs.addNode()` and the other shortcuts or on `gjs.graph` directly. Listen on `gjs.graph`, or on a `Graph` used on its own, including in Node.
+The graph emits these as nodes and edges change, whether through `gjs.addNode()` and the other shortcuts or on `gjs.graph` directly. Listen on `gjs.graph`, or on a standalone `Graph` instance (works in Node).
 
 | Event | When | Data |
 |---|---|---|

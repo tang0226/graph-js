@@ -1,10 +1,5 @@
-/**
- * Copies a typed array into a new, larger one of the same type.
- * @param {Int32Array} a - array to copy
- * @param {number} n - new length
- * @returns {Int32Array} new array
- */
-const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
+import { growI32 } from "./utils.js";
+
 
 /**
  * Hashes integer cell coordinates into a bucket index.

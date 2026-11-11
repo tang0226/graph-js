@@ -1,29 +1,14 @@
 /** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs/simulation.js' */
 
+import { growF64, growI32 } from "./utils.js";
+
+
 /** @type {BarnesHutOpts} */
 const DEFAULT_BH_CONFIG = {
   capacity: 1024,
   theta: 0.9,
   maxDepth: 20,
 };
-
-
-
-/**
- * Copies a typed array into a new, larger one of the same type.
- * @param {Float64Array} a - array to copy
- * @param {number} n - new length
- * @returns {Float64Array} new array
- */
-const growF64 = (a, n) => { const b = new Float64Array(n); b.set(a); return b; };
-
-/**
- * Copies a typed array into a new, larger one of the same type.
- * @param {Int32Array} a - array to copy
- * @param {number} n - new length
- * @returns {Int32Array} new array
- */
-const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
 
 
 

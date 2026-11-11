@@ -23,6 +23,32 @@ export const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
 
 
 /**
+ * Current time in milliseconds, for frame timestamps: `performance.now()`
+ * where it exists, otherwise `Date.now()`.
+ * @returns {number} timestamp in milliseconds
+ */
+export const now = () => globalThis.performance?.now() ?? Date.now();
+
+
+/**
+ * Copies a typed array into a new, larger one of the same type.
+ * @param {Float64Array} a - array to copy
+ * @param {number} n - new length
+ * @returns {Float64Array} new array
+ */
+export const growF64 = (a, n) => { const b = new Float64Array(n); b.set(a); return b; };
+
+
+/**
+ * Copies a typed array into a new, larger one of the same type.
+ * @param {Int32Array} a - array to copy
+ * @param {number} n - new length
+ * @returns {Int32Array} new array
+ */
+export const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return b; };
+
+
+/**
  * Determines if a circle and rectangle in the coordinate plane are colliding.
  * @param {number} cx - x coordinate of circle
  * @param {number} cy - y coordinate of circle
