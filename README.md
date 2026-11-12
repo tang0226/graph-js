@@ -37,6 +37,7 @@ npm install @tang0226/graph-js
   - [Interaction events](#interaction-events)
   - [Graph events](#graph-events)
   - [Simulation events](#simulation-events)
+  - [Renderer events](#renderer-events)
 - [Drawing](#drawing)
   - [Highlighting](#highlighting)
   - [Custom drawing](#custom-drawing)
@@ -367,6 +368,8 @@ entry?.image;    // the loaded HTMLImageElement, or null while loading or after 
 
 An image that failed to load stays failed: the renderer doesn't request it again, even when nodes using it are added or changed. To retry it, call `loadImage()` with its source, which starts a new request for a failed image. For an image that is already loading or loaded, `loadImage()` does nothing and returns `false`.
 
+When a request finishes, the renderer emits an `imageload` or `imageerror` event (see [Renderer events](#renderer-events)). GraphJS uses them to draw images as they arrive, even while the loop is stopped.
+
 For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the original image, so they stay as sharp as it allows. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
 
 ### Node labels
@@ -687,7 +690,7 @@ Your own listeners can also run alongside built-in interaction, for input it doe
 
 ### Listening for events
 
-`GraphJS`, the graph and the simulation each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
+`GraphJS`, the graph, the simulation and the renderer each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
 
 ```js
 function onClick(e) {
@@ -705,7 +708,7 @@ Each object only takes its own event names: `gjs.on("settle", ...)` throws, beca
 Every event has `type`, its name, and `target`, the object that emitted it, along with any data listed for that event. Every event also has `preventDefault()` and `defaultPrevented`, but what preventing does depends on where the event comes from:
 
 - **Interaction events** are emitted before GraphJS responds to the user, so calling `preventDefault()` stops the response listed in the [interaction events](#interaction-events) table. The other listeners still run, and can read `defaultPrevented`.
-- **Layer events,** from the graph and the simulation, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as removing a node from a `nodeadd` listener, or calling `heat()` from a `settle` listener.
+- **Layer events,** from the graph, the simulation and the renderer, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as removing a node from a `nodeadd` listener, or calling `heat()` from a `settle` listener.
 
 How listeners run is the same for every event:
 
@@ -809,6 +812,33 @@ gjs.simulation.on("wake", () => gjs.start());
 - **Every wake:** every change that wakes the layout, listed under [Settling](#settling), goes through `heat()`, so `wake` covers them all. It's emitted straight away, before the next tick. Heating a layout that's already moving doesn't emit it.
 - **From code too:** unlike interaction events, simulation events report changes however they're made, including by your own calls to `heat()`, `setOpts()` or `pin()`.
 - **A stopped loop:** if the loop is stopped, a change wakes the layout but nothing ticks it. That's what the `wake` listener above is for. While it's stopped, call `gjs.requestRender()` after a change you want to see; it also keeps tweens and highlight fades running until they finish (see [Starting and stopping](#starting-and-stopping)).
+
+### Renderer events
+
+The renderer emits these as node images finish loading (see [Node images](#node-images)). Listen on `gjs.renderer`.
+
+| Event | When | Data |
+|---|---|---|
+| `imageload` | a node image loads | `src`, `image` |
+| `imageerror` | a node image fails to load | `src` |
+
+- **`src`:** the image's source, its key in `gjs.renderer.images`.
+- **`image`:** the loaded `HTMLImageElement`.
+
+```js
+// Retry a failed image once, after a second
+const retried = new Set();
+gjs.renderer.on("imageerror", e => {
+  if (retried.has(e.src)) return;
+  retried.add(e.src);
+  setTimeout(() => gjs.renderer.loadImage(e.src), 1000);
+});
+```
+
+- **Up to date:** each event is emitted once the image's entry in `gjs.renderer.images` has its new status.
+- **Once per request:** each request emits one event when it finishes. Retrying a failed image with `loadImage()` makes a new request, which emits again. An image cleaned up before its request finishes emits nothing.
+- **Drawing:** GraphJS listens for both events itself and calls `gjs.requestRender()`, so images show as they arrive even while the loop is stopped. A `Renderer` used on its own doesn't redraw by itself; call `render()` from a listener.
+- **No defaults:** both report what has already happened, so their defaults can't be prevented.
 
 ## Drawing
 
@@ -1020,6 +1050,8 @@ function onSettle(e: SimEvent<"settle">) {
 }
 gjs.simulation.on("settle", onSettle);
 ```
+
+Renderer events have `RendererEvent<K>` and `RendererListener<K>` in the same way.
 
 The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types, including their events, don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
 

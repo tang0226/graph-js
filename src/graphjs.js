@@ -152,6 +152,11 @@ export class GraphJS extends Emitter {
       : opts.renderer ?? {};
     this._renderer = new Renderer(this._simulation, rendererOpts);
 
+    // A settled image changes what's drawn. The loop draws it anyway; while
+    // the loop is stopped, this draws it
+    const redraw = () => { this.requestRender(); };
+    this._renderer.on("imageload", redraw).on("imageerror", redraw);
+
     if (opts.interaction) {
       this.enableInteraction(opts.interaction === true ? {} : opts.interaction);
     }

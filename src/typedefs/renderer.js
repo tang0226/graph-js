@@ -1,6 +1,7 @@
 // RENDERER LAYER
 /** @import { Renderer } from '../renderer.js' */
 /** @import { NodeOption, EdgeOption } from './graph.js' */
+/** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
@@ -118,6 +119,37 @@
  * Function called by `render()` to draw on the canvas, in canvas coordinates
  * (CSS pixels). `time` is the frame timestamp passed to `render()`.
  * @typedef {(r: Renderer, time: number) => void} RendererHook
+ */
+
+// EVENTS
+
+/**
+ * Renderer event names, each mapped to the data its events carry on top of
+ * the fields every event has. Each is emitted once the image's entry in
+ * `images` is updated. These events report what happened, so calling
+ * `preventDefault()` on them has no effect.
+ * @typedef {object} RendererEventMap
+ * @property {{ src: string, image: HTMLImageElement }} imageload - a node
+ *    image loaded: `src` is its source, `image` the loaded image
+ * @property {{ src: string }} imageerror - a node image failed to load:
+ *    `src` is its source
+ */
+
+/**
+ * Name of a renderer event
+ * @typedef {keyof RendererEventMap} RendererEventType
+ */
+
+/**
+ * Event passed to renderer listeners
+ * @template {RendererEventType} [K=RendererEventType]
+ * @typedef {EmitterEvent<RendererEventMap, K, Renderer>} RendererEvent
+ */
+
+/**
+ * Function called with each renderer event of the type it was added for
+ * @template {RendererEventType} [K=RendererEventType]
+ * @typedef {EmitterListener<RendererEventMap, K, Renderer>} RendererListener
  */
 
 export {};

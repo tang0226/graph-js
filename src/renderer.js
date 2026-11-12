@@ -13,6 +13,7 @@
  *  NodeStyleConfig, EdgeStyleConfig,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
+ *  RendererEventMap, RendererEventType,
  *  Canvas, CanvasContext, Size, View, ImageEntry,
  * } from './typedefs/renderer.js'
  */
@@ -26,6 +27,17 @@ import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
 import { HookRegistry } from "./hook-registry.js";
+import { Emitter } from "./emitter.js";
+
+
+/**
+ * Every renderer event name. The type requires exactly the keys of
+ * `RendererEventMap`, so adding an event there without adding it here fails
+ * type checking.
+ * @type {Record<RendererEventType, true>}
+ */
+const RENDERER_EVENT_NAMES = { imageload: true, imageerror: true };
+const RENDERER_EVENT_TYPES = keysOf(RENDERER_EVENT_NAMES);
 
 
 /**
@@ -92,8 +104,10 @@ const IMAGE_DOT_THRESHOLD = 6;
 
 /**
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
+ * Emits the events in `RendererEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<RendererEventMap, Renderer>}
  */
-export class Renderer {
+export class Renderer extends Emitter {
   /** @private @type {Graph} */
   _graph;
   /**
@@ -303,11 +317,15 @@ export class Renderer {
 
 
   /**
-   * Node images and their cached sprites
+   * Node images and their cached sprites. Settled requests are emitted as
+   * `imageload` and `imageerror` events.
    * @type {ImageCache}
    * @private
    */
-  _imageCache = new ImageCache();
+  _imageCache = new ImageCache((src, entry) => {
+    if (entry.image) this._emit("imageload", { src, image: entry.image });
+    else this._emit("imageerror", { src });
+  });
   /**
    * [read-only] Node images, keyed by source: each entry's load `status`,
    * and the `image` once it has loaded
@@ -372,6 +390,7 @@ export class Renderer {
    * @param {RendererOptsInput} [opts={}] - renderer options
    */
   constructor(simulation, opts = {}) {
+    super(RENDERER_EVENT_TYPES, "Renderer");
     this._simulation = simulation;
     this._graph = simulation.graph;
     this.setOpts(opts);
@@ -708,7 +727,8 @@ export class Renderer {
    * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
    * `imageReferrerPolicy`. A source that is loading or loaded is not requested
    * again; one that failed is. Failed images are only retried by calling this:
-   * the renderer itself never requests them again.
+   * the renderer itself never requests them again. When the request settles,
+   * an `imageload` or `imageerror` event is emitted.
    * @param {string} src - image source; also the cache key
    * @returns {boolean} `true` if a request was started, `false` if `src` is
    *    already loading or loaded

@@ -495,6 +495,69 @@ describe("Renderer: images", () => {
   });
 });
 
+describe("Renderer: image events", () => {
+  /* A renderer whose node images are requested on construction, with every
+     image event recorded along with the `images` entry seen by the listener. */
+  function eventScene(srcs, fail = () => false) {
+    const restore = installImage({ fail });
+    const g = new Graph();
+    for (const src of srcs) g.addNode({ img: src });
+    const sim = new Simulation(g, {});
+    const r = new Renderer(sim, { canvas: makeCanvas(), nodeConfig: { image: n => n.data.img ?? null } });
+    const events = [];
+    const record = e => events.push({ ...e, status: r.images.get(e.src)?.status });
+    r.on("imageload", record).on("imageerror", record);
+    return { r, events, restore };
+  }
+
+  test("imageload carries the source and image; imageerror the source", async () => {
+    const { r, events, restore } = eventScene(["a.png", "bad.png"], src => src === "bad.png");
+    try {
+      assert.deepEqual(events, [], "nothing until a request settles");
+      await flush();
+      assert.equal(events.length, 2);
+      const [load, error] = events;
+      assert.equal(load.type, "imageload");
+      assert.equal(load.src, "a.png");
+      assert.equal(load.image, r.images.get("a.png")?.image);
+      assert.equal(load.target, r);
+      assert.equal(load.status, "loaded", "`images` is updated before the event");
+      assert.equal(error.type, "imageerror");
+      assert.equal(error.src, "bad.png");
+      assert.equal("image" in error, false);
+      assert.equal(error.status, "failed");
+    } finally { restore(); }
+  });
+
+  test("a retry by loadImage emits again", async () => {
+    let down = true;
+    const { r, events, restore } = eventScene(["a.png"], () => down);
+    try {
+      await flush();
+      down = false;
+      r.loadImage("a.png");
+      await flush();
+      assert.deepEqual(events.map(e => e.type), ["imageerror", "imageload"]);
+    } finally { restore(); }
+  });
+
+  test("a source collected before it settles emits nothing", async () => {
+    const { r, events, restore } = eventScene(["a.png"]);
+    try {
+      r._imageCache.collect(new Set());
+      await flush();
+      assert.deepEqual(events, []);
+    } finally { restore(); }
+  });
+
+  test("unknown event names throw", () => {
+    const { r, restore } = eventScene([]);
+    try {
+      assert.throws(() => r.on("settle", () => {}), TypeError);
+    } finally { restore(); }
+  });
+});
+
 describe("Renderer: sprites", () => {
   /* Image nodes of radius 20 at the canvas centre (400, 300), so each is 40 px
      across at zoom 1, with a stubbed OffscreenCanvas so sprites can be built.

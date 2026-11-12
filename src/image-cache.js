@@ -112,6 +112,24 @@ export class ImageCache {
 
 
   /**
+   * Called when a request settles, after its entry is updated. Not called
+   * for a request whose entry was collected before it settled.
+   * @type {((src: string, entry: Readonly<ImageEntry>) => void) | undefined}
+   * @private
+   */
+  _onSettle;
+
+
+  /**
+   * @param {(src: string, entry: Readonly<ImageEntry>) => void} [onSettle] -
+   *    called with the source and its new entry when a request settles
+   */
+  constructor(onSettle = undefined) {
+    this._onSettle = onSettle;
+  }
+
+
+  /**
    * Starts loading an image, keyed by its source. A source that is loading
    * or loaded is not requested again, and neither is one that failed unless
    * `retry` is set.
@@ -138,7 +156,9 @@ export class ImageCache {
     // meantime mustn't be brought back by a late load
     /** @param {Readonly<ImageEntry>} entry */
     const settle = entry => {
-      if (this._images.get(src) === loading) this._images.set(src, entry);
+      if (this._images.get(src) !== loading) return;
+      this._images.set(src, entry);
+      this._onSettle?.(src, entry);
     };
     img.onload  = () => settle(Object.freeze({ status: "loaded", image: img }));
     img.onerror = () => settle(Object.freeze({ status: "failed", image: null }));

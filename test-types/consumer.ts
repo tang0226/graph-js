@@ -22,6 +22,7 @@ import type {
   RendererOptsInput, RendererOpts, Size, View, ImageEntry,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
+  RendererEventMap, RendererEventType, RendererEvent, RendererListener,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
   GraphJSPointerEventData, GraphJSNodeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
   InteractionOptsInput, InteractionOpts,
@@ -218,6 +219,19 @@ if (entry?.status === "loaded") { const el: HTMLImageElement | null = entry.imag
 const badStatus: ImageEntry["status"] = "pending";
 // @ts-expect-error -- the sentinel constants are gone
 Renderer.IMAGE_LOADING;
+
+// Image events live on the renderer
+gjs.renderer.on("imageload", e => { const s: string = e.src; const i: HTMLImageElement = e.image; const r: Renderer = e.target; });
+const onImageError = (e: RendererEvent<"imageerror">) => { const s: string = e.src; };
+const rendererListener: RendererListener<"imageload"> = e => { const k: RendererEventType = e.type; };
+gjs.renderer.on("imageerror", onImageError).on("imageload", rendererListener);
+const rendererEvents: RendererEventMap["imageerror"] = { src: "a.png" };
+// @ts-expect-error -- a failed image has no image
+gjs.renderer.on("imageerror", e => { e.image; });
+// @ts-expect-error -- renderer events aren't on the facade
+gjs.on("imageload", () => {});
+// @ts-expect-error -- emitting is internal to the renderer
+gjs.renderer._emit("imageload", { src: "a.png", image: new Image() });
 
 // Internal members are private, so consumers can't depend on them
 // @ts-expect-error -- private

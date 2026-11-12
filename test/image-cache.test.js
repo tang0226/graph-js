@@ -55,6 +55,41 @@ describe("ImageCache", () => {
     } finally { restore(); }
   });
 
+  test("onSettle is called once per settled request, after the entry is updated", async () => {
+    const restore = installImage({ fail: src => src === "bad.png" });
+    try {
+      const calls = [];
+      const cache = new ImageCache((src, entry) => {
+        calls.push({ src, entry, current: cache.images.get(src) });
+      });
+      cache.load("a.png", null, "no-referrer");
+      cache.load("bad.png", null, "no-referrer");
+      assert.deepEqual(calls, [], "not before the request settles");
+      await flush();
+      assert.deepEqual(calls.map(c => [c.src, c.entry.status]), [["a.png", "loaded"], ["bad.png", "failed"]]);
+      for (const c of calls) assert.equal(c.current, c.entry, "the entry is in `images` when called");
+      assert.equal(calls[0].entry.image, cache.loaded("a.png"));
+
+      cache.load("bad.png", null, "no-referrer", true);
+      await flush();
+      assert.equal(calls.length, 3, "a retry settles again");
+    } finally { restore(); }
+  });
+
+  test("onSettle isn't called for a source collected before it settled", async () => {
+    const restore = installImage();
+    try {
+      const calls = [];
+      const cache = new ImageCache(src => calls.push(src));
+      cache.load("a.png", null, "no-referrer");
+      cache.load("b.png", null, "no-referrer");
+      cache.collect(new Set(["b.png"]));
+      await flush();
+      assert.deepEqual(calls, ["b.png"]);
+      assert.equal(cache.images.has("a.png"), false);
+    } finally { restore(); }
+  });
+
   test("collect deletes images whose source isn't live", async () => {
     const restore = installImage();
     try {
