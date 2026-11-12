@@ -56,6 +56,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/renderer.js").View} View */
 /** @typedef {import("./typedefs/renderer.js").NodeImage} NodeImage */
 /** @typedef {import("./typedefs/renderer.js").ImageEntry} ImageEntry */
+/** @typedef {import("./typedefs/renderer.js").ImageCrossOrigin} ImageCrossOrigin */
 /** @typedef {import("./typedefs/renderer.js").NodeStyle} NodeStyle */
 /** @typedef {import("./typedefs/renderer.js").EdgeStyle} EdgeStyle */
 /** @typedef {import("./typedefs/renderer.js").NodeStyleConfig} NodeStyleConfig */

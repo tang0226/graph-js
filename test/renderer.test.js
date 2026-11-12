@@ -386,7 +386,7 @@ describe("Renderer: images", () => {
   test("the source is cached as loading, then replaced by the image", async () => {
     const { r, restore } = imageScene();
     try {
-      assert.deepEqual(r.images.get("a.png"), { status: "loading", image: null });
+      assert.deepEqual(r.images.get("a.png"), { status: "loading", image: null, crossOrigin: "anonymous", referrerPolicy: "no-referrer" });
       await flush();
       const entry = r.images.get("a.png");
       assert.equal(entry.status, "loaded");
@@ -421,7 +421,7 @@ describe("Renderer: images", () => {
     const { r, ctx, restore } = imageScene(() => true);
     try {
       await flush();
-      assert.deepEqual(r.images.get("a.png"), { status: "failed", image: null });
+      assert.deepEqual(r.images.get("a.png"), { status: "failed", image: null, crossOrigin: "anonymous", referrerPolicy: "no-referrer" });
       ctx.ops.length = 0;
       // The stub ctx throws on a non-image source, matching the browser.
       r.render();
@@ -1036,7 +1036,7 @@ describe("Renderer: option checks", () => {
       [{ labelMargin: NaN }, /labelMargin/],
       [{ highlightMode: "fade" }, /highlightMode/],
       [{ highlightAlpha: NaN }, /^RangeError: Renderer: `highlightAlpha`/],
-      [{ crossOrigin: "anon" }, /crossOrigin/],
+      [{ crossOrigin: "anon" }, /^RangeError: Renderer: `crossOrigin` must be one of .*, or a function of the image source$/],
       [{ imageReferrerPolicy: "no-referer" }, /imageReferrerPolicy/],
       [{ colour: "red" }, /^TypeError: Renderer: unknown option `colour`$/],
       [{ background: "#000", highlightAlpha: 2 }, /highlightAlpha/],
@@ -1848,16 +1848,87 @@ describe("Renderer: image request options", () => {
     } finally { restore(); }
   });
 
-  test("changing the options affects later loads only", () => {
+  test("changing a request option requests cached images again with it", async () => {
     const { r, g, sim, requests, restore } = load({}, ["a.png"]);
     try {
-      r.opts.imageReferrerPolicy = "origin";
+      r.loadImage("preloaded.png");
+      await flush();
+      r.setOpts({ crossOrigin: null });
+      assert.deepEqual(requests.slice(2).map(q => [q.src, q.crossOrigin, q.referrerPolicy]),
+        [["a.png", null, "no-referrer"], ["preloaded.png", null, "no-referrer"]],
+        "images on nodes and preloaded images alike");
+      assert.equal(r.images.get("a.png")?.status, "loading");
+
+      r.setOpts({ imageReferrerPolicy: "origin" });
+      assert.equal(requests.length, 6, "the referrer policy counts too");
       g.addNode({ id: "late", img: "b.png" });
       sim.sync();
       r.sync();
-      assert.deepEqual(requests.map(q => [q.src, q.referrerPolicy]),
-        [["a.png", "no-referrer"], ["b.png", "origin"]],
-        "a.png is already cached, so it is not requested again with the new policy");
+      assert.deepEqual(requests.at(-1), { src: "b.png", crossOrigin: null, referrerPolicy: "origin" });
+      await flush();
+      assert.equal(r.images.get("a.png")?.status, "loaded");
+    } finally { restore(); }
+  });
+
+  test("setting a request option to its current value requests nothing", () => {
+    const { r, requests, restore } = load({ crossOrigin: null });
+    try {
+      r.setOpts({ crossOrigin: null, imageReferrerPolicy: "no-referrer", background: "#000" });
+      assert.equal(requests.length, 1);
+    } finally { restore(); }
+  });
+
+  test("function options give each source its own request options", async () => {
+    const cdn = src => src.startsWith("cdn/");
+    const { r, requests, restore } = load({
+      crossOrigin: src => (cdn(src) ? "anonymous" : null),
+      imageReferrerPolicy: src => (cdn(src) ? "no-referrer" : "origin"),
+    }, ["cdn/a.png", "own/b.png"]);
+    try {
+      assert.deepEqual(requests.map(q => [q.src, q.crossOrigin, q.referrerPolicy]), [
+        ["cdn/a.png", "anonymous", "no-referrer"],
+        ["own/b.png", null, "origin"],
+      ]);
+      r.loadImage("own/c.png");
+      assert.deepEqual(requests.at(-1), { src: "own/c.png", crossOrigin: null, referrerPolicy: "origin" },
+        "loadImage resolves them too");
+      await flush();
+      assert.equal(r.images.get("own/b.png")?.crossOrigin, null, "each entry records its options");
+      assert.equal(r.images.get("own/b.png")?.referrerPolicy, "origin");
+    } finally { restore(); }
+  });
+
+  test("changing a request option requests only the images whose options change", async () => {
+    const { r, requests, restore } = load({}, ["cdn/a.png", "own/b.png"]);
+    try {
+      await flush();
+      const cdnImage = r.images.get("cdn/a.png")?.image;
+      r.setOpts({ crossOrigin: src => (src.startsWith("cdn/") ? "anonymous" : null) });
+      assert.deepEqual(requests.slice(2).map(q => [q.src, q.crossOrigin]), [["own/b.png", null]]);
+      assert.equal(r.images.get("cdn/a.png")?.image, cdnImage, "an image whose options didn't change is kept");
+    } finally { restore(); }
+  });
+
+  test("setting the same function again re-evaluates it", async () => {
+    let anonymous = new Set(["a.png"]);
+    const crossOrigin = src => (anonymous.has(src) ? "anonymous" : null);
+    const { r, requests, restore } = load({ crossOrigin }, ["a.png", "b.png"]);
+    try {
+      await flush();
+      anonymous = new Set(["a.png", "b.png"]);
+      r.setOpts({ crossOrigin });
+      assert.deepEqual(requests.slice(2).map(q => [q.src, q.crossOrigin]), [["b.png", "anonymous"]]);
+    } finally { restore(); }
+  });
+
+  test("a function option returning an invalid value falls back to the default", () => {
+    const { r, requests, restore } = load({
+      crossOrigin: () => /** @type {any} */ ("anon"),
+      imageReferrerPolicy: () => /** @type {any} */ (undefined),
+    });
+    try {
+      assert.deepEqual(requests[0], { src: "a.png", crossOrigin: "anonymous", referrerPolicy: "no-referrer" });
+      assert.equal(typeof r.opts.crossOrigin, "function", "the option itself is kept");
     } finally { restore(); }
   });
 });

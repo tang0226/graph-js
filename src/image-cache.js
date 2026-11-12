@@ -1,4 +1,4 @@
-/** @import { Canvas, CanvasContext, ImageEntry, NodeImage } from './typedefs/renderer.js' */
+/** @import { Canvas, CanvasContext, ImageCrossOrigin, ImageEntry, NodeImage } from './typedefs/renderer.js' */
 
 
 /** Sizes (device px) that sprites of node images are made at. */
@@ -174,24 +174,32 @@ export class ImageCache {
 
 
   /**
-   * Starts loading an image, keyed by its source. A source that is loading
-   * or loaded is not requested again, and neither is one that failed unless
-   * `retry` is set.
+   * Starts loading an image, keyed by its source. Each entry records the
+   * options it was requested with, and a source requested with different
+   * options is requested again: its entry, image and sprites are replaced, and
+   * a request still in flight is ignored when it settles. With the same
+   * options, a source that is loading or loaded is not requested again, and
+   * neither is one that failed unless `retry` is set.
    * @param {string} src - image source; also the cache key
-   * @param {"anonymous" | "use-credentials" | null} crossOrigin - the request's
-   *    `crossOrigin`
+   * @param {ImageCrossOrigin} crossOrigin - the request's `crossOrigin`
    * @param {ReferrerPolicy} referrerPolicy - the request's `referrerPolicy`
    * @param {boolean} [retry=false] - whether to request a failed source again
    * @returns {boolean} `true` if a request was started, `false` if `src` was
-   *    already cached and not retried
+   *    already cached with these options and not retried
    */
   load(src, crossOrigin, referrerPolicy, retry = false) {
-    const status = this._images.get(src)?.status;
-    if (status === "loading" || status === "loaded") return false;
-    if (status === "failed" && !retry) return false;
+    const prev = this._images.get(src);
+    if (prev && prev.crossOrigin === crossOrigin && prev.referrerPolicy === referrerPolicy) {
+      if (prev.status !== "failed" || !retry) return false;
+    }
+    if (prev?.image) {
+      // Loaded with other options: what was built from it goes too
+      closeImage(prev.image);
+      this._dropSprites(src);
+    }
 
     /** @type {Readonly<ImageEntry>} */
-    const loading = Object.freeze({ status: "loading", image: null });
+    const loading = Object.freeze({ status: "loading", image: null, crossOrigin, referrerPolicy });
     this._images.set(src, loading);
     const img = new Image();
     img.crossOrigin = crossOrigin;
@@ -205,8 +213,9 @@ export class ImageCache {
       this._onSettle?.(src, entry);
     };
     // Settled only once decoded, so the first draw doesn't decode it
-    img.onload  = () => prepareImage(img).then(image => settle(Object.freeze({ status: "loaded", image })));
-    img.onerror = () => settle(Object.freeze({ status: "failed", image: null }));
+    img.onload  = () => prepareImage(img).then(image =>
+      settle(Object.freeze({ status: "loaded", image, crossOrigin, referrerPolicy })));
+    img.onerror = () => settle(Object.freeze({ status: "failed", image: null, crossOrigin, referrerPolicy }));
     img.src = src;
     return true;
   }
@@ -266,11 +275,13 @@ export class ImageCache {
    * frame's build limit allows, otherwise the nearest cached sprite
    * (larger first). Marks the returned sprite as used this frame.
    * @param {string} src - image source
-   * @param {NodeImage} img - loaded source image
    * @param {number} size - wanted sprite size
-   * @returns {Sprite | null} sprite, or `null` if none is available
+   * @returns {Sprite | null} sprite, or `null` if `src` hasn't loaded or no
+   *    sprite is available
    */
-  sprite(src, img, size) {
+  sprite(src, size) {
+    const img = this.loaded(src);
+    if (!img) return null;
     let entry = this._spriteCache.get(src);
     if (!entry) {
       entry = { sprites: new Map(), avg: undefined };
@@ -317,15 +328,17 @@ export class ImageCache {
 
   /**
    * Average colour of an image for drawing it as a dot, building its
-   * smallest sprite first if needed. `null` if unavailable.
+   * smallest sprite first if needed. `null` if unavailable, or if `src`
+   * hasn't loaded.
    * @param {string} src - image source
-   * @param {NodeImage} img - loaded source image
    * @returns {string | null} CSS colour
    */
-  average(src, img) {
+  average(src) {
     const avg = this._spriteCache.get(src)?.avg;
     if (avg !== undefined) return avg;
-    this.sprite(src, img, pickSpriteSize(0, Math.min(img.width, img.height)));
+    const img = this.loaded(src);
+    if (!img) return null;
+    this.sprite(src, pickSpriteSize(0, Math.min(img.width, img.height)));
     return this._spriteCache.get(src)?.avg ?? null;
   }
 

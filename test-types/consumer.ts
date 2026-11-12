@@ -19,7 +19,7 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View, ImageEntry, NodeImage,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin, NodeImage,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
@@ -220,6 +220,9 @@ const notElement: HTMLImageElement | null = entry?.image ?? null;
 const drawable: CanvasImageSource | null = entry?.image ?? null;
 // @ts-expect-error -- not a status
 const badStatus: ImageEntry["status"] = "pending";
+// ...and the options it was requested with
+const entryCO: ImageCrossOrigin | undefined = entry?.crossOrigin;
+const entryRP: ReferrerPolicy | undefined = entry?.referrerPolicy;
 // @ts-expect-error -- the sentinel constants are gone
 Renderer.IMAGE_LOADING;
 
@@ -330,5 +333,14 @@ new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });
 new GraphJS({ renderer: { imageReferrerPolicy: "no-referer" } });
 // @ts-expect-error -- not a crossOrigin value
 new GraphJS({ renderer: { crossOrigin: "anon" } });
+// ...or functions giving them per image source
+new GraphJS({ renderer: {
+  crossOrigin: src => (src.startsWith("https://cdn.") ? "anonymous" : null),
+  imageReferrerPolicy: () => "origin",
+} });
+// @ts-expect-error -- a function must return a crossOrigin value
+new GraphJS({ renderer: { crossOrigin: () => "anon" } });
+// @ts-expect-error -- and is given the source, a string
+new GraphJS({ renderer: { imageReferrerPolicy: (src: number) => "origin" } });
 
 export {};

@@ -129,8 +129,8 @@ const gjs = new GraphJS({
     scaleStrokes: true,             // edge and outline widths scale with zoom (see "Edge and outline widths")
     minEdgeWidth: 1,                // edges thinner than this on screen (px) fade out instead
     maxEdgeWidth: 8,                // edges stop growing at this width on screen (px)
-    crossOrigin: "anonymous",       // crossOrigin for node image requests
-    imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
+    crossOrigin: "anonymous",       // crossOrigin for node image requests, or a function of the source
+    imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests, or a function of the source
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
@@ -348,7 +348,20 @@ A node with a charge of `0` neither repels nor is repelled, so only its edges, g
 gjs.renderer.setDefaultNodeConfig({ image: node => node.data.avatar ?? null });
 ```
 
-The image is scaled to cover the node and clipped to its circle. Until it loads, or if it fails to load, the node is filled with its `color` instead. Images are fetched with the renderer's `crossOrigin` and `imageReferrerPolicy` options.
+The image is scaled to cover the node and clipped to its circle. Until it loads, or if it fails to load, the node is filled with its `color` instead.
+
+Images are fetched with the renderer's `crossOrigin` and `imageReferrerPolicy` options. Either can be a function of the image source, for graphs whose images come from hosts that need different settings:
+
+```js
+gjs.renderer.setOpts({
+  // This host sends no CORS headers, so request its images without CORS
+  crossOrigin: src => (src.startsWith("https://legacy.example.com/") ? null : "anonymous"),
+});
+```
+
+An image requested without CORS (`crossOrigin: null`) loads from hosts that don't send CORS headers, but its pixels can't be read, so small nodes using it are drawn as a dot in their `color` rather than the image's average colour. A function that returns an invalid value gets the option's default instead.
+
+Calling `setOpts()` with either option requests each cached image again whose options have changed, including failed and preloaded images. Images whose options are unchanged are kept. Nodes using a requested image show their `color` until it loads. Calling `setOpts()` with the same function again re-runs it, which is how to apply changes in anything the function reads.
 
 To avoid nodes appearing before their images do, start the requests early:
 
@@ -364,6 +377,7 @@ Each requested image has an entry in `gjs.renderer.images`, keyed by its source:
 const entry = gjs.renderer.images.get("https://example.com/alice.png");
 entry?.status;   // "loading", "loaded" or "failed"
 entry?.image;    // the loaded image, or null while loading or after a failure
+entry?.crossOrigin, entry?.referrerPolicy;   // the options it was requested with
 ```
 
 Each image is decoded before its request counts as finished, so drawing it never stalls on decoding. A loaded image is an `ImageBitmap`, cropped to the centre square that nodes show and at most 2048 pixels across. Where a bitmap can't be made (`createImageBitmap()` is missing or fails, as for some SVGs), it's the `HTMLImageElement` itself. When unused images are cleaned up, their bitmaps are closed, which empties them; draw from `images` rather than keeping your own reference.
@@ -1074,7 +1088,8 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
 - **Invalid options now throw instead of being clamped or accepted.** `new GraphJS()`, the layer constructors and every `setOpts()` check their options (see [Changing options](#changing-options)). Previously `Renderer` clamped some out-of-range values, such as a negative `minEdgeWidth` or a `highlightAlpha` above 1, and accepted others, such as an unknown `labelPosition`, while `Simulation` accepted anything. Values that were silently fixed before now throw a `RangeError`, and misspelled option names throw a `TypeError` instead of being ignored. To keep forgiving input, clamp values yourself before passing them in.
 - **A missing edge in `setEdgeConfig()` throws a `ReferenceError`,** in both the simulation and the renderer, as a missing node or edge already did in the graph. It was a plain `Error`; `catch` blocks that check `instanceof Error` still match. The graph's error messages now start with `Graph:`, like the other layers', so code that matched the old wording (`Cannot find …`) needs updating.
-- **`renderer.images` entries are objects with a status.** Each entry is `{ status, image }`, where `status` is `"loading"`, `"loaded"` or `"failed"` and `image` is the loaded image or `null` (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
+- **`renderer.images` entries are objects with a status.** Each entry is `{ status, image, crossOrigin, referrerPolicy }`, where `status` is `"loading"`, `"loaded"` or `"failed"`, `image` is the loaded image or `null`, and the last two are the options it was requested with (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
+- **Changing `crossOrigin` or `imageReferrerPolicy` requests cached images again.** Images whose options change are requested with the new ones, where they used to keep the options they were first loaded with. Both options can also be a function of the image source (see [Node images](#node-images)).
 - **`renderer.loadImage()` retries a failed image.** It starts a new request and returns `true`, where it used to return `false` and leave the image failed. The renderer still never retries failed images on its own (see [Node images](#node-images)).
 - **Loaded images are `ImageBitmap`s.** `renderer.images` entries and `imageload` events now give an `ImageBitmap`, cropped to the centre square and at most 2048 pixels across, instead of the `HTMLImageElement`. The element is only given where a bitmap can't be made. Bitmaps have `width` and `height` and can be drawn with `drawImage()`, but not element properties such as `src` or `naturalWidth`; the source is the entry's key. A bitmap is closed when its image is cleaned up, so don't keep your own reference. TypeScript code that expects an `HTMLImageElement` should use the new `NodeImage` type.
 - **`renderer.pin()` and `renderer.unpin()` are removed.** Pinning changes the simulation, which the renderer only draws. Use `gjs.pin(id, x, y)` and `gjs.unpin(id)`, which take canvas coordinates like the removed methods, or `gjs.simulation.pin()` with simulation coordinates.

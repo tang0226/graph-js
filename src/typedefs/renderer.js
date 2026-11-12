@@ -43,10 +43,12 @@
  * @property {number} [highlightFadeDuration] - milliseconds for an element to
  *    fade fully between opacity 0 and 1 when highlighting changes; 0 disables
  *    fading
- * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
- *    for image requests.
- * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
- *    cross-origin parameter for image requests.
+ * @property {ReferrerPolicy | ((src: string) => ReferrerPolicy)} [imageReferrerPolicy] -
+ *    referrer policy for image requests, or a function giving it per image
+ *    source
+ * @property {ImageCrossOrigin | ((src: string) => ImageCrossOrigin)} [crossOrigin] -
+ *    cross-origin setting for image requests, or a function giving it per
+ *    image source
  * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
  *    cached node image sizes; images on screen are always kept
  */
@@ -107,13 +109,23 @@
 
 
 /**
- * A node image in the renderer's cache: whether it has loaded, and the image
- * once it has
+ * An image request's `crossOrigin`. `null` sends no CORS request, so images
+ * from hosts without CORS headers load, but their pixels can't be read.
+ * @typedef {"anonymous" | "use-credentials" | null} ImageCrossOrigin
+ */
+
+/**
+ * A node image in the renderer's cache: whether it has loaded, the image once
+ * it has, and the options it was requested with
  * @typedef {object} ImageEntry
  * @property {"loading" | "loaded" | "failed"} status - `"loading"` until the
  *    request settles, then `"loaded"` or `"failed"`
  * @property {NodeImage | null} image - the loaded image, or `null` while
  *    loading or after a failure
+ * @property {ImageCrossOrigin} crossOrigin - the `crossOrigin` it was
+ *    requested with
+ * @property {ReferrerPolicy} referrerPolicy - the `referrerPolicy` it was
+ *    requested with
  */
 
 /**

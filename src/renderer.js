@@ -14,7 +14,7 @@
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
  *  RendererEventMap, RendererEventType,
- *  Canvas, CanvasContext, Size, View, ImageEntry,
+ *  Canvas, CanvasContext, Size, View, ImageEntry, ImageCrossOrigin,
  * } from './typedefs/renderer.js'
  */
 
@@ -57,6 +57,25 @@ const REFERRER_POLICIES = [
   "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url",
 ];
 
+/** Every `ImageCrossOrigin` value, for `crossOrigin` */
+const CROSS_ORIGINS = ["anonymous", "use-credentials", null];
+
+/**
+ * Throws unless an image request option is one of `values`, or a function
+ * giving it per image source. What such a function returns is checked when
+ * it's called, in `_imageRequestOpts()`.
+ * @param {string} name - option name
+ * @param {unknown} value - value to check
+ * @param {readonly unknown[]} values - allowed values
+ * @returns {void}
+ * @throws {RangeError} throws if the value is neither
+ */
+const checkImageRequestOpt = (name, value, values) => {
+  if (typeof value === "function") return;
+  try { checkOneOf("Renderer", name, value, values); }
+  catch (err) { throw new RangeError(`${/** @type {Error} */ (err).message}, or a function of the image source`); }
+};
+
 /**
  * A check per renderer option
  * @type {Record<keyof RendererOpts, (v: any) => void>}
@@ -76,8 +95,8 @@ const OPTION_RULES = {
   highlightMode:         v => checkOneOf("Renderer", "highlightMode", v, ["dim", "hide"]),
   highlightAlpha:        v => checkNumber("Renderer", "highlightAlpha", v, { min: 0, max: 1 }),
   highlightFadeDuration: v => checkNumber("Renderer", "highlightFadeDuration", v, { min: 0 }),
-  imageReferrerPolicy:   v => checkOneOf("Renderer", "imageReferrerPolicy", v, REFERRER_POLICIES),
-  crossOrigin:           v => checkOneOf("Renderer", "crossOrigin", v, ["anonymous", "use-credentials", null]),
+  imageReferrerPolicy:   v => checkImageRequestOpt("imageReferrerPolicy", v, REFERRER_POLICIES),
+  crossOrigin:           v => checkImageRequestOpt("crossOrigin", v, CROSS_ORIGINS),
   imageCacheMB:          v => checkNumber("Renderer", "imageCacheMB", v, { min: 0, allowInfinity: true }),
 };
 
@@ -336,7 +355,7 @@ export class Renderer extends Emitter {
 
   /**
    * Counter of deleted nodes with images. Controls periodic image garbage-
-   * collection (`_garbageCollectImages()`). GC happens when it reaches 16, at
+   * collection (`_garbageCollectImages()`). GC happens when it exceeds 16, at
    * which point it is reset to 0.
    * @type {number}
    * @private
@@ -418,6 +437,8 @@ export class Renderer extends Emitter {
       this._labelWidthCache.clear();
       this._labelsDirty = true;
     }
+    // Images requested with other options are requested again
+    if (opts.crossOrigin !== undefined || opts.imageReferrerPolicy !== undefined) this._refetchStaleImages();
     // Mode and alpha set the dimmed target, so ease toward the new value
     if (opts.highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
@@ -725,16 +746,50 @@ export class Renderer extends Emitter {
    * Starts loading an image into the cache, keyed by its source. Its entry in
    * `images` has the status "loading" until the request settles, then
    * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
-   * `imageReferrerPolicy`. A source that is loading or loaded is not requested
-   * again; one that failed is. Failed images are only retried by calling this:
-   * the renderer itself never requests them again. When the request settles,
-   * an `imageload` or `imageerror` event is emitted.
+   * `imageReferrerPolicy` for `src`. A source that is loading or loaded with
+   * those options is not requested again; one that failed is. Failed images
+   * are only retried by calling this: the renderer itself never requests them
+   * again. When the request settles, an `imageload` or `imageerror` event is
+   * emitted.
    * @param {string} src - image source; also the cache key
    * @returns {boolean} `true` if a request was started, `false` if `src` is
-   *    already loading or loaded
+   *    already loading or loaded with the current options
    */
   loadImage(src) {
-    return this._imageCache.load(src, this._opts.crossOrigin, this._opts.imageReferrerPolicy, true);
+    return this._imageCache.load(src, ...this._imageRequestOpts(src), true);
+  }
+
+
+  /**
+   * Resolves the `crossOrigin` and `imageReferrerPolicy` options for an image
+   * source. A function option that returns an invalid value falls back to the
+   * option's default, as config functions do.
+   * @param {string} src - image source
+   * @returns {[ImageCrossOrigin, ReferrerPolicy]} the request's options
+   * @private
+   */
+  _imageRequestOpts(src) {
+    const { crossOrigin, imageReferrerPolicy } = this._opts;
+    let co = typeof crossOrigin === "function" ? crossOrigin(src) : crossOrigin;
+    let rp = typeof imageReferrerPolicy === "function" ? imageReferrerPolicy(src) : imageReferrerPolicy;
+    // The defaults are plain values, not functions
+    if (!CROSS_ORIGINS.includes(co)) co = /** @type {ImageCrossOrigin} */ (RENDERER_DEFAULTS.crossOrigin);
+    if (!REFERRER_POLICIES.includes(rp)) rp = /** @type {ReferrerPolicy} */ (RENDERER_DEFAULTS.imageReferrerPolicy);
+    return [co, rp];
+  }
+
+
+  /**
+   * Requests every cached image again whose options no longer match the
+   * renderer's, failed ones included. The rest are left as they are.
+   * @returns {void}
+   * @private
+   */
+  _refetchStaleImages() {
+    for (const src of [...this._imageCache.images.keys()]) {
+      const [co, rp] = this._imageRequestOpts(src);
+      this._imageCache.load(src, co, rp);
+    }
   }
 
 
@@ -830,7 +885,7 @@ export class Renderer extends Emitter {
       // Load node image into cache. Failed images aren't retried here, or a
       // broken source would be requested again on every graph change.
       if (rNode.image) {
-        this._imageCache.load(rNode.image, this._opts.crossOrigin, this._opts.imageReferrerPolicy);
+        this._imageCache.load(rNode.image, ...this._imageRequestOpts(rNode.image));
       }
     }
 
@@ -1076,7 +1131,7 @@ export class Renderer extends Emitter {
       const needed = 2 * r * this._dpr;     // on-screen diameter, device px
       if (needed < IMAGE_DOT_THRESHOLD) {
         // Too small to show detail: a dot in the image's average colour
-        this._ctx.fillStyle = this._imageCache.average(src, img) ?? nodeStyle.color;
+        this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
         const side = Math.min(img.width, img.height);
@@ -1084,7 +1139,7 @@ export class Renderer extends Emitter {
         // A sprite smaller than the node is stretched, which blurs it. When the
         // source has more detail than that sprite (past the largest sprite
         // size, or between two sizes), draw the source instead.
-        const sprite = size < needed && size < side ? null : this._imageCache.sprite(src, img, size);
+        const sprite = size < needed && size < side ? null : this._imageCache.sprite(src, size);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
