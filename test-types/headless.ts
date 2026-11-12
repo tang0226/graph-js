@@ -2,6 +2,7 @@
    (see tsconfig.headless.json), the way a Node-only consumer would. Fails if
    the graph or simulation declarations reach any DOM type. */
 import { Graph } from "@tang0226/graph-js/graph";
+import type { GraphNode, GraphEdge } from "../types/typedefs/graph.js";
 import { Simulation } from "@tang0226/graph-js/simulation";
 import { Tween, easings } from "@tang0226/graph-js/tween";
 // Internal, so not a package subpath: imported by path to check it stays DOM-free
@@ -21,6 +22,15 @@ graph.on("settle", () => {});
 graph.addNode({ id: "a" });
 graph.addNode({ id: "b" });
 graph.addEdge("a", "b");
+
+// Neighborhood helpers
+const near: unknown[] = graph.neighbors("a", "in");
+const touching: GraphEdge[] = graph.edgesOf("a");
+const inCount: number = graph.inDegree("a") + graph.outDegree("a");
+const found: GraphNode | undefined = graph.hasNode("a") ? graph.getNode("a") : undefined;
+// @ts-expect-error -- not a direction
+graph.neighbors("a", "up");
+graph.updateNodeData("a", { label: "A" }).updateEdgeData("a", "b", { weight: 2 }).clear();
 
 const sim = new Simulation(graph, { collision: "grid", nodeConfig: { radius: n => 5 } });
 sim.tick().tick();

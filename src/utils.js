@@ -34,6 +34,19 @@ export const keysOf = record => Object.freeze(/** @type {K[]} */ (Object.keys(re
 
 
 /**
+ * Whether a value is a plain object: made by an object literal or
+ * `Object.create(null)`, so spreading it copies everything that matters.
+ * @param {unknown} v - value to check
+ * @returns {v is Record<string, any>} whether `v` is a plain object
+ */
+export const isPlainObject = v => {
+  if (typeof v !== "object" || v === null) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
+
+
+/**
  * Current time in milliseconds, for frame timestamps: `performance.now()`
  * where it exists, otherwise `Date.now()`.
  * @returns {number} timestamp in milliseconds

@@ -644,17 +644,12 @@ function addInteraction(g) {
 
 let hovered = null;
 
-/* The node plus every node and edge touching it. Scans all edges rather than
-   graph.adjacency, which only lists outgoing edges in a directed graph.     */
-function neighbourhood(id) {
-  const nodes = new Set([id]), edges = [];
-  for (const e of gjs.graph.edges) {
-    if (e.src.id !== id && e.dest.id !== id) continue;
-    nodes.add(e.src.id);
-    nodes.add(e.dest.id);
-    edges.push([e.src.id, e.dest.id]);
-  }
-  return { nodes: [...nodes], edges };
+/* The node plus every node and edge touching it, in either direction. */
+function neighborhood(id) {
+  return {
+    nodes: [id, ...gjs.graph.neighbors(id)],
+    edges: gjs.graph.edgesOf(id).map(e => [e.src.id, e.dest.id]),
+  };
 }
 
 function updateHover(id) {
@@ -662,7 +657,7 @@ function updateHover(id) {
   if (id === hovered) return;
   hovered = id;
   if (id === null) gjs.renderer.clearHighlight();
-  else gjs.renderer.setHighlight(neighbourhood(id));
+  else gjs.renderer.setHighlight(neighborhood(id));
   redraw();                                // keeps drawing while the highlight fades
 }
 

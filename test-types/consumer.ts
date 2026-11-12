@@ -11,7 +11,7 @@ import { GraphJS, Graph, Renderer, Tween, easings } from "@tang0226/graph-js";
 import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpath
 // Public types, re-exported from the package root
 import type {
-  NodeId, NodeData, GraphNode, GraphEdge, GraphOpts,
+  NodeId, NodeData, GraphNode, GraphEdge, EdgeDirection, GraphOpts,
   GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
   GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
@@ -54,6 +54,8 @@ gjs.addNode({ id: "b", group: 1 }, "b");
 const added: boolean = gjs.addEdge(a, "b");
 const removed: boolean = gjs.removeEdge(a, "b");
 const directed: boolean = gjs.graph.directed;
+const dir: EdgeDirection = "both";
+const hubNeighbors: NodeId[] = gjs.graph.neighbors("a", dir);
 
 // Chainable methods return the facade, never an inner layer
 gjs.resize().stop().step();

@@ -661,7 +661,7 @@ describe("Simulation: temperature", () => {
       assert.equal(sim.temp, 1);
     });
 
-    test("a dragged node's neighbours keep responding while it is held", () => {
+    test("a dragged node's neighbors keep responding while it is held", () => {
       const sim = frozen(chain(3), { cooling: 0.5 });
       sim.pin("n0", 0, 0);
       for (let t = 0; t < 20; t++) { sim.pin("n0", t * 10, 0); sim.tick(); }

@@ -203,9 +203,11 @@ gjs.addEdge("bob", carol);
 
 gjs.removeEdge("bob", carol);
 gjs.removeNode(carol);             // also removes any edges it still has
+
+gjs.graph.clear();                 // removes every node and edge
 ```
 
-`addEdge` throws if either node doesn't exist. Removing a node or edge that doesn't exist returns `false`.
+`addEdge` throws if either node doesn't exist. Removing a node or edge that doesn't exist returns `false`. `clear()` removes nodes one at a time, so it emits the usual [graph events](#graph-events), and the GraphJS instance, its canvas and its listeners stay ready for a new graph.
 
 In an undirected graph, `"a"` to `"b"` and `"b"` to `"a"` are the same edge. In a directed graph they're two edges, drawn as a pair of curved arrows.
 
@@ -223,6 +225,28 @@ gjs.simulation.nodeList;     // the same nodes as an array
 ```
 
 These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+
+The graph also answers questions about single nodes and edges:
+
+```js
+gjs.graph.hasNode("alice");            // true
+gjs.graph.getNode("alice");            // { id, data }, or undefined
+gjs.graph.hasEdge("alice", "bob");     // true
+gjs.graph.getEdge("alice", "bob");     // { src, dest, data }, or undefined
+
+gjs.graph.neighbors("alice");          // ids of the nodes it shares an edge with
+gjs.graph.edgesOf("alice");            // the edges touching it
+gjs.graph.degree("alice");             // number of edges touching it
+```
+
+`neighbors()` and `edgesOf()` list each node or edge once, and return a new array, so it's safe to change the graph while looping over one. A node with a self-loop is its own neighbor. Unknown ids give an empty array, and a degree of `0`.
+
+In a directed graph, both take a direction as a second argument: `"out"` for edges leaving the node, `"in"` for edges entering it, or `"both"` (the default). `inDegree()` and `outDegree()` count each direction, and `degree()` is their total, so a self-loop counts twice. In an undirected graph every edge goes both ways, so the direction makes no difference.
+
+```js
+gjs.graph.neighbors("alice", "out");   // the nodes alice points to
+gjs.graph.inDegree("alice");           // how many edges point to alice
+```
 
 ## Configuring nodes and edges
 
@@ -280,6 +304,15 @@ A function receives the node or edge object with custom data stored in `.data`. 
 
 To change a node's data, use `gjs.graph.setNodeData(id, data)` rather than editing `node.data` directly. Direct edits will not trigger a cache refresh, so the functions won't re-run. Same applies to `gjs.graph.setEdgeData(srcId, destId, data)`.
 
+To change some fields and keep the rest, use `updateNodeData()` or `updateEdgeData()`. They merge the given fields into a copy of the data, then set it:
+
+```js
+gjs.graph.updateNodeData("alice", { group: 2 });              // other fields are kept
+gjs.graph.updateEdgeData("alice", "bob", { weight: 3 });
+```
+
+The merge is shallow, and only works on plain objects: if the patch or the current data is anything else, such as an array or a class instance, they throw a `TypeError`. Use the `set` methods for those.
+
 ### Individual node and edge settings
 
 ```js
@@ -300,7 +333,7 @@ To read the spring settings an edge ends up with, use `gjs.simulation.getEdgeSpr
 
 ### Node charge
 
-The repulsion between two nodes is multiplied by both of their charges, so two nodes with a charge of `2` push each other apart 4 times as hard as two with the default of `1`. Giving hubs a higher charge spreads their neighbourhoods out:
+The repulsion between two nodes is multiplied by both of their charges, so two nodes with a charge of `2` push each other apart 4 times as hard as two with the default of `1`. Giving hubs a higher charge spreads their neighborhoods out:
 
 ```js
 gjs.simulation.setDefaultNodeConfig({ charge: node => 1 + gjs.graph.degree(node.id) / 4 });
@@ -812,18 +845,14 @@ function redraw() {
 
 Highlights follow the graph: they survive other nodes and edges being added or removed, and a highlighted node or edge that is removed drops out of the highlight.
 
-Edges aren't highlighted along with their nodes, so list them explicitly. For example, to highlight a node with its neighbours:
+Edges aren't highlighted along with their nodes, so list them explicitly. For example, to highlight a node with its neighbors:
 
 ```js
 function neighborhood(id) {
-  const nodes = new Set([id]), edges = [];
-  for (const e of gjs.graph.edges) {
-    if (e.src.id !== id && e.dest.id !== id) continue;
-    nodes.add(e.src.id);
-    nodes.add(e.dest.id);
-    edges.push([e.src.id, e.dest.id]);
-  }
-  return { nodes: [...nodes], edges };
+  return {
+    nodes: [id, ...gjs.graph.neighbors(id)],
+    edges: gjs.graph.edgesOf(id).map(e => [e.src.id, e.dest.id]),
+  };
 }
 
 gjs.renderer.setHighlight(neighborhood("alice"));
@@ -1003,6 +1032,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 
 ### From 0.6
 
+- **`graph.degree()` counts incoming edges in a directed graph.** It's now the total of the new `inDegree()` and `outDegree()`, so a self-loop counts twice; it used to count outgoing edges only. Undirected graphs are unaffected. Config functions such as `radius: node => 10 + 2 * graph.degree(node.id)` give larger values in a directed graph; use `outDegree()` for the old count.
 - **Assigning `renderer.view` now checks its values.** Assigning a non-finite `x` or `y`, or a `zoom` that isn't a finite number above 0, throws a `RangeError` and leaves the view unchanged. These values already broke coordinate conversions and rendering. Writing a single field, as in `renderer.view.zoom = 0`, isn't checked.
 - **Edge widths, arrowheads and node outlines now scale with zoom** (see [Edge and outline widths](#edge-and-outline-widths)). At zoom 1 they look the same as before. Zoomed out they get thinner and fade, and zoomed in they get thicker, up to `maxEdgeWidth`. Set `scaleStrokes: false` to keep the old fixed screen sizes.
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.

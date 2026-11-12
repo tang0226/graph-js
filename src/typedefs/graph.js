@@ -29,6 +29,13 @@
 */
 
 /**
+ * Which of a node's edges to follow, for `neighbors()` and `edgesOf()`:
+ * edges leaving it, edges entering it, or both. Only matters in a directed
+ * graph.
+ * @typedef {"out" | "in" | "both"} EdgeDirection
+ */
+
+/**
  * @typedef {object} GraphOpts
  * @property {boolean} [directed=false] - whether the graph is directed; fixed at instantiation
  */
