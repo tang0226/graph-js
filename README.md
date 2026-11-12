@@ -363,14 +363,16 @@ Each requested image has an entry in `gjs.renderer.images`, keyed by its source:
 ```js
 const entry = gjs.renderer.images.get("https://example.com/alice.png");
 entry?.status;   // "loading", "loaded" or "failed"
-entry?.image;    // the loaded HTMLImageElement, or null while loading or after a failure
+entry?.image;    // the loaded image, or null while loading or after a failure
 ```
+
+Each image is decoded before its request counts as finished, so drawing it never stalls on decoding. A loaded image is an `ImageBitmap`, cropped to the centre square that nodes show and at most 2048 pixels across. Where a bitmap can't be made (`createImageBitmap()` is missing or fails, as for some SVGs), it's the `HTMLImageElement` itself. When unused images are cleaned up, their bitmaps are closed, which empties them; draw from `images` rather than keeping your own reference.
 
 An image that failed to load stays failed: the renderer doesn't request it again, even when nodes using it are added or changed. To retry it, call `loadImage()` with its source, which starts a new request for a failed image. For an image that is already loading or loaded, `loadImage()` does nothing and returns `false`.
 
 When a request finishes, the renderer emits an `imageload` or `imageerror` event (see [Renderer events](#renderer-events)). GraphJS uses them to draw images as they arrive, even while the loop is stopped.
 
-For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the original image, so they stay as sharp as it allows. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
+For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the loaded image itself, so they stay as sharp as it allows, up to 2048 pixels. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
 
 ### Node labels
 
@@ -823,7 +825,7 @@ The renderer emits these as node images finish loading (see [Node images](#node-
 | `imageerror` | a node image fails to load | `src` |
 
 - **`src`:** the image's source, its key in `gjs.renderer.images`.
-- **`image`:** the loaded `HTMLImageElement`.
+- **`image`:** the loaded image: an `ImageBitmap`, or an `HTMLImageElement` where a bitmap can't be made (see [Node images](#node-images)).
 
 ```js
 // Retry a failed image once, after a second
@@ -1074,6 +1076,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **A missing edge in `setEdgeConfig()` throws a `ReferenceError`,** in both the simulation and the renderer, as a missing node or edge already did in the graph. It was a plain `Error`; `catch` blocks that check `instanceof Error` still match. The graph's error messages now start with `Graph:`, like the other layers', so code that matched the old wording (`Cannot find …`) needs updating.
 - **`renderer.images` entries are objects with a status.** Each entry is `{ status, image }`, where `status` is `"loading"`, `"loaded"` or `"failed"` and `image` is the loaded image or `null` (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
 - **`renderer.loadImage()` retries a failed image.** It starts a new request and returns `true`, where it used to return `false` and leave the image failed. The renderer still never retries failed images on its own (see [Node images](#node-images)).
+- **Loaded images are `ImageBitmap`s.** `renderer.images` entries and `imageload` events now give an `ImageBitmap`, cropped to the centre square and at most 2048 pixels across, instead of the `HTMLImageElement`. The element is only given where a bitmap can't be made. Bitmaps have `width` and `height` and can be drawn with `drawImage()`, but not element properties such as `src` or `naturalWidth`; the source is the entry's key. A bitmap is closed when its image is cleaned up, so don't keep your own reference. TypeScript code that expects an `HTMLImageElement` should use the new `NodeImage` type.
 - **`renderer.pin()` and `renderer.unpin()` are removed.** Pinning changes the simulation, which the renderer only draws. Use `gjs.pin(id, x, y)` and `gjs.unpin(id)`, which take canvas coordinates like the removed methods, or `gjs.simulation.pin()` with simulation coordinates.
 - **`SIM_NODE_DEFAULTS` and `SIM_EDGE_DEFAULTS` are no longer exported** from `@tang0226/graph-js/simulation`. Read the defaults a simulation is using from `simulation.defaultNodeConfig` and `simulation.defaultEdgeConfig` instead, and change them with `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. Changing the exported objects changed defaults for every simulation at once, which was never supported.
 

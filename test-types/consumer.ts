@@ -19,7 +19,7 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View, ImageEntry,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry, NodeImage,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
@@ -214,14 +214,17 @@ gjs.simulation._emit("settle", {});
 
 // Image entries carry a status, and the image once loaded
 const entry: Readonly<ImageEntry> | undefined = gjs.renderer.images.get("a.png");
-if (entry?.status === "loaded") { const el: HTMLImageElement | null = entry.image; }
+if (entry?.status === "loaded") { const im: NodeImage | null = entry.image; }
+// @ts-expect-error -- a loaded image may be a bitmap, not an element
+const notElement: HTMLImageElement | null = entry?.image ?? null;
+const drawable: CanvasImageSource | null = entry?.image ?? null;
 // @ts-expect-error -- not a status
 const badStatus: ImageEntry["status"] = "pending";
 // @ts-expect-error -- the sentinel constants are gone
 Renderer.IMAGE_LOADING;
 
 // Image events live on the renderer
-gjs.renderer.on("imageload", e => { const s: string = e.src; const i: HTMLImageElement = e.image; const r: Renderer = e.target; });
+gjs.renderer.on("imageload", e => { const s: string = e.src; const i: ImageBitmap | HTMLImageElement = e.image; const r: Renderer = e.target; });
 const onImageError = (e: RendererEvent<"imageerror">) => { const s: string = e.src; };
 const rendererListener: RendererListener<"imageload"> = e => { const k: RendererEventType = e.type; };
 gjs.renderer.on("imageerror", onImageError).on("imageload", rendererListener);

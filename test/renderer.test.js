@@ -516,13 +516,12 @@ describe("Renderer: image events", () => {
       assert.deepEqual(events, [], "nothing until a request settles");
       await flush();
       assert.equal(events.length, 2);
-      const [load, error] = events;
-      assert.equal(load.type, "imageload");
+      const load = events.find(e => e.type === "imageload");
+      const error = events.find(e => e.type === "imageerror");
       assert.equal(load.src, "a.png");
       assert.equal(load.image, r.images.get("a.png")?.image);
       assert.equal(load.target, r);
       assert.equal(load.status, "loaded", "`images` is updated before the event");
-      assert.equal(error.type, "imageerror");
       assert.equal(error.src, "bad.png");
       assert.equal("image" in error, false);
       assert.equal(error.status, "failed");
@@ -562,10 +561,10 @@ describe("Renderer: sprites", () => {
   /* Image nodes of radius 20 at the canvas centre (400, 300), so each is 40 px
      across at zoom 1, with a stubbed OffscreenCanvas so sprites can be built.
      Node `id` uses the image `${id}.png`. */
-  async function spriteScene({ ids = ["a"], size = 256, width, height, dpr, oc, opts, color } = {}) {
+  async function spriteScene({ ids = ["a"], size = 256, width, height, bitmap, dpr, oc, opts, color } = {}) {
     const restores = [];
     if (dpr !== undefined) restores.push(installWindow(dpr));
-    restores.push(installImage({ size, width, height }));
+    restores.push(installImage({ size, width, height, bitmap }));
     const restoreCanvas = installOffscreenCanvas(oc);
     restores.push(restoreCanvas);
 
@@ -585,9 +584,10 @@ describe("Renderer: sprites", () => {
     };
   }
 
-  // Sprite bitmaps drawn onto the main canvas, in draw order
+  // Sprite bitmaps drawn onto the main canvas, in draw order. Sprites record
+  // the build canvas they came from; source bitmaps record their `image`.
   const drawnSprites = ctx =>
-    opsNamed(ctx, "drawImage").map(([, src]) => src).filter(s => "close" in s);
+    opsNamed(ctx, "drawImage").map(([, src]) => src).filter(s => "source" in s);
 
   describe("choosing a sprite", () => {
     test("draws the smallest sprite covering the on-screen size, with no clip", async () => {
@@ -758,6 +758,18 @@ describe("Renderer: sprites", () => {
       try {
         s.r.render();
         const [draw] = opsNamed(drawnSprites(s.ctx)[0].source.ctx, "drawImage");
+        assert.equal(draw[1], s.r.images.get("a.png")?.image, "built from the loaded bitmap");
+        assert.deepEqual(draw[1].crop, [50, 0, 100, 100], "cropped when the bitmap is made");
+        assert.deepEqual(draw.slice(2), [0, 0, 100, 100, 0, 0, 64, 64]);
+      } finally { s.restore(); }
+    });
+
+    test("without bitmaps, non-square source elements are centre-cropped", async () => {
+      const s = await spriteScene({ width: 200, height: 100, bitmap: false });
+      try {
+        s.r.render();
+        const [draw] = opsNamed(drawnSprites(s.ctx)[0].source.ctx, "drawImage");
+        assert.ok(draw[1] instanceof globalThis.Image);
         assert.deepEqual(draw.slice(2), [50, 0, 100, 100, 0, 0, 64, 64]);
       } finally { s.restore(); }
     });

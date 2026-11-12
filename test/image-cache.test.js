@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ImageCache, pickSpriteSize } from "../src/image-cache.js";
+import { ImageCache, pickSpriteSize, MAX_SOURCE_SIDE } from "../src/image-cache.js";
 import { installImage, installOffscreenCanvas, flush } from "./helpers/stubs.js";
 
 describe("ImageCache", () => {
@@ -66,9 +66,10 @@ describe("ImageCache", () => {
       cache.load("bad.png", null, "no-referrer");
       assert.deepEqual(calls, [], "not before the request settles");
       await flush();
-      assert.deepEqual(calls.map(c => [c.src, c.entry.status]), [["a.png", "loaded"], ["bad.png", "failed"]]);
+      // A load settles after decoding, so not necessarily in request order
+      assert.deepEqual(calls.map(c => [c.src, c.entry.status]).sort(), [["a.png", "loaded"], ["bad.png", "failed"]]);
       for (const c of calls) assert.equal(c.current, c.entry, "the entry is in `images` when called");
-      assert.equal(calls[0].entry.image, cache.loaded("a.png"));
+      assert.equal(calls.find(c => c.src === "a.png").entry.image, cache.loaded("a.png"));
 
       cache.load("bad.png", null, "no-referrer", true);
       await flush();
@@ -98,6 +99,77 @@ describe("ImageCache", () => {
       await flush();
       cache.collect(new Set(["b.png"]));
       assert.deepEqual([...cache.images.keys()], ["b.png"]);
+    } finally { restore(); }
+  });
+
+  test("a loaded image is decoded, then kept as an ImageBitmap", async () => {
+    const restore = installImage({ size: 64 });
+    try {
+      const decoded = [];
+      const decode = globalThis.Image.prototype.decode;
+      globalThis.Image.prototype.decode = function () {
+        decoded.push(this._src);
+        return decode.call(this);
+      };
+      const cache = new ImageCache();
+      cache.load("a.png", null, "no-referrer");
+      await flush();
+      assert.deepEqual(decoded, ["a.png"]);
+      const [bitmap] = restore.sources;
+      assert.equal(cache.loaded("a.png"), bitmap);
+      assert.equal(bitmap.image.src, "a.png", "a snapshot of the loaded element");
+      assert.deepEqual(bitmap.crop, [0, 0, 64, 64]);
+      assert.equal(bitmap.opts, undefined, "a source within the cap isn't resized");
+    } finally { restore(); }
+  });
+
+  test("a bitmap is centre-cropped to a square and capped in size", async () => {
+    const restore = installImage({ width: 3000, height: 4001 });
+    try {
+      const cache = new ImageCache();
+      cache.load("a.png", null, "no-referrer");
+      await flush();
+      const [bitmap] = restore.sources;
+      assert.deepEqual(bitmap.crop, [0, 500, 3000, 3000]);
+      assert.deepEqual(bitmap.opts, { resizeWidth: MAX_SOURCE_SIDE, resizeHeight: MAX_SOURCE_SIDE, resizeQuality: "high" });
+      assert.equal(cache.loaded("a.png")?.width, 2048);
+    } finally { restore(); }
+  });
+
+  test("the element is kept where a bitmap can't be made", async () => {
+    for (const opts of [{ bitmap: false }, { bitmapFails: () => true }]) {
+      const restore = installImage(opts);
+      try {
+        const cache = new ImageCache();
+        cache.load("a.png", null, "no-referrer");
+        await flush();
+        assert.equal(cache.images.get("a.png")?.status, "loaded");
+        assert.ok(cache.loaded("a.png") instanceof globalThis.Image, JSON.stringify(Object.keys(opts)));
+      } finally { restore(); }
+    }
+  });
+
+  test("an image that loads but fails to decode() still loads", async () => {
+    const restore = installImage({ decodeFails: () => true });
+    try {
+      const cache = new ImageCache();
+      cache.load("a.png", null, "no-referrer");
+      await flush();
+      assert.equal(cache.loaded("a.png"), restore.sources[0], "drawing decodes it instead");
+    } finally { restore(); }
+  });
+
+  test("collecting an image closes its bitmap, even one that settles later", async () => {
+    const restore = installImage();
+    try {
+      const cache = new ImageCache();
+      cache.load("a.png", null, "no-referrer");
+      await flush();
+      cache.load("b.png", null, "no-referrer");
+      cache.collect(new Set());                        // a.png loaded, b.png loading
+      await flush();
+      assert.deepEqual(restore.sources.map(b => [b.image.src, b.closed]), [["a.png", true], ["b.png", true]]);
+      assert.equal(cache.images.size, 0);
     } finally { restore(); }
   });
 

@@ -1,8 +1,12 @@
-/** @import { Canvas, CanvasContext, ImageEntry } from './typedefs/renderer.js' */
+/** @import { Canvas, CanvasContext, ImageEntry, NodeImage } from './typedefs/renderer.js' */
 
 
 /** Sizes (device px) that sprites of node images are made at. */
 const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
+
+/** Largest side (px) a loaded image is kept at. Twice the largest sprite, so
+    nodes drawn past it still get more detail from the source. */
+export const MAX_SOURCE_SIDE = 2 * SPRITE_SIZES[SPRITE_SIZES.length - 1];
 
 /** Most sprites built in one frame. Nodes past the limit reuse a nearby
     sprite (or the uncached path) until a later frame builds theirs. */
@@ -45,6 +49,46 @@ export const pickSpriteSize = (needed, side) => {
  * @returns {CanvasContext | null} 2D context
  */
 const ctx2d = canvas => /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
+
+
+/**
+ * Turns a loaded image into what the cache keeps. Decodes it with `decode()`,
+ * which browsers do off the main thread, then snapshots it into an
+ * `ImageBitmap`: centre-cropped to a square and shrunk to at most
+ * `MAX_SOURCE_SIDE`. Unlike an element's, a bitmap's decoded pixels can't be
+ * discarded by the browser, so drawing it never decodes on the main thread.
+ * Falls back to the element where a bitmap can't be made (no
+ * `createImageBitmap`, or it fails, e.g. for an SVG without a size). Never
+ * rejects.
+ * @param {HTMLImageElement} img - image whose `load` event has fired
+ * @returns {Promise<NodeImage>} the image to cache
+ */
+const prepareImage = async img => {
+  // A failed decode leaves drawing to decode it, as without this step
+  try { await img.decode(); } catch { /* fall through */ }
+  if (typeof createImageBitmap !== "function") return img;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const side = Math.min(w, h);
+  if (!side) return img;
+  const out = Math.min(side, MAX_SOURCE_SIDE);
+  /** @type {ImageBitmapOptions | undefined} */
+  const resize = out < side ? { resizeWidth: out, resizeHeight: out, resizeQuality: "high" } : undefined;
+  try {
+    return await createImageBitmap(img, Math.floor((w - side) / 2), Math.floor((h - side) / 2), side, side, resize);
+  } catch {
+    return img;
+  }
+};
+
+
+/**
+ * Frees a cached image's pixels now rather than at GC, if it's a bitmap.
+ * @param {NodeImage | null} image - image
+ * @returns {void}
+ */
+const closeImage = image => {
+  if (image && "close" in image) image.close();
+};
 
 
 /**
@@ -156,11 +200,12 @@ export class ImageCache {
     // meantime mustn't be brought back by a late load
     /** @param {Readonly<ImageEntry>} entry */
     const settle = entry => {
-      if (this._images.get(src) !== loading) return;
+      if (this._images.get(src) !== loading) return closeImage(entry.image);
       this._images.set(src, entry);
       this._onSettle?.(src, entry);
     };
-    img.onload  = () => settle(Object.freeze({ status: "loaded", image: img }));
+    // Settled only once decoded, so the first draw doesn't decode it
+    img.onload  = () => prepareImage(img).then(image => settle(Object.freeze({ status: "loaded", image })));
     img.onerror = () => settle(Object.freeze({ status: "failed", image: null }));
     img.src = src;
     return true;
@@ -170,8 +215,8 @@ export class ImageCache {
   /**
    * Returns an image if it has loaded.
    * @param {string} src - image source
-   * @returns {HTMLImageElement | null} the loaded image, or `null` if it's
-   *    loading, failed or unknown
+   * @returns {NodeImage | null} the loaded image, or `null` if it's loading,
+   *    failed or unknown
    */
   loaded(src) {
     return this._images.get(src)?.image ?? null;
@@ -179,14 +224,16 @@ export class ImageCache {
 
 
   /**
-   * Deletes every image, and its sprites, whose source isn't in `live`.
+   * Deletes every image, and its sprites, whose source isn't in `live`. A
+   * deleted bitmap is closed, which leaves it 0 x 0 for anyone still holding it.
    * @param {ReadonlySet<string>} live - sources still in use
    * @returns {void}
    */
   collect(live) {
-    for (const src of this._images.keys()) {
+    for (const [src, entry] of this._images) {
       if (live.has(src)) continue;
       this._images.delete(src);
+      closeImage(entry.image);
       this._dropSprites(src);
     }
   }
@@ -219,7 +266,7 @@ export class ImageCache {
    * frame's build limit allows, otherwise the nearest cached sprite
    * (larger first). Marks the returned sprite as used this frame.
    * @param {string} src - image source
-   * @param {HTMLImageElement} img - loaded source image
+   * @param {NodeImage} img - loaded source image
    * @param {number} size - wanted sprite size
    * @returns {Sprite | null} sprite, or `null` if none is available
    */
@@ -272,7 +319,7 @@ export class ImageCache {
    * Average colour of an image for drawing it as a dot, building its
    * smallest sprite first if needed. `null` if unavailable.
    * @param {string} src - image source
-   * @param {HTMLImageElement} img - loaded source image
+   * @param {NodeImage} img - loaded source image
    * @returns {string | null} CSS colour
    */
   average(src, img) {
@@ -344,7 +391,7 @@ export class ImageCache {
    * Starts from the smallest cached sprite larger than `size` when there
    * is one, rather than the full source. Also fills in the entry's average
    * colour from the first sprite of 64 px or less.
-   * @param {HTMLImageElement} img - loaded source image
+   * @param {NodeImage} img - loaded source image
    * @param {SpriteEntry} entry - cache entry for `img`
    * @param {number} size - sprite size in px
    * @returns {Sprite | null} the sprite, or `null` if no canvas could be made

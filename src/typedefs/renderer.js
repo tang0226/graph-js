@@ -6,6 +6,13 @@
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
 
+/**
+ * A loaded node image: an `ImageBitmap` of the source, already decoded,
+ * centre-cropped to a square and at most 2048 px across; or, where a bitmap
+ * can't be made, the `HTMLImageElement` itself
+ * @typedef {ImageBitmap | HTMLImageElement} NodeImage
+ */
+
 /** @typedef {"top" | "bottom" | "left" | "right"} LabelPosition */
 /** @typedef {"dim" | "hide"} HighlightMode */
 
@@ -105,8 +112,8 @@
  * @typedef {object} ImageEntry
  * @property {"loading" | "loaded" | "failed"} status - `"loading"` until the
  *    request settles, then `"loaded"` or `"failed"`
- * @property {HTMLImageElement | null} image - the loaded image, or `null`
- *    while loading or after a failure
+ * @property {NodeImage | null} image - the loaded image, or `null` while
+ *    loading or after a failure
  */
 
 /**
@@ -129,7 +136,7 @@
  * `images` is updated. These events report what happened, so calling
  * `preventDefault()` on them has no effect.
  * @typedef {object} RendererEventMap
- * @property {{ src: string, image: HTMLImageElement }} imageload - a node
+ * @property {{ src: string, image: NodeImage }} imageload - a node
  *    image loaded: `src` is its source, `image` the loaded image
  * @property {{ src: string }} imageerror - a node image failed to load:
  *    `src` is its source
