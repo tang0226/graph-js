@@ -1143,8 +1143,9 @@ export class Renderer extends Emitter {
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
-          // Drawing the source: no sprite is sharp enough, none is available
-          // (no canvas support), or this frame's build limit was reached
+          // Drawing the source: no sprite is sharp enough, or none is
+          // available (no canvas support, or this frame's build limit was
+          // reached before any sprite of this image was cached)
           const scale = r * 2 / Math.min(img.width, img.height);
           const dw = img.width * scale, dh = img.height * scale;
           this._ctx.save();

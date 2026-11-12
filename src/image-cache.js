@@ -8,6 +8,11 @@ const SPRITE_SIZES = [16, 32, 64, 128, 256, 512, 1024];
     nodes drawn past it still get more detail from the source. */
 export const MAX_SOURCE_SIDE = 2 * SPRITE_SIZES[SPRITE_SIZES.length - 1];
 
+/** Largest side (px) a scratch canvas is kept at between frames. Halving a
+    source capped at `MAX_SOURCE_SIDE` never needs more; only an image kept
+    uncapped (where no bitmap could be made) does. */
+const MAX_KEPT_SCRATCH_SIDE = MAX_SOURCE_SIDE / 2;
+
 /** Most sprites built in one frame. Nodes past the limit reuse a nearby
     sprite (or the uncached path) until a later frame builds theirs. */
 const MAX_SPRITE_BUILDS_PER_FRAME = 16;
@@ -147,9 +152,11 @@ export class ImageCache {
 
 
   /**
-   * Scratch canvases for shrinking images by halves. Dropped after a frame
-   * that used them, so large sources don't pin memory.
-   * @type {Canvas[]}
+   * Scratch canvases for shrinking images by halves, two slots used in turn.
+   * Kept between frames, so builds spread over many frames (as in a zoom)
+   * don't reallocate them, except one grown past `MAX_KEPT_SCRATCH_SIDE`,
+   * which is dropped at the end of the frame so large sources don't pin memory.
+   * @type {(Canvas | undefined)[]}
    * @private
    */
   _imgScratch = [];
@@ -259,14 +266,16 @@ export class ImageCache {
 
 
   /**
-   * Ends a frame: evicts sprites to fit the budget, and drops the scratch
-   * canvases if this frame built sprites.
+   * Ends a frame: evicts sprites to fit the budget, and drops any scratch
+   * canvas larger than `MAX_KEPT_SCRATCH_SIDE`.
    * @param {number} budgetBytes - memory budget for cached sprites
    * @returns {void}
    */
   endFrame(budgetBytes) {
     this._evictSprites(budgetBytes);
-    if (this._spriteBuilds) this._imgScratch = [];
+    this._imgScratch.forEach((s, i) => {
+      if (s && Math.max(s.width, s.height) > MAX_KEPT_SCRATCH_SIDE) this._imgScratch[i] = undefined;
+    });
   }
 
 

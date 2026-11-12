@@ -200,6 +200,44 @@ describe("ImageCache", () => {
     } finally { restoreCanvas(); restoreImage(); }
   });
 
+  test("scratch canvases are kept between frames, unless grown past half the source cap", async () => {
+    const restoreCanvas = installOffscreenCanvas();
+    try {
+      // A bitmap, capped at MAX_SOURCE_SIDE: its scratches are reused by later frames
+      let restoreImage = installImage({ size: 4000 });
+      try {
+        const cache = new ImageCache();
+        for (const src of ["a.png", "b.png"]) cache.load(src, null, "no-referrer");
+        await flush();
+        cache.beginFrame();
+        assert.ok(cache.sprite("a.png", 16));
+        cache.endFrame(Infinity);
+        const scratch = [...cache._imgScratch];
+        assert.deepEqual(scratch.map(s => s?.width), [MAX_SOURCE_SIDE / 2, MAX_SOURCE_SIDE / 4]);
+        const created = restoreCanvas.created.length;
+
+        cache.beginFrame();
+        assert.ok(cache.sprite("b.png", 16));
+        cache.endFrame(Infinity);
+        assert.equal(restoreCanvas.created.length, created, "a later frame's build allocates no canvas");
+        assert.deepEqual(cache._imgScratch, scratch);
+      } finally { restoreImage(); }
+
+      // An uncapped element: the oversized scratch is dropped, the other kept
+      restoreImage = installImage({ size: 4000, bitmap: false });
+      try {
+        const cache = new ImageCache();
+        cache.load("a.png", null, "no-referrer");
+        await flush();
+        cache.beginFrame();
+        assert.ok(cache.sprite("a.png", 16));
+        assert.deepEqual(cache._imgScratch.map(s => s?.width), [2000, 1000]);
+        cache.endFrame(Infinity);
+        assert.deepEqual(cache._imgScratch.map(s => s?.width), [undefined, 1000]);
+      } finally { restoreImage(); }
+    } finally { restoreCanvas(); }
+  });
+
   test("sprite and average return null for a source that hasn't loaded", async () => {
     const restoreImage = installImage({ size: 64, fail: src => src === "bad.png" });
     const restoreCanvas = installOffscreenCanvas();
