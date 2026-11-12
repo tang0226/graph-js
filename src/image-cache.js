@@ -112,16 +112,22 @@ export class ImageCache {
 
 
   /**
-   * Starts loading an image, keyed by its source. A source that is already
-   * cached is not requested again.
+   * Starts loading an image, keyed by its source. A source that is loading
+   * or loaded is not requested again, and neither is one that failed unless
+   * `retry` is set.
    * @param {string} src - image source; also the cache key
    * @param {"anonymous" | "use-credentials" | null} crossOrigin - the request's
    *    `crossOrigin`
    * @param {ReferrerPolicy} referrerPolicy - the request's `referrerPolicy`
-   * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
+   * @param {boolean} [retry=false] - whether to request a failed source again
+   * @returns {boolean} `true` if a request was started, `false` if `src` was
+   *    already cached and not retried
    */
-  load(src, crossOrigin, referrerPolicy) {
-    if (this._images.has(src)) return false;
+  load(src, crossOrigin, referrerPolicy, retry = false) {
+    const status = this._images.get(src)?.status;
+    if (status === "loading" || status === "loaded") return false;
+    if (status === "failed" && !retry) return false;
+
     /** @type {Readonly<ImageEntry>} */
     const loading = Object.freeze({ status: "loading", image: null });
     this._images.set(src, loading);
@@ -131,7 +137,9 @@ export class ImageCache {
     // Only if this request's entry is still there: an entry collected in the
     // meantime mustn't be brought back by a late load
     /** @param {Readonly<ImageEntry>} entry */
-    const settle = entry => { if (this._images.get(src) === loading) this._images.set(src, entry); };
+    const settle = entry => {
+      if (this._images.get(src) === loading) this._images.set(src, entry);
+    };
     img.onload  = () => settle(Object.freeze({ status: "loaded", image: img }));
     img.onerror = () => settle(Object.freeze({ status: "failed", image: null }));
     img.src = src;

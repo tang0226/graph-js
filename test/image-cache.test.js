@@ -19,9 +19,39 @@ describe("ImageCache", () => {
       await flush();
       assert.equal(typeof cache.loaded("a.png"), "object");
       assert.deepEqual(cache.images.get("bad.png"), { status: "failed", image: null });
-      assert.equal(cache.images.get("a.png").status, "loaded");
+      assert.equal(cache.images.get("a.png")?.status, "loaded");
       assert.equal(cache.loaded("bad.png"), null);
       assert.equal(cache.loaded("unknown.png"), null);
+    } finally { restore(); }
+  });
+
+  test("load requests a failed source again only with retry, until it loads", async () => {
+    let fails = 2;
+    const restore = installImage({ fail: () => fails-- > 0 });
+    try {
+      const cache = new ImageCache();
+      cache.load("a.png", null, "no-referrer");
+      await flush();
+      assert.equal(cache.images.get("a.png")?.status, "failed");
+
+      assert.equal(cache.load("a.png", null, "no-referrer"), false, "not retried by default");
+      assert.equal(restore.requests.length, 1);
+
+      assert.equal(cache.load("a.png", null, "no-referrer", true), true, "a failed source is retried");
+      assert.deepEqual(cache.images.get("a.png"), { status: "loading", image: null });
+      assert.equal(cache.load("a.png", null, "no-referrer", true), false, "a loading source isn't retried");
+      await flush();
+      assert.equal(cache.images.get("a.png")?.status, "failed", "a retry can fail again");
+
+      assert.equal(cache.load("a.png", "anonymous", "origin", true), true);
+      await flush();
+      assert.equal(cache.images.get("a.png")?.status, "loaded");
+      assert.ok(cache.loaded("a.png"));
+      assert.deepEqual(restore.requests.at(-1), { src: "a.png", crossOrigin: "anonymous", referrerPolicy: "origin" },
+        "a retry uses the options it is given");
+
+      assert.equal(cache.load("a.png", null, "no-referrer", true), false, "a loaded source isn't requested again");
+      assert.equal(restore.requests.length, 3);
     } finally { restore(); }
   });
 

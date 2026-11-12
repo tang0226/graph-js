@@ -430,6 +430,29 @@ describe("Renderer: images", () => {
     } finally { restore(); }
   });
 
+  test("a failed image is retried by loadImage, not by sync, and drawn once it loads", async () => {
+    let down = true;
+    const { g, r, ctx, restore } = imageScene(() => down);
+    try {
+      await flush();
+      assert.equal(r.images.get("a.png")?.status, "failed");
+
+      down = false;
+      g.addNode({ id: "b" });
+      r.sync();
+      assert.equal(r.images.get("a.png")?.status, "failed", "a graph change doesn't retry it");
+
+      assert.equal(r.loadImage("a.png"), true);
+      assert.equal(r.images.get("a.png")?.status, "loading");
+      await flush();
+      assert.equal(r.images.get("a.png")?.status, "loaded");
+
+      ctx.ops.length = 0;
+      r.render();
+      assert.equal(opsNamed(ctx, "drawImage").length, 1);
+    } finally { restore(); }
+  });
+
   test("dead entries are collected once the debt threshold is passed", async () => {
     const restore = installImage();
     try {

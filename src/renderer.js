@@ -706,12 +706,15 @@ export class Renderer {
    * Starts loading an image into the cache, keyed by its source. Its entry in
    * `images` has the status "loading" until the request settles, then
    * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
-   * `imageReferrerPolicy`. A source that is already cached is not requested again.
+   * `imageReferrerPolicy`. A source that is loading or loaded is not requested
+   * again; one that failed is. Failed images are only retried by calling this:
+   * the renderer itself never requests them again.
    * @param {string} src - image source; also the cache key
-   * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
+   * @returns {boolean} `true` if a request was started, `false` if `src` is
+   *    already loading or loaded
    */
   loadImage(src) {
-    return this._imageCache.load(src, this._opts.crossOrigin, this._opts.imageReferrerPolicy);
+    return this._imageCache.load(src, this._opts.crossOrigin, this._opts.imageReferrerPolicy, true);
   }
 
 
@@ -804,8 +807,11 @@ export class Renderer {
         rNode = this._seedNode(gNode);
         this._nodes.set(id, rNode);
       }
-      // Load node image into cache
-      if (rNode.image) this.loadImage(rNode.image);
+      // Load node image into cache. Failed images aren't retried here, or a
+      // broken source would be requested again on every graph change.
+      if (rNode.image) {
+        this._imageCache.load(rNode.image, this._opts.crossOrigin, this._opts.imageReferrerPolicy);
+      }
     }
 
     // Update edge styles and seed new ones
