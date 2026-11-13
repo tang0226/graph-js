@@ -22,7 +22,7 @@
 import { Simulation } from "./simulation.js";
 import { circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
-import { ImageCache, pickSpriteSize } from "./image-cache.js";
+import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
@@ -354,9 +354,10 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Counter of deleted nodes with images. Controls periodic image garbage-
-   * collection (`_garbageCollectImages()`). GC happens when it exceeds 16, at
-   * which point it is reset to 0.
+   * Counter of image sources that may have gone unused: one per deleted node
+   * with an image, and one per node whose image changed. Controls periodic
+   * image garbage-collection (`_garbageCollectImages()`). GC happens when it
+   * exceeds 16, at which point it is reset to 0.
    * @type {number}
    * @private
    */
@@ -714,6 +715,15 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Whether node image sizes are being prepared. Until they're ready, nodes
+   * draw a nearby size or the original image. Loops that only render on
+   * demand should keep calling `render()` while this is `true`.
+   * @returns {boolean} whether node image sizes are being prepared
+   */
+  isPreparingImages() { return this._imageCache.busy; }
+
+
+  /**
    * Seeds a node's style config based on its underlying `Graph` node.
    * @param {GraphNode} gNode - graph node to seed the node style from
    * @returns {NodeStyle} seeded node style
@@ -794,11 +804,14 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Find and delete images that are no longer used by any nodes.
+   * Find and delete images that are no longer used by any nodes, once
+   * `_imageDebt` exceeds 16.
    * @returns {void}
    * @private
    */
   _garbageCollectImages() {
+    if (this._imageDebt <= 16) return;
+    this._imageDebt = 0;
     /** @type {Set<string>} */
     const live = new Set();
     for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
@@ -877,8 +890,11 @@ export class Renderer extends Emitter {
     // Update node styles and seed new ones
     for (const [id, gNode] of this._graph.nodes) {
       let rNode = this._nodes.get(id);
-      if (rNode) this._resolveNode(gNode, rNode);
-      else {
+      if (rNode) {
+        const prevImage = rNode.image;
+        this._resolveNode(gNode, rNode);
+        if (prevImage && rNode.image !== prevImage) this._imageDebt++;
+      } else {
         rNode = this._seedNode(gNode);
         this._nodes.set(id, rNode);
       }
@@ -900,7 +916,10 @@ export class Renderer extends Emitter {
     this._edgeConfig.markClean();
     this._labelsDirty = true;
 
-    if (this._syncedSimulation === this._simulation.version) return true;
+    if (this._syncedSimulation === this._simulation.version) {
+      this._garbageCollectImages();
+      return true;
+    }
 
     /* Alphas are about to be re-slotted. While a highlight is shown or a fade
        is running, carry each surviving element's alpha across by its style
@@ -918,7 +937,7 @@ export class Renderer extends Emitter {
         hl.forgetNode(id);
       }
     }
-    if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
+    this._garbageCollectImages();
 
     // Delete old edge styles
     for (const gEdge of this._edges.keys()) {
@@ -1127,27 +1146,22 @@ export class Renderer extends Emitter {
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
     const src = nodeStyle.image;
     const img = src ? this._imageCache.loaded(src) : null;
-    if (src && img) {
+    const side = img ? Math.min(img.naturalWidth, img.naturalHeight) : 0;
+    if (src && img && side) {
       const needed = 2 * r * this._dpr;     // on-screen diameter, device px
       if (needed < IMAGE_DOT_THRESHOLD) {
         // Too small to show detail: a dot in the image's average colour
         this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
-        const side = Math.min(img.width, img.height);
-        const size = pickSpriteSize(needed, side);
-        // A sprite smaller than the node is stretched, which blurs it. When the
-        // source has more detail than that sprite (past the largest sprite
-        // size, or between two sizes), draw the source instead.
-        const sprite = size < needed && size < side ? null : this._imageCache.sprite(src, size);
+        const sprite = this._imageCache.sprite(src, needed);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
-          // Drawing the source: no sprite is sharp enough, or none is
-          // available (no canvas support, or this frame's build limit was
-          // reached before any sprite of this image was cached)
-          const scale = r * 2 / Math.min(img.width, img.height);
-          const dw = img.width * scale, dh = img.height * scale;
+          // No sprite yet (the first is being prepared, or sprites can't be
+          // made here): the image itself, clipped to the node
+          const scale = r * 2 / side;
+          const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
           this._ctx.save();
           this._ctx.clip();
           this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);

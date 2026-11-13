@@ -845,6 +845,18 @@ describe("GraphJS: requestRender", () => {
     } finally { cleanup(); }
   });
 
+  test("keeps drawing while node image sizes are being prepared, then stops", () => {
+    const { gjs, raf, renders, cleanup } = onDemand();
+    try {
+      let preparing = 3;
+      gjs.renderer.isPreparingImages = () => preparing-- > 0;
+      gjs.requestRender();
+      raf.flushFrame(10);
+      assert.equal(renders.length, 4, "one frame per check that found sizes in preparation, plus the last");
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
   test("does nothing while the loop runs, or without a canvas", () => {
     const { gjs, raf, cleanup } = onDemand();
     try {

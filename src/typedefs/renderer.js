@@ -6,13 +6,6 @@
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
 
-/**
- * A loaded node image: an `ImageBitmap` of the source, already decoded,
- * centre-cropped to a square and at most 2048 px across; or, where a bitmap
- * can't be made, the `HTMLImageElement` itself
- * @typedef {ImageBitmap | HTMLImageElement} NodeImage
- */
-
 /** @typedef {"top" | "bottom" | "left" | "right"} LabelPosition */
 /** @typedef {"dim" | "hide"} HighlightMode */
 
@@ -50,7 +43,7 @@
  *    cross-origin setting for image requests, or a function giving it per
  *    image source
  * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
- *    cached node image sizes; images on screen are always kept
+ *    the cached sizes of node images; sizes on screen are always kept
  */
 
 /** @typedef {Required<Omit<RendererOptsInput, "canvas" | "nodeConfig" | "edgeConfig">>} RendererOpts */
@@ -120,8 +113,8 @@
  * @typedef {object} ImageEntry
  * @property {"loading" | "loaded" | "failed"} status - `"loading"` until the
  *    request settles, then `"loaded"` or `"failed"`
- * @property {NodeImage | null} image - the loaded image, or `null` while
- *    loading or after a failure
+ * @property {HTMLImageElement | null} image - the loaded image, or `null`
+ *    while loading or after a failure
  * @property {ImageCrossOrigin} crossOrigin - the `crossOrigin` it was
  *    requested with
  * @property {ReferrerPolicy} referrerPolicy - the `referrerPolicy` it was
@@ -148,7 +141,7 @@
  * `images` is updated. These events report what happened, so calling
  * `preventDefault()` on them has no effect.
  * @typedef {object} RendererEventMap
- * @property {{ src: string, image: NodeImage }} imageload - a node
+ * @property {{ src: string, image: HTMLImageElement }} imageload - a node
  *    image loaded: `src` is its source, `image` the loaded image
  * @property {{ src: string }} imageerror - a node image failed to load:
  *    `src` is its source

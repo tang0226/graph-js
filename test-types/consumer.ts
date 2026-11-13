@@ -19,7 +19,7 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin, NodeImage,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
@@ -214,10 +214,10 @@ gjs.simulation._emit("settle", {});
 
 // Image entries carry a status, and the image once loaded
 const entry: Readonly<ImageEntry> | undefined = gjs.renderer.images.get("a.png");
-if (entry?.status === "loaded") { const im: NodeImage | null = entry.image; }
-// @ts-expect-error -- a loaded image may be a bitmap, not an element
-const notElement: HTMLImageElement | null = entry?.image ?? null;
+if (entry?.status === "loaded") { const im: HTMLImageElement | null = entry.image; }
 const drawable: CanvasImageSource | null = entry?.image ?? null;
+gjs.renderer.on("imageload", e => { const src: string = e.image.src; });
+const preparing: boolean = gjs.renderer.isPreparingImages();
 // @ts-expect-error -- not a status
 const badStatus: ImageEntry["status"] = "pending";
 // ...and the options it was requested with

@@ -349,7 +349,7 @@ export class GraphJS extends Emitter {
   /**
    * Draws a frame on the next animation frame while the loop isn't running,
    * and keeps drawing one each frame while a tween or highlight fade is in
-   * progress, then stops. Each frame advances tweens and renders, but doesn't
+   * progress or node image sizes are being prepared, then stops. Each frame advances tweens and renders, but doesn't
    * tick the simulation or run loop hooks. Requests made in the same frame
    * draw once, and a request while the loop runs does nothing, since the
    * loop draws anyway.
@@ -373,7 +373,7 @@ export class GraphJS extends Emitter {
       if (this.isRunning() || !this.canvas) return;
       this.stepTweens(time);
       this._renderer.render(time);
-      if (this.isTweening() || this._renderer.isFading()) this.requestRender();
+      if (this.isTweening() || this._renderer.isFading() || this._renderer.isPreparingImages()) this.requestRender();
     });
     return this;
   }

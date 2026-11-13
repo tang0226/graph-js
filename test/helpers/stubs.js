@@ -124,7 +124,8 @@ export function dispatchPointer(canvas, type, {
    test asserting on this list also catches options applied too late. */
 /* Also installs a fake createImageBitmap, unless `bitmap` is false (as in
    Node, which lacks it). It returns a fake bitmap of the cropped, resized
-   region, recording the `image` it came from, the `crop` [sx, sy, sw, sh] and
+   region, recording the `image` it came from, the `crop` [sx, sy, sw, sh]
+   (null when called without one, as `createImageBitmap(image, opts)`) and
    whether close() was called; `restore.sources` lists them in creation order.
    `bitmapFails(src)` decides which sources it rejects, and `decodeFails(src)`
    which ones `decode()` rejects. */
@@ -154,11 +155,13 @@ export function installImage({
     }
   };
   if (bitmap) {
-    globalThis.createImageBitmap = async (image, sx, sy, sw, sh, opts) => {
+    globalThis.createImageBitmap = async (image, ...args) => {
       if (bitmapFails(image._src)) throw new DOMException("The source image could not be decoded.", "InvalidStateError");
+      const crop = args.length >= 4 ? args.slice(0, 4) : null;
+      const opts = crop ? args[4] : args[0];
       const b = {
-        width: opts?.resizeWidth ?? sw, height: opts?.resizeHeight ?? sh,
-        image, crop: [sx, sy, sw, sh], opts, closed: false,
+        width: opts?.resizeWidth ?? crop?.[2] ?? image.width, height: opts?.resizeHeight ?? crop?.[3] ?? image.height,
+        image, crop, opts, closed: false,
         close() { this.closed = true; this.width = this.height = 0; },
       };
       sources.push(b);
