@@ -1,4 +1,4 @@
-/** @import { NodeData, NodeId } from './typedefs/graph.js' */
+/** @import { NodeData, NodeId, GraphEdge } from './typedefs/graph.js' */
 /** @import { Canvas, View } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
@@ -584,6 +584,42 @@ export class GraphJS extends Emitter {
   nodeAt(cx, cy, slack = undefined) {
     this._requireCanvas();
     return this._renderer.nodeAt(cx, cy, slack);
+  }
+
+
+  /**
+   * Returns the edge drawn at a specific coordinate in canvas space, or `null`
+   * if no edge is there. When edges overlap, the one whose stroke is nearest
+   * wins, then the one drawn on top. Doesn't check for nodes covering the
+   * point, so call `nodeAt()` first to give nodes priority.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels (defaults to the renderer's default)
+   * @returns {GraphEdge | null} edge at coordinates, or `null` if no edge was
+   *    found
+   * @throws {Error} throws if no canvas is attached
+   */
+  edgeAt(cx, cy, slack = undefined) {
+    this._requireCanvas();
+    return this._renderer.edgeAt(cx, cy, slack);
+  }
+
+
+  /**
+   * Returns every edge within reach of a specific coordinate in canvas space,
+   * best match first, ranked like `edgeAt()`. Useful for letting the user
+   * cycle through edges that overlap under the pointer.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels (defaults to the renderer's default)
+   * @returns {GraphEdge[]} the edges, in a new array; empty if none are found
+   * @throws {Error} throws if no canvas is attached
+   */
+  edgesAt(cx, cy, slack = undefined) {
+    this._requireCanvas();
+    return this._renderer.edgesAt(cx, cy, slack);
   }
 
 

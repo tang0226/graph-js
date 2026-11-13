@@ -190,6 +190,27 @@ describe("GraphJS: picking and pinning", () => {
     } finally { restoreWindow(); }
   });
 
+  test("edgeAt and edgesAt take canvas coordinates and forward slack", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      gjs.simulation.setDefaultNodeConfig({ radius: 20 });
+      gjs.pin("a", 200, 300);
+      gjs.pin("b", 600, 300);
+      gjs.step();
+      const ab = gjs.graph.getEdge("a", "b");
+      assert.equal(gjs.edgeAt(400, 300), ab);
+      assert.deepEqual(gjs.edgesAt(400, 300), [ab]);
+      // 10px off the line: outside the default reach, inside 10px of slack
+      assert.equal(gjs.edgeAt(400, 310), null);
+      assert.equal(gjs.edgeAt(400, 310, 10), ab);
+      assert.deepEqual(gjs.edgesAt(400, 310, 10), [ab]);
+      for (const dy of [3.49, 3.51]) {
+        assert.equal(gjs.edgeAt(400, 300 + dy), gjs.renderer.edgeAt(400, 300 + dy),
+          `facade and renderer defaults disagree ${dy}px out`);
+      }
+    } finally { restoreWindow(); }
+  });
+
   test("pin accepts canvas coordinates and getPosition returns them", () => {
     const { gjs, restoreWindow } = build();
     try {
@@ -1181,6 +1202,8 @@ describe("GraphJS: detached lifecycle", () => {
     gjs.addNode({ id: "a" });
     for (const call of [
       () => gjs.nodeAt(0, 0),
+      () => gjs.edgeAt(0, 0),
+      () => gjs.edgesAt(0, 0),
       () => gjs.pin("a", 0, 0),
     ]) assert.throws(call, /no canvas attached/);
   });
