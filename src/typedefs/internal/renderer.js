@@ -47,4 +47,22 @@
  * @property {number} lr - a loop's radius
  */
 
+/**
+ * A node label's box from `Renderer._layoutLabel()`, in simulation units
+ * @typedef {object} LabelBox
+ * @property {number} x0 - left edge
+ * @property {number} y0 - top edge
+ * @property {number} w - width
+ * @property {number} h - height
+ */
+
+/**
+ * A box in simulation units, by its edges
+ * @typedef {object} Bounds
+ * @property {number} x0 - left edge
+ * @property {number} y0 - top edge
+ * @property {number} x1 - right edge
+ * @property {number} y1 - bottom edge
+ */
+
 export {};

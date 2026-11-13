@@ -1,5 +1,5 @@
 /** @import { NodeData, NodeId, GraphEdge } from './typedefs/graph.js' */
-/** @import { Canvas, View } from './typedefs/renderer.js' */
+/** @import { Canvas, View, ExportOpts, ExportBlobOpts } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
 /** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
@@ -635,6 +635,34 @@ export class GraphJS extends Emitter {
   getPosition(id) {
     this._requireCanvas();
     return this._renderer.getPosition(id);
+  }
+
+
+  /**
+   * Draws the graph onto a new canvas, for saving as an image: the current
+   * view by default, or the whole graph with `fit`. The canvas on screen is
+   * left alone. Delegates to `Renderer.toCanvas()`.
+   * @param {ExportOpts} [opts] - export options
+   * @returns {Canvas} the canvas drawn on
+   * @throws {TypeError | RangeError | Error} throws as `Renderer.toCanvas()`
+   *    does
+   */
+  toCanvas(opts = undefined) {
+    return this._renderer.toCanvas(opts);
+  }
+
+
+  /**
+   * Draws the graph as `toCanvas()` does and encodes it as an image file,
+   * PNG by default. Delegates to `Renderer.toBlob()`.
+   * @param {ExportBlobOpts} [opts] - export options, plus the image `type`
+   *    and `quality`
+   * @returns {Promise<Blob>} the image
+   * @throws {TypeError | RangeError | Error} rejects as `Renderer.toBlob()`
+   *    does
+   */
+  toBlob(opts = undefined) {
+    return this._renderer.toBlob(opts);
   }
 
 

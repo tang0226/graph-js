@@ -19,7 +19,7 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin, ExportOpts, ExportBlobOpts,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
@@ -102,6 +102,19 @@ gjs.renderer.setDefaultEdgeConfig({ width: e => (e.src.id === "a" ? 2 : 1) });
 const r: Renderer = gjs.renderer;
 const bg: string | null = r.opts.background;
 r.setOpts({ background: null });
+
+// Exporting: a canvas synchronously, a Blob asynchronously
+const exported: Canvas = r.toCanvas({ fit: true, padding: 8, width: 1920, pixelRatio: 2, background: null, hooks: false });
+const exportOpts: ExportOpts = { fit: true, canvas: exported };
+const blobOpts: ExportBlobOpts = { ...exportOpts, type: "image/jpeg", quality: 0.9, waitForImages: true };
+// @ts-expect-error -- toCanvas draws straight away, so it can't wait
+r.toCanvas({ waitForImages: true });
+const png: Promise<Blob> = gjs.toBlob(blobOpts);
+const sameCanvas: Canvas = gjs.toCanvas();
+// @ts-expect-error -- encoding options are for toBlob only
+r.toCanvas({ type: "image/png" });
+// @ts-expect-error -- fit is a boolean
+gjs.toCanvas({ fit: "graph" });
 // @ts-expect-error -- canvas is a setup value, not stored in opts
 r.opts.canvas;
 

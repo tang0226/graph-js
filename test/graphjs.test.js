@@ -1385,4 +1385,15 @@ describe("GraphJS: resize", () => {
       assert.deepEqual(gjs.renderer.size, { w: 700, h: 300 });
     } finally { restoreWindow(); }
   });
+
+  test("toCanvas and toBlob forward to the renderer, with or without a canvas attached", async () => {
+    const gjs = new GraphJS();
+    gjs.addNode({ id: "a" });
+    const target = makeCanvas({ w: 1, h: 1 });
+    assert.equal(gjs.toCanvas({ canvas: target, fit: true, padding: 0 }), target);
+    assert.deepEqual([target.width, target.height], [40, 40]);
+    target.toBlob = cb => cb("blob");
+    assert.equal(await gjs.toBlob({ canvas: target, fit: true }), "blob");
+    assert.throws(() => gjs.toCanvas({ canvas: target }), /needs a `width` and `height`/);
+  });
 });

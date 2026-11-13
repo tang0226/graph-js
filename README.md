@@ -41,6 +41,7 @@ npm install @tang0226/graph-js
 - [Drawing](#drawing)
   - [Highlighting](#highlighting)
   - [Custom drawing](#custom-drawing)
+  - [Exporting images](#exporting-images)
 - [Layout physics](#layout-physics)
   - [Settling](#settling)
   - [Barnes-Hut](#barnes-hut)
@@ -967,8 +968,61 @@ gjs.renderer.removeHook("overlay", drawSelection);   // true if it was added
 - **Canvas state:** each hook runs between `ctx.save()` and `ctx.restore()`, so its changes to the transform, alpha, colours and so on don't affect the rest of the frame. Hooks start with the base transform and full alpha, but other properties are left over from drawing, so set every one you use.
 - **Errors:** a hook that throws is logged with `console.error`, and the rest of the frame is still drawn.
 - **Order:** hooks of the same type run in the order they were added, and adding the same function twice has no effect. Removing a hook needs the same function, so keep a reference to it.
-- **When they run:** every time a frame is drawn, which `start()` keeps doing after the layout settles. If the animation is stopped, call `gjs.renderer.render()` after changing something a hook draws. Nothing is drawn, and no hooks run, without a canvas.
+- **When they run:** every time a frame is drawn, which `start()` keeps doing after the layout settles. If the animation is stopped, call `gjs.renderer.render()` after changing something a hook draws. Nothing is drawn, and no hooks run, without a canvas. Hooks also run when an image is exported (see [Exporting images](#exporting-images)).
 - **Only draw:** don't call `render()` or `step()` from a hook, since that runs the hooks again. Changes to the graph, config or highlighting made from a hook may not fully show until the next frame.
+
+### Exporting images
+
+`toBlob()` draws the graph and encodes it as an image file, PNG by default:
+
+```js
+const blob = await gjs.toBlob();
+
+// Download it
+const a = document.createElement("a");
+a.href = URL.createObjectURL(blob);
+a.download = "graph.png";
+a.click();
+URL.revokeObjectURL(a.href);
+```
+
+`toCanvas()` draws it onto a new canvas and returns that instead, for drawing it somewhere else or calling `toDataURL()`. Both are also on `gjs.renderer`. The canvas on screen, its view and the animation are left alone.
+
+By default the export is what's on screen: the current view, at the canvas's size and pixel ratio. Options change that:
+
+```js
+// The whole graph, wherever the view is, at the current zoom
+await gjs.toBlob({ fit: true });
+
+// The whole graph, zoomed to fit a 1920 x 1080 image with 40px around it
+await gjs.toBlob({ fit: true, width: 1920, height: 1080, padding: 40, pixelRatio: 1 });
+
+// The current view at 3x the detail, on a transparent background, as WebP
+await gjs.toBlob({ pixelRatio: 3, background: null, type: "image/webp", quality: 0.9 });
+
+// The whole graph, once every node image has loaded
+await gjs.toBlob({ fit: true, waitForImages: true });
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `fit` | `false` | frame the whole graph (nodes, labels, self-loops and curved edges) rather than export the current view |
+| `padding` | `16` | with `fit`, space around the graph |
+| `width`, `height` | see below | image size in CSS pixels |
+| `pixelRatio` | the device pixel ratio | image pixels per CSS pixel; the image is `width * pixelRatio` pixels across |
+| `background` | the renderer's `background` | background color, or `null` for a transparent image |
+| `hooks` | `true` | whether [renderer hooks](#custom-drawing) draw on the export |
+| `canvas` | a new canvas | canvas to draw onto, resized to the image |
+| `type` | `"image/png"` | `toBlob()` only: the image format, such as `"image/jpeg"` or `"image/webp"` |
+| `quality` | the browser's | `toBlob()` only: from 0 to 1, for lossy formats |
+| `waitForImages` | `false` | `toBlob()` only: wait until every node image has loaded or failed, then draw |
+
+Without `width` and `height`, the current view is exported at the canvas's size. A `width` or `height` of its own keeps the view's centre and zoom, so it shows more or less of the graph; use `pixelRatio` for more detail of the same area. With `fit`, the image is the graph's size at the current zoom. Given a `width`, `height` or both, the graph is zoomed to fit inside instead, and a size left out keeps the graph's shape.
+
+- **Images and highlights:** node images are drawn at full detail from the images themselves. An image still loading is drawn as its node's `color`, unless `toBlob()` is given `waitForImages: true`. Then the graph is drawn once every image a node uses has loaded or failed, including images of nodes added while it waits, and failed images are drawn as their node's `color`. The wait has no time limit of its own, so it lasts as long as the browser lets a request run. With `toCanvas()`, which draws straight away, wait for the `imageload` and `imageerror` events first (see [Node images](#node-images)). Highlights are drawn as they'll be once any fade ends.
+- **Hooks:** hooks draw on the export as they do on screen. While they do, `renderer.canvas`, `ctx`, `size` and `view` are the export's, so hooks that use them, as the examples above do, fit the image.
+- **Without a canvas:** a renderer with no canvas attached can export too, given a `width` and `height`, or with `fit` once the graph has nodes. Where there's no `document`, as in a worker, the export is an `OffscreenCanvas`; elsewhere, pass a `canvas`.
+- **Limits:** browsers limit how big a canvas can be (in some, about 16 million pixels), and `toBlob()` rejects if the image is too large to encode. A `fit` export of a big graph at a high zoom can get that large, so give it a `width` or `height`. JPEG has no transparency, so a `null` background comes out black. If a node image was loaded with `crossOrigin: null`, the browser won't let it be exported, and `toBlob()` rejects with a `SecurityError`.
 
 ## Layout physics
 

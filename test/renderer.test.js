@@ -2413,3 +2413,369 @@ describe("Renderer: view", () => {
     assert.throws(() => r.zoomTo(2, 0, 0), /no canvas/);
   });
 });
+
+describe("Renderer: export", () => {
+  /* In `scene()`, nodes a and b (radius 20) sit at world (-100, 0) and
+     (100, 0), so the graph spans x -120..120 and y -20..20: 240 x 40. With
+     the default 16px padding, a fitted export at zoom 1 is 272 x 72. */
+  const arcs = ctx => opsNamed(ctx, "arc").map(([, x, y, r]) => [r2(x), r2(y), r2(r)]);
+  const out = () => makeCanvas({ w: 1, h: 1 });
+
+  describe("the current view", () => {
+    test("is drawn at the attached canvas's size and pixel ratio, leaving it alone", () => {
+      const restoreWindow = installWindow(2);
+      try {
+        const { r, ctx, canvas } = scene(false, [["a", "b"]]);
+        r.resize();
+        ctx.ops.length = 0;
+        r.panBy(10, 0);
+        const before = { view: { ...r.view }, size: r.size, ctx: r.ctx, canvas: r.canvas };
+
+        const target = out();
+        assert.equal(r.toCanvas({ canvas: target }), target, "returns the canvas drawn on");
+        assert.equal(target.width, 1600);
+        assert.equal(target.height, 1200);
+        assert.deepEqual(opsNamed(target.ctx, "setTransform")[0].slice(1), [2, 0, 0, 2, 0, 0]);
+        assert.deepEqual(arcs(target.ctx), [[310, 300, 20], [510, 300, 20]], "as on screen");
+
+        assert.deepEqual(ctx.ops, [], "the attached canvas isn't drawn on");
+        assert.equal(canvas.width, 1600);
+        assert.deepEqual({ view: { ...r.view }, size: r.size, ctx: r.ctx, canvas: r.canvas }, before);
+        assert.equal(r.toCanvas({ canvas: target }).width, 1600, "the size is the canvas's, not the last export's");
+      } finally { restoreWindow(); }
+    });
+
+    test("a width, height and pixel ratio of its own keep the view's centre and zoom", () => {
+      const { r } = scene(false, []);
+      const target = r.toCanvas({ canvas: out(), width: 400, height: 100, pixelRatio: 3 });
+      assert.equal(target.width, 1200);
+      assert.equal(target.height, 300);
+      assert.deepEqual(arcs(target.ctx), [[100, 50, 20], [300, 50, 20]]);
+    });
+
+    test("without a canvas attached, it needs a width and height", () => {
+      const sim = new Simulation(new Graph(), {});
+      const r = new Renderer(sim, { nodeConfig: { label: n => n.id } });
+      sim.graph.addNode({ id: "a" });
+      sim.sync();
+      Object.assign(sim.nodeList[0], { x: 0, y: 0 });
+      assert.throws(() => r.toCanvas({ canvas: out() }), /^Error: Renderer: an export needs a `width` and `height`/);
+      assert.throws(() => r.toCanvas({ canvas: out(), width: 100 }), /`height`/);
+      const target = r.toCanvas({ canvas: out(), width: 100, height: 80 });
+      assert.equal(target.width, 100, "a pixel ratio of 1");
+      assert.equal(opsNamed(target.ctx, "fillText").length, 1, "labels are measured with the export's context");
+      assert.equal(r.canvas, null);
+      assert.equal(r.ctx, null);
+    });
+  });
+
+  describe("fit", () => {
+    test("without a size, the image is the graph's size at the current zoom, plus padding", () => {
+      const { r } = scene(false, [["a", "b"]]);
+      r.setView({ x: 500, y: -300, zoom: 1 });
+      const target = r.toCanvas({ canvas: out(), fit: true });
+      assert.equal(target.width, 272);
+      assert.equal(target.height, 72);
+      assert.deepEqual(arcs(target.ctx), [[36, 36, 20], [236, 36, 20]], "centred on the graph");
+
+      r.setView({ zoom: 0.5 });
+      const half = r.toCanvas({ canvas: out(), fit: true, padding: 0, pixelRatio: 2 });
+      assert.deepEqual([half.width, half.height], [240, 40], "120 x 20 CSS px at 2x");
+      assert.deepEqual(r.view, { x: 500, y: -300, zoom: 0.5 }, "the view is left alone");
+    });
+
+    test("with a width and height, the graph is zoomed to fit inside, centred", () => {
+      const { r } = scene(false, []);
+      const target = r.toCanvas({ canvas: out(), fit: true, width: 512, height: 512 });
+      assert.deepEqual([target.width, target.height], [512, 512]);
+      // min(480 / 240, 480 / 40) = 2
+      assert.deepEqual(arcs(target.ctx), [[56, 256, 40], [456, 256, 40]]);
+    });
+
+    test("with only a width or height, the other keeps the graph's shape", () => {
+      const { r } = scene(false, []);
+      const wide = r.toCanvas({ canvas: out(), fit: true, width: 512 });
+      assert.deepEqual([wide.width, wide.height], [512, 112], "zoom 2: 40 * 2 + 32");
+      const tall = r.toCanvas({ canvas: out(), fit: true, height: 112 });
+      assert.deepEqual([tall.width, tall.height], [512, 112]);
+    });
+
+    test("labels are included, unless they're too small to show", () => {
+      const { r } = scene(false, [], { nodeCfg: { label: n => n.id } });
+      // A bottom label runs from 22 to 37 below its node's centre
+      assert.equal(r.toCanvas({ canvas: out(), fit: true }).height, 89, "37 + 20 + 32");
+      r.setView({ zoom: 0.2 });   // 3px labels, under minLabelSize
+      assert.equal(r.toCanvas({ canvas: out(), fit: true, padding: 0 }).height, 8, "40 * 0.2");
+    });
+
+    test("labels capped by maxLabelSize are fitted at their capped size", () => {
+      const { r } = scene(false, [], { nodeCfg: { label: n => n.id }, opts: { maxLabelSize: 15 } });
+      // Uncapped, labels need 57 world units of height: zoom 1000 / 57 = 17.5,
+      // a node radius of 351. Capped at 15px, they need under 1 unit, so the
+      // graph is about 43 high, and zooms to about 23.
+      const target = r.toCanvas({ canvas: out(), fit: true, padding: 0, width: 10000, height: 1000 });
+      const [[y, size]] = opsNamed(target.ctx, "fillText").map(([, , , ty, s]) => [ty, s.size]);
+      assert.equal(r2(size), 15);
+      assert.ok(y + size <= 1000, "the label fits");
+      assert.ok(arcs(target.ctx)[0][2] > 450, "zoomed past what uncapped labels would allow");
+    });
+
+    test("self-loops and bowed edges are included", () => {
+      const loop = scene(true, [["a", "a"]]).r.toCanvas({ canvas: out(), fit: true, padding: 0 });
+      assert.ok(loop.height > 40, "the loop rises above its node");
+      const bowed = scene(true, [["a", "b"], ["b", "a"]], { edgeCfg: { bow: 100 } })
+        .r.toCanvas({ canvas: out(), fit: true, padding: 0 });
+      assert.equal(bowed.height, 100, "each curve strays 50 either side of the line");
+    });
+
+    test("an empty graph exports the current view", () => {
+      const r = new Renderer(new Simulation(new Graph(), {}), { canvas: makeCanvas() });
+      const target = r.toCanvas({ canvas: out(), fit: true });
+      assert.deepEqual([target.width, target.height], [800, 600]);
+    });
+
+    test("padding that leaves no room throws, and changes nothing", () => {
+      const { r, canvas } = scene(false, []);
+      assert.throws(() => r.toCanvas({ canvas: out(), fit: true, width: 30, padding: 15 }),
+        /^RangeError: Renderer: `padding` leaves no room/);
+      assert.equal(r.canvas, canvas, "the attached canvas is restored");
+      assert.equal(r.size.w, 800);
+    });
+  });
+
+  describe("drawing", () => {
+    test("the background can be overridden, or left out", () => {
+      const { r } = scene(false, [], { opts: { background: "#123456" } });
+      const fills = c => opsNamed(c.ctx, "fillRect").length;
+      const plain = r.toCanvas({ canvas: out() });
+      assert.equal(plain.ctx.fillStyle !== undefined && fills(plain), 1);
+      const clear = r.toCanvas({ canvas: out(), background: null });
+      assert.equal(fills(clear), 0);
+      assert.equal(opsNamed(clear.ctx, "clearRect").length, 1);
+      assert.equal(r.opts.background, "#123456");
+    });
+
+    test("hooks run against the export, unless turned off", () => {
+      const { r, canvas } = scene(false, []);
+      const seen = [];
+      r.addHook("overlay", who => seen.push([who.canvas, { ...who.size }]));
+      const target = r.toCanvas({ canvas: out(), fit: true });
+      assert.deepEqual(seen, [[target, { w: 272, h: 72 }]]);
+      r.toCanvas({ canvas: out(), hooks: false });
+      assert.equal(seen.length, 1);
+      r.render();
+      assert.equal(seen[1][0], canvas);
+    });
+
+    test("highlights are drawn as they'll be once faded, without advancing the fade", () => {
+      const { r, ctx } = scene(false, [], { opts: { highlightFadeDuration: 1000 } });
+      const alphas = c => {
+        let alpha = 1;
+        Object.defineProperty(c.ctx, "globalAlpha", {
+          get: () => alpha, set: v => { alpha = v; c.ctx.ops.push(["arc-alpha", v]); }, configurable: true,
+        });
+        return c;
+      };
+      r.setHighlight({ nodes: ["a"] });
+      r.render(0);
+      r.render(100);    // 10% of the way
+      const target = r.toCanvas({ canvas: alphas(out()) });
+      assert.deepEqual(opsNamed(target.ctx, "arc-alpha").map(o => o[1]), [0.15, 1]);
+      assert.equal(r.isFading(), true);
+      alphas({ ctx });
+      ctx.ops.length = 0;
+      r.render(100);
+      assert.ok(opsNamed(ctx, "arc-alpha")[0][1] > 0.8, "the live fade carries on where it was");
+    });
+
+    test("node images are drawn from the image itself, without building sprites", async () => {
+      const restoreImage = installImage({ size: 256 });
+      const restoreCanvas = installOffscreenCanvas();
+      try {
+        const g = new Graph();
+        g.addNode({ id: "a" });
+        const sim = new Simulation(g, {});
+        const r = new Renderer(sim, { canvas: makeCanvas(), nodeConfig: { image: "a.png" } });
+        await flush();
+        const built = restoreCanvas.created.length;
+        const target = r.toCanvas({ canvas: out(), fit: true, width: 1000, height: 1000 });
+        const [[, img]] = opsNamed(target.ctx, "drawImage");
+        assert.equal(img, r.images.get("a.png").image);
+        assert.equal(opsNamed(target.ctx, "clip").length, 1);
+        assert.equal(restoreCanvas.created.length, built, "no sprite was asked for");
+        assert.equal(r.isPreparingImages(), false);
+      } finally { restoreCanvas(); restoreImage(); }
+    });
+  });
+
+  describe("canvases and options", () => {
+    test("makes an OffscreenCanvas where there's no document, and throws where there's neither", () => {
+      const { r } = scene(false, []);
+      assert.throws(() => r.toCanvas(), /^Error: Renderer: no canvas can be made here/);
+      const restore = installOffscreenCanvas();
+      try {
+        const target = r.toCanvas({ pixelRatio: 0.5 });
+        assert.ok(target instanceof globalThis.OffscreenCanvas);
+        assert.deepEqual([target.width, target.height], [400, 300]);
+      } finally { restore(); }
+    });
+
+    test("invalid options throw before anything is drawn", () => {
+      const { r } = scene(false, []);
+      const target = out();
+      for (const [bad, pattern] of [
+        [{ size: 2 }, /^TypeError: Renderer: unknown option `size`$/],
+        [{ width: 0 }, /^RangeError: Renderer: `width`/],
+        [{ height: "10" }, /^TypeError: Renderer: `height`/],
+        [{ pixelRatio: -1 }, /pixelRatio/],
+        [{ padding: -1 }, /padding/],
+        [{ fit: 1 }, /fit/],
+        [{ hooks: "no" }, /hooks/],
+        [{ background: 0 }, /^TypeError: Renderer: `background` must be a string or null$/],
+        [{ canvas: {} }, /^TypeError: Renderer: export `canvas` must be a canvas$/],
+      ]) assert.throws(() => r.toCanvas({ canvas: target, ...bad }), pattern, JSON.stringify(bad));
+      assert.deepEqual(target.ctx.ops, []);
+      assert.throws(() => r.toCanvas({ canvas: { getContext: () => null } }), /no 2D context/);
+    });
+  });
+
+  describe("toBlob", () => {
+    test("encodes with the canvas's toBlob, passing the type and quality", async () => {
+      const { r } = scene(false, []);
+      const target = Object.assign(out(), {
+        toBlob(cb, type, quality) { this.encoded = [type, quality]; queueMicrotask(() => cb("blob")); },
+      });
+      assert.equal(await r.toBlob({ canvas: target, type: "image/jpeg", quality: 0.8 }), "blob");
+      assert.deepEqual(target.encoded, ["image/jpeg", 0.8]);
+    });
+
+    test("uses convertToBlob on an OffscreenCanvas", async () => {
+      const { r } = scene(false, []);
+      const target = Object.assign(out(), {
+        async convertToBlob(opts) { this.encoded = opts; return "blob"; },
+      });
+      assert.equal(await r.toBlob({ canvas: target, fit: true }), "blob");
+      assert.deepEqual(target.encoded, { type: undefined, quality: undefined });
+    });
+
+    test("draws when called, before encoding", async () => {
+      const { r } = scene(false, []);
+      const target = Object.assign(out(), { toBlob(cb) { setTimeout(() => cb("blob"), 0); } });
+      const pending = r.toBlob({ canvas: target });
+      assert.equal(opsNamed(target.ctx, "arc").length, 2);
+      await pending;
+    });
+
+    describe("waitForImages", () => {
+      /* One node using a.png and one using b.png, whose requests start as the
+         renderer syncs and settle on the next flush. Each export's encoding
+         records whether the node images were drawn. */
+      async function imageExport(opts, { fail = () => false, before } = {}) {
+        const restoreImage = installImage({ fail });
+        const restoreCanvas = installOffscreenCanvas();
+        try {
+          const g = new Graph();
+          g.addNode({ id: "a", img: "a.png" });
+          g.addNode({ id: "b", img: "b.png" });
+          const r = new Renderer(new Simulation(g, {}), { canvas: makeCanvas(), nodeConfig: { image: n => n.data.img } });
+          const target = Object.assign(out(), { toBlob(cb) { cb("blob"); } });
+          before?.(r, g);
+          assert.equal(await r.toBlob({ canvas: target, fit: true, ...opts }), "blob");
+          return { r, drawn: opsNamed(target.ctx, "drawImage").map(([, img]) => img.src) };
+        } finally { restoreCanvas(); restoreImage(); }
+      }
+
+      test("off by default: images still loading are drawn as their node's color", async () => {
+        const { r, drawn } = await imageExport({});
+        assert.deepEqual(drawn, []);
+        assert.equal(r.images.get("a.png")?.status, "loaded", "they did load, after the drawing");
+      });
+
+      test("on: drawn once every node image has loaded", async () => {
+        const { drawn } = await imageExport({ waitForImages: true });
+        assert.deepEqual(drawn.sort(), ["a.png", "b.png"]);
+      });
+
+      test("images that fail don't hold it up", async () => {
+        const { r, drawn } = await imageExport({ waitForImages: true }, { fail: src => src === "b.png" });
+        assert.deepEqual(drawn, ["a.png"]);
+        assert.equal(r.images.get("b.png")?.status, "failed");
+      });
+
+      test("a node added while waiting is waited for too", async () => {
+        const { drawn } = await imageExport({ waitForImages: true }, {
+          before: (r, g) => r.on("imageload", e => {
+            if (e.src === "a.png") g.addNode({ id: "c", img: "c.png" });
+          }),
+        });
+        assert.deepEqual(drawn.sort(), ["a.png", "b.png", "c.png"]);
+      });
+
+      test("an image collected while waiting stops being waited for", async () => {
+        // b.png never loads. Once its node is removed and its entry collected,
+        // no request is left to settle, so only the collection can end the wait.
+        const restoreImage = installImage();
+        const Stub = globalThis.Image;
+        globalThis.Image = class extends Stub {
+          set src(v) { if (v !== "b.png") super.src = v; }
+          get src() { return super.src; }
+        };
+        try {
+          const g = new Graph();
+          g.addNode({ id: "a", img: "a.png" });
+          g.addNode({ id: "b", img: "b.png" });
+          const r = new Renderer(new Simulation(g, {}), { nodeConfig: { image: n => n.data.img } });
+          const target = Object.assign(out(), { toBlob(cb) { cb("blob"); } });
+          let done = false;
+          const pending = r.toBlob({ canvas: target, fit: true, waitForImages: true }).then(b => { done = true; return b; });
+          await flush();
+          assert.equal(r.images.get("a.png")?.status, "loaded");
+          assert.equal(done, false, "still waiting for b.png");
+
+          g.removeNode("b");
+          r._imageDebt = 100;     // collect unused images on the next sync
+          r.sync();
+          assert.equal(r.images.has("b.png"), false);
+          assert.equal(await pending, "blob");
+          assert.deepEqual(opsNamed(target.ctx, "drawImage").map(([, img]) => img.src), ["a.png"]);
+        } finally { restoreImage(); }
+      });
+
+      test("invalid options reject before any waiting", async () => {
+        // An image that never loads, so a toBlob() that waits never settles
+        const prevImage = globalThis.Image;
+        globalThis.Image = class { set src(v) {} };
+        try {
+          const g = new Graph();
+          g.addNode({ id: "a" });
+          const r = new Renderer(new Simulation(g, {}), { nodeConfig: { image: "a.png" } });
+          r.sync();
+          for (const [bad, pattern] of [
+            [{ waitForImages: "yes" }, /^TypeError: Renderer: `waitForImages` must be a boolean$/],
+            [{ waitForImages: true, width: -1 }, /^RangeError: Renderer: `width`/],
+            [{ waitForImages: true, colour: "red" }, /^TypeError: Renderer: unknown option `colour`$/],
+          ]) {
+            let result = "pending";
+            r.toBlob(bad).then(() => { result = "resolved"; }, e => { result = e; });
+            await flush();
+            assert.equal(r.images.get("a.png")?.status, "loading");
+            assert.match(String(result), pattern, JSON.stringify(bad));
+          }
+          let waited = "pending";
+          r.toBlob({ waitForImages: true, width: 10, height: 10 }).then(() => { waited = "settled"; }, () => { waited = "settled"; });
+          await flush();
+          assert.equal(waited, "pending", "valid options do wait");
+        } finally { globalThis.Image = prevImage; }
+      });
+    });
+
+    test("rejects when encoding fails or an option is invalid", async () => {
+      const { r } = scene(false, []);
+      const failing = Object.assign(out(), { toBlob(cb) { cb(null); } });
+      await assert.rejects(r.toBlob({ canvas: failing }), /^Error: Renderer: the image couldn't be encoded/);
+      await assert.rejects(r.toBlob({ canvas: failing, quality: 2 }), /^RangeError: Renderer: `quality`/);
+      await assert.rejects(r.toBlob({ canvas: failing, type: 1 }), /^TypeError: Renderer: `type`/);
+      await assert.rejects(r.toBlob({ canvas: failing, width: -1 }), RangeError);
+    });
+  });
+});

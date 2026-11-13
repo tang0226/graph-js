@@ -20,6 +20,40 @@ const frame = (cache, f, budget = Infinity) => {
 };
 
 describe("ImageCache", () => {
+  test("changed() resolves when a request settles or an entry is collected, not when one is replaced", async () => {
+    const restore = installImage({ fail: src => src === "bad.png" });
+    try {
+      const cache = new ImageCache();
+      const resolved = p => Promise.race([p.then(() => true), flush().then(() => false)]);
+
+      cache.load("a.png", null, "no-referrer");
+      assert.equal(await resolved(cache.changed()), true, "a.png loaded");
+      cache.load("bad.png", null, "no-referrer");
+      assert.equal(await resolved(cache.changed()), true, "bad.png failed");
+
+      // Replaced while loading: the first request's settle is ignored, the second's counts
+      cache.load("c.png", null, "no-referrer");
+      const replaced = cache.changed();
+      cache.load("c.png", "anonymous", "no-referrer");
+      assert.equal(await resolved(replaced), true);
+      assert.equal(cache.images.get("c.png")?.crossOrigin, "anonymous");
+
+      assert.equal(await resolved(cache.changed()), false, "nothing left to settle");
+
+      cache.load("d.png", null, "no-referrer");
+      const collected = cache.changed();
+      let collectedNow = false;
+      collected.then(() => { collectedNow = true; });
+      cache.collect(new Set(["a.png", "bad.png", "c.png"]));
+      await null; await null;
+      assert.equal(collectedNow, true, "a collected entry is a change straight away");
+      assert.equal(await resolved(cache.changed()), false, "d.png's late settle is ignored");
+      const unchanged = cache.changed();
+      cache.collect(new Set(["a.png", "bad.png", "c.png"]));
+      assert.equal(await resolved(unchanged), false, "collecting nothing isn't a change");
+    } finally { restore(); }
+  });
+
   test("load requests a source once per set of request options, and records them", async () => {
     const restore = installImage({ fail: src => src === "bad.png" });
     try {

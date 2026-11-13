@@ -282,6 +282,24 @@ export class Highlighter {
 
 
   /**
+   * Every alpha as it will be once fading ends, leaving the current alphas
+   * alone. The current arrays when no fade is running, otherwise new ones.
+   * @param {HighlightMode} mode - highlight mode
+   * @param {number} alpha - alpha of dimmed elements
+   * @returns {{ nodeAlpha: Float64Array, edgeAlpha: Float64Array }} alphas,
+   *    parallel to `nodeState` and `edgeState`
+   */
+  settledAlphas(mode, alpha) {
+    if (!this._fadeActive) return { nodeAlpha: this._nodeAlpha, edgeAlpha: this._edgeAlpha };
+    const dim = this.dimmedAlpha(mode, alpha);
+    return {
+      nodeAlpha: Float64Array.from(this._nodeState, f => (f ? 1 : dim)),
+      edgeAlpha: Float64Array.from(this._edgeState, f => (f ? 1 : dim)),
+    };
+  }
+
+
+  /**
    * Advances every alpha toward its target.
    * @param {number} time - frame timestamp in milliseconds
    * @param {number} duration - milliseconds to fade fully between 0 and 1;

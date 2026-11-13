@@ -4,14 +4,14 @@
 /**
  * @import {
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
- *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors, EdgeLayout,
+ *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors, EdgeLayout, LabelBox, Bounds,
  * } from './typedefs/internal/renderer.js'
  */
 /**
  * @import {
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
- *  RendererOpts, RendererOptsInput, HighlightMode,
+ *  RendererOpts, RendererOptsInput, HighlightMode, ExportOpts, ExportBlobOpts,
  *  RendererHookType, RendererHook,
  *  RendererEventMap, RendererEventType,
  *  Canvas, CanvasContext, Size, View, ImageEntry, ImageCrossOrigin,
@@ -77,15 +77,59 @@ const checkImageRequestOpt = (name, value, values) => {
 };
 
 /**
+ * Throws unless a background is a string or `null`.
+ * @param {unknown} v - value to check
+ * @returns {void}
+ * @throws {TypeError} throws if it's neither
+ */
+const checkBackground = v => {
+  if (v !== null && typeof v !== "string") throw new TypeError("Renderer: `background` must be a string or null");
+};
+
+/**
+ * A check per export option
+ * @type {Record<keyof ExportOpts, (v: any) => void>}
+ */
+const EXPORT_RULES = {
+  canvas: v => {
+    if (typeof v?.getContext !== "function") throw new TypeError("Renderer: export `canvas` must be a canvas");
+  },
+  fit:        v => checkBoolean("Renderer", "fit", v),
+  padding:    v => checkNumber("Renderer", "padding", v, { min: 0 }),
+  width:      v => checkNumber("Renderer", "width", v, { min: 0, aboveMin: true }),
+  height:     v => checkNumber("Renderer", "height", v, { min: 0, aboveMin: true }),
+  pixelRatio: v => checkNumber("Renderer", "pixelRatio", v, { min: 0, aboveMin: true }),
+  background: checkBackground,
+  hooks:      v => checkBoolean("Renderer", "hooks", v),
+};
+const EXPORT_OPTION_NAMES = new Set(Object.keys(EXPORT_RULES));
+
+/** A check per option `toBlob()` has on top of the export options */
+const BLOB_RULES = {
+  type:          (/** @type {unknown} */ v) => checkString("Renderer", "type", v),
+  quality:       (/** @type {unknown} */ v) => checkNumber("Renderer", "quality", v, { min: 0, max: 1 }),
+  waitForImages: (/** @type {unknown} */ v) => checkBoolean("Renderer", "waitForImages", v),
+};
+const BLOB_OPTION_NAMES = new Set([...EXPORT_OPTION_NAMES, ...Object.keys(BLOB_RULES)]);
+
+/**
+ * Makes a canvas to export onto: a canvas element where there's a document,
+ * otherwise an `OffscreenCanvas`.
+ * @returns {Canvas} the canvas
+ * @throws {Error} throws if neither is available
+ */
+const makeExportCanvas = () => {
+  if (typeof globalThis.document?.createElement === "function") return globalThis.document.createElement("canvas");
+  if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(1, 1);
+  throw new Error("Renderer: no canvas can be made here; pass one as the export's `canvas`");
+};
+
+/**
  * A check per renderer option
  * @type {Record<keyof RendererOpts, (v: any) => void>}
  */
 const OPTION_RULES = {
-  background: v => {
-    if (v === null) return;
-    try { checkString("Renderer", "background", v); }
-    catch { throw new TypeError("Renderer: `background` must be a string or null"); }
-  },
+  background:            checkBackground,
   renderEdges:           v => checkBoolean("Renderer", "renderEdges", v),
   renderLabels:          v => checkBoolean("Renderer", "renderLabels", v),
   labelFont:             v => checkString("Renderer", "labelFont", v),
@@ -297,6 +341,14 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Box of the last label passed to `_layoutLabel()`, reused between labels
+   * @type {LabelBox}
+   * @private
+   */
+  _labelBox = { x0: 0, y0: 0, w: 0, h: 0 };
+
+
+  /**
    * Highlight state: highlighted elements, per-slot flags, and the alphas
    * that fade toward them
    * @type {Highlighter}
@@ -387,6 +439,15 @@ export class Renderer extends Emitter {
    * @private
    */
   _dpr = 1;
+
+
+  /**
+   * Whether `toCanvas()` is drawing, with the export's canvas, size, pixel
+   * ratio and view swapped in.
+   * @type {boolean}
+   * @private
+   */
+  _exporting = false;
 
 
   /**
@@ -1170,7 +1231,9 @@ export class Renderer extends Emitter {
         this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
-        const sprite = this._imageCache.sprite(src, needed);
+        // Exports draw the image itself: sprites the size an export needs
+        // aren't ready in time, and asking would build them for nothing
+        const sprite = this._exporting ? null : this._imageCache.sprite(src, needed);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
@@ -1533,7 +1596,7 @@ export class Renderer extends Emitter {
 
     const labelsI = [];
     if (this._opts.renderLabels) {
-      const { labelMargin, labelPosition, minLabelSize, maxLabelSize } = this._opts;
+      const { minLabelSize, maxLabelSize } = this._opts;
       const zoom = this._view.zoom, ratios = this._labelWidthRatio;
       for (let i = 0; i < sim.nodeList.length; i++) {
         const style = this._nodeStyles[i];
@@ -1541,17 +1604,7 @@ export class Renderer extends Emitter {
         const px = style.labelScale * zoom;
         if (px < minLabelSize) continue;                     // too small to read
         // Label bounds in world units
-        const sNode = sim.nodeList[i];
-        const h = Math.min(px, maxLabelSize) / zoom;
-        const w = ratios[i] * h;
-        const d = sNode.radius + labelMargin;
-        let x0, y0;
-        switch (labelPosition) {
-          case "top":   x0 = sNode.x - w / 2; y0 = sNode.y - d - h; break;
-          case "right": x0 = sNode.x + d;     y0 = sNode.y - h / 2; break;
-          case "left":  x0 = sNode.x - d - w; y0 = sNode.y - h / 2; break;
-          default:      x0 = sNode.x - w / 2; y0 = sNode.y + d;     break;
-        }
+        const { x0, y0, w, h } = this._layoutLabel(i, Math.min(px, maxLabelSize) / zoom);
         if (x0 < xMax && x0 + w > xMin && y0 < yMax && y0 + h > yMin) labelsI.push(i);
       }
     }
@@ -1590,9 +1643,28 @@ export class Renderer extends Emitter {
     this.sync();
     // Eases every alpha toward its target, off-screen elements included, so
     // they don't come back into view mid-fade
-    const opts = this._opts;
-    this._highlighter.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
+    const opts = this._opts, hl = this._highlighter;
+    hl.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
     this._imageCache.beginFrame();
+    this._drawFrame(time, opts.background, hl.nodeAlpha, hl.edgeAlpha, true);
+    this._imageCache.endFrame(opts.imageCacheMB * 1024 * 1024);
+    return true;
+  }
+
+
+  /**
+   * Draws a frame onto the current context, which holds the base transform,
+   * at the current view and size.
+   * @param {number} time - frame timestamp, passed to hooks
+   * @param {string | null} background - background color, or `null` for none
+   * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
+   * @param {Float64Array} edgeAlpha - highlight alpha of each edge slot
+   * @param {boolean} hooks - whether to run the drawing hooks
+   * @returns {void}
+   * @private
+   */
+  _drawFrame(time, background, nodeAlpha, edgeAlpha, hooks) {
+    if (!this._ctx || !this._size) return;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
     const inFrame = this._cull();
@@ -1600,12 +1672,12 @@ export class Renderer extends Emitter {
     // Cleared first so a transparent or translucent background doesn't build
     // up over earlier frames
     this._ctx.clearRect(0, 0, this._size.w, this._size.h);
-    if (this._opts.background !== null) {
-      this._ctx.fillStyle = this._opts.background;
+    if (background !== null) {
+      this._ctx.fillStyle = background;
       this._ctx.fillRect(0, 0, this._size.w, this._size.h);
     }
 
-    this._runHooks("background", time);
+    if (hooks) this._runHooks("background", time);
 
     // Text state shared by every label this frame; each label scales the font
     // to its own size by transform
@@ -1635,7 +1707,7 @@ export class Renderer extends Emitter {
 
     const hl = this._highlighter;
     if (hl.has() || hl.isFading()) {
-      const { nodeState, nodeAlpha, edgeState, edgeAlpha } = hl;
+      const { nodeState, edgeState } = hl;
       this._frameAlpha = 1;
       for (const flag of [0, 1]) {
         for (const i of inFrame.edgesI) {
@@ -1661,11 +1733,249 @@ export class Renderer extends Emitter {
       if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    this._runHooks("overlay", time);
+    if (hooks) this._runHooks("overlay", time);
+  }
 
-    this._imageCache.endFrame(this._opts.imageCacheMB * 1024 * 1024);
 
-    return true;
+  /**
+   * Draws the graph onto a new canvas, for saving as an image. By default
+   * it's drawn as it is on screen: the current view, at the attached canvas's
+   * size and pixel ratio. With `fit`, it's framed around the whole graph
+   * instead.
+   *
+   * The attached canvas, its view and the render loop are left alone.
+   * Highlights are drawn as they'll be once any fade ends, and node images at
+   * full detail from the images themselves; images still loading are drawn
+   * as their node's `color`. Hooks run unless `hooks` is `false`, and see the
+   * export's canvas, `size` and `view` while they do.
+   * @param {ExportOpts} [opts={}] - export options
+   * @returns {Canvas} the canvas drawn on: `opts.canvas` if given, otherwise
+   *    a new `HTMLCanvasElement`, or an `OffscreenCanvas` where there's no
+   *    document
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
+   * @throws {Error} throws if the size isn't given and can't be worked out
+   *    (no canvas attached, and not `fit`ting a graph with nodes), or no
+   *    canvas can be made
+   */
+  toCanvas(opts = {}) {
+    checkKnownKeys("Renderer", opts, EXPORT_OPTION_NAMES);
+    checkEach(opts, EXPORT_RULES);
+    const { fit = false, padding = 16, hooks = true } = opts;
+    const pixelRatio = opts.pixelRatio ?? this._dpr;
+    const background = opts.background === undefined ? this._opts.background : opts.background;
+
+    const canvas = opts.canvas ?? makeExportCanvas();
+    // Cast: tsc resolves `getContext` on the canvas union unreliably
+    const ctx = /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
+    if (!ctx) throw new TypeError("Renderer: export canvas has no 2D context");
+
+    this.sync();
+    const live = { canvas: this._canvas, ctx: this._ctx, size: this._size, dpr: this._dpr, view: this._view };
+    try {
+      this._exporting = true;
+      this._canvas = canvas;
+      this._ctx = ctx;
+      this._dpr = pixelRatio;
+      // Measured before framing, which needs label sizes, and with the
+      // export's context, since a renderer without a canvas has none
+      if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
+      const { size, view } = this._exportFrame(fit, padding, opts.width, opts.height, live.size);
+      this._size = size;
+      this._view = view;
+      canvas.width = Math.max(1, Math.round(size.w * pixelRatio));
+      canvas.height = Math.max(1, Math.round(size.h * pixelRatio));
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      const { nodeAlpha, edgeAlpha } = this._highlighter.settledAlphas(this._opts.highlightMode, this._opts.highlightAlpha);
+      this._drawFrame(now(), background, nodeAlpha, edgeAlpha, hooks);
+    } finally {
+      this._exporting = false;
+      this._canvas = live.canvas;
+      this._ctx = live.ctx;
+      this._size = live.size;
+      this._dpr = live.dpr;
+      this._view = live.view;
+    }
+    return canvas;
+  }
+
+
+  /**
+   * Draws the graph as `toCanvas()` does and encodes it as an image file.
+   * The graph is drawn when this is called, or with `waitForImages`, once
+   * every node image has loaded or failed; only the waiting and encoding are
+   * asynchronous.
+   * @param {ExportBlobOpts} [opts={}] - export options, plus the image
+   *    `type`, `quality` and `waitForImages`
+   * @returns {Promise<Blob>} the image
+   * @throws {TypeError | RangeError | Error} rejects as `toCanvas()` throws,
+   *    or if the image can't be encoded (it may be larger than the browser
+   *    allows). Rejects with a "SecurityError" `DOMException` if a node image
+   *    was loaded without CORS (`crossOrigin: null`). Invalid options reject
+   *    before any waiting.
+   */
+  async toBlob(opts = {}) {
+    checkKnownKeys("Renderer", opts, BLOB_OPTION_NAMES);
+    const { type, quality, waitForImages = false, ...canvasOpts } = opts;
+    checkEach({ type, quality, waitForImages }, BLOB_RULES);
+    checkEach(canvasOpts, EXPORT_RULES);
+    if (waitForImages) await this._nodeImagesSettled();
+    const canvas = this.toCanvas(canvasOpts);
+    const blob = "convertToBlob" in canvas
+      ? await canvas.convertToBlob({ type, quality })
+      : await new Promise(resolve => canvas.toBlob(resolve, type, quality));
+    if (!blob) throw new Error("Renderer: the image couldn't be encoded; it may be too large");
+    return blob;
+  }
+
+
+  /**
+   * Resolves once no node's image is still loading: each has loaded or
+   * failed. Images of nodes added, or changed, while waiting are waited for
+   * too.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _nodeImagesSettled() {
+    for (;;) {
+      this.sync();
+      const images = this._imageCache.images;
+      if (!this._nodeStyles.some(s => s.image && images.get(s.image)?.status === "loading")) return;
+      // A settle, or the entry being collected once no node uses it
+      await this._imageCache.changed();
+    }
+  }
+
+
+  /**
+   * Works out an export's size and view.
+   * @param {boolean} fit - whether to frame the whole graph
+   * @param {number} padding - canvas px around a fitted graph
+   * @param {number | undefined} width - requested width
+   * @param {number | undefined} height - requested height
+   * @param {Size | null} live - size of the attached canvas
+   * @returns {{ size: Size, view: View }} size and view
+   * @throws {Error} throws if the size can't be worked out
+   * @throws {RangeError} throws if `padding` leaves no room for the graph
+   * @private
+   */
+  _exportFrame(fit, padding, width, height, live) {
+    const current = this._view;
+    if (!fit || this._simulation.nodeList.length === 0) {
+      const w = width ?? live?.w, h = height ?? live?.h;
+      if (w === undefined || h === undefined) {
+        throw new Error("Renderer: an export needs a `width` and `height` without a canvas attached, unless it fits a graph with nodes");
+      }
+      return { size: { w, h }, view: { ...current } };
+    }
+
+    let zoom = current.zoom;
+    if (width !== undefined || height !== undefined) {
+      /** @param {Bounds} b @returns {number} the largest zoom that fits `b` */
+      const fitZoom = b => Math.min(
+        width === undefined ? Infinity : (width - 2 * padding) / (b.x1 - b.x0),
+        height === undefined ? Infinity : (height - 2 * padding) / (b.y1 - b.y0),
+      );
+      // Label sizes depend on the zoom: fit them at full size, then at the
+      // size they are at that zoom. The second fit is closer, but labels
+      // that only show once zoomed in could make it overflow, so it's only
+      // kept if it still fits.
+      const first = fitZoom(this._graphBounds(null));
+      const second = fitZoom(this._graphBounds(first));
+      zoom = fitZoom(this._graphBounds(second)) >= second ? second : first;
+      if (zoom === Infinity) zoom = current.zoom;     // a graph with no extent
+      if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
+    }
+
+    const b = this._graphBounds(zoom);
+    return {
+      size: { w: width ?? (b.x1 - b.x0) * zoom + 2 * padding, h: height ?? (b.y1 - b.y0) * zoom + 2 * padding },
+      view: { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom },
+    };
+  }
+
+
+  /**
+   * Bounds of the graph in simulation units: its nodes, self-loops, bowed
+   * edges and labels. Stroke widths and arrowheads that stick out aren't
+   * included. Expects at least one node, and labels to be measured.
+   * @param {number | null} zoom - zoom to size labels at, which also hides
+   *    those too small to read; `null` for every label at full size, which
+   *    is as big as they get at any zoom
+   * @returns {Bounds} bounds
+   * @private
+   */
+  _graphBounds(zoom) {
+    const sim = this._simulation, nodes = sim.nodeList, opts = this._opts;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    /** @type {(xa: number, ya: number, xb: number, yb: number) => void} */
+    const add = (xa, ya, xb, yb) => {
+      if (xa < x0) x0 = xa;
+      if (ya < y0) y0 = ya;
+      if (xb > x1) x1 = xb;
+      if (yb > y1) y1 = yb;
+    };
+
+    for (const n of nodes) add(n.x - n.radius, n.y - n.radius, n.x + n.radius, n.y + n.radius);
+
+    if (opts.renderEdges) {
+      const ep = sim.edgePairs;
+      for (let i = 0; i < ep.length / 2; i++) {
+        const a = nodes[ep[2 * i]], b = nodes[ep[2 * i + 1]], style = this._edgeStyles[i];
+        if (a === b) {
+          // As `_layoutEdge()` sizes it, with its arrowhead at full size
+          const head = opts.scaleStrokes ? 1.6 * (style.arrow ? style.arrowSize : 6) : 0;
+          const lr = Math.max(a.radius * 0.8, head);
+          const d = (a.radius + lr * 0.6) * Math.SQRT1_2;
+          add(a.x + d - lr, a.y - d - lr, a.x + d + lr, a.y - d + lr);
+        } else if (this._edgeBow[i] && style.bow) {
+          // A bowed edge strays farthest from the straight line at its middle,
+          // by half its bow
+          const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+          const off = this._edgeBow[i] * style.bow / 2;
+          const mx = (a.x + b.x) / 2 - dy / len * off, my = (a.y + b.y) / 2 + dx / len * off;
+          add(mx, my, mx, my);
+        }
+      }
+    }
+
+    if (opts.renderLabels) {
+      for (let i = 0; i < nodes.length; i++) {
+        const style = this._nodeStyles[i];
+        if (!this._labelWidthRatio[i] || !style.renderLabel) continue;
+        let h = style.labelScale;
+        if (zoom !== null) {
+          if (h * zoom < opts.minLabelSize) continue;
+          h = Math.min(h * zoom, opts.maxLabelSize) / zoom;
+        }
+        const box = this._layoutLabel(i, h);
+        add(box.x0, box.y0, box.x0 + box.w, box.y0 + box.h);
+      }
+    }
+
+    return { x0, y0, x1, y1 };
+  }
+
+
+  /**
+   * Places a node's label box, in simulation units, by `labelPosition`.
+   * Writes into one reused object, so culling doesn't allocate per label.
+   * @param {number} i - cache index of the node
+   * @param {number} h - label height (font size) in simulation units
+   * @returns {{ x0: number, y0: number, w: number, h: number }} the box
+   * @private
+   */
+  _layoutLabel(i, h) {
+    const sNode = this._simulation.nodeList[i], box = this._labelBox;
+    const w = this._labelWidthRatio[i] * h, d = sNode.radius + this._opts.labelMargin;
+    switch (this._opts.labelPosition) {
+      case "top":   box.x0 = sNode.x - w / 2; box.y0 = sNode.y - d - h; break;
+      case "right": box.x0 = sNode.x + d;     box.y0 = sNode.y - h / 2; break;
+      case "left":  box.x0 = sNode.x - d - w; box.y0 = sNode.y - h / 2; break;
+      default:      box.x0 = sNode.x - w / 2; box.y0 = sNode.y + d;     break;
+    }
+    box.w = w;
+    box.h = h;
+    return box;
   }
 
 

@@ -249,6 +249,12 @@ export class ImageCache {
    */
   _onSettle;
 
+  /**
+   * Resolvers of `changed()` promises, waiting for the next change to `images`
+   * @private @type {(() => void)[]}
+   */
+  _waiters = [];
+
 
   /**
    * @param {(src: string, entry: Readonly<ImageEntry>) => void} [onSettle] -
@@ -304,6 +310,7 @@ export class ImageCache {
     const settle = entry => {
       if (this._images.get(src) !== loading) return;
       this._images.set(src, entry);
+      this._notify();
       this._onSettle?.(src, entry);
     };
     // Settled once decoded and its fallback sprite is made, so nodes never
@@ -341,11 +348,37 @@ export class ImageCache {
    * @returns {void}
    */
   collect(live) {
+    let deleted = false;
     for (const src of [...this._images.keys()]) {
       if (live.has(src)) continue;
       this._images.delete(src);
       this._drop(src);
+      deleted = true;
     }
+    if (deleted) this._notify();
+  }
+
+
+  /**
+   * Resolves the next time a request settles or an entry is deleted from
+   * `images`. A request replaced by another isn't a change: the new one
+   * settles in its place.
+   * @returns {Promise<void>}
+   */
+  changed() {
+    return new Promise(resolve => { this._waiters.push(resolve); });
+  }
+
+
+  /**
+   * Resolves every `changed()` promise.
+   * @returns {void}
+   * @private
+   */
+  _notify() {
+    const waiters = this._waiters;
+    this._waiters = [];
+    for (const resolve of waiters) resolve();
   }
 
 

@@ -65,6 +65,41 @@
  */
 
 /**
+ * Options for `Renderer.toCanvas()` and `toBlob()`. Sizes are in CSS pixels,
+ * like `size`; the image is `pixelRatio` times as many pixels across.
+ * @typedef {object} ExportOpts
+ * @property {boolean} [fit=false] - whether to frame the whole graph, rather
+ *    than export the current view
+ * @property {number} [padding=16] - with `fit`, CSS px of space around the
+ *    graph
+ * @property {number} [width] - image width. Defaults to the attached
+ *    canvas's width; with `fit`, to the graph's width at the current zoom,
+ *    or the width that keeps its shape when only `height` is given. With
+ *    `fit` and a `width` or `height`, the graph is zoomed to fit inside.
+ * @property {number} [height] - image height, defaulting as `width` does
+ * @property {number} [pixelRatio] - image pixels per CSS px. Defaults to the
+ *    attached canvas's device pixel ratio, or 1.
+ * @property {string | null} [background] - background color, or `null` for
+ *    a transparent background. Defaults to the renderer's `background`.
+ * @property {boolean} [hooks=true] - whether to run the drawing hooks
+ * @property {Canvas} [canvas] - canvas to draw onto, resized to fit the
+ *    image; a new one by default
+ */
+
+/**
+ * Options for `Renderer.toBlob()`: the export options, plus how to encode it
+ * and whether to wait for node images
+ * @typedef {object} ExportEncodeOpts
+ * @property {string} [type="image/png"] - image MIME type, such as
+ *    "image/jpeg" or "image/webp"; browsers fall back to PNG for types they
+ *    can't encode
+ * @property {number} [quality] - quality from 0 to 1, for lossy types
+ * @property {boolean} [waitForImages=false] - whether to wait until every
+ *    node image has loaded or failed before drawing, so none are missing
+ */
+/** @typedef {ExportOpts & ExportEncodeOpts} ExportBlobOpts */
+
+/**
  * @typedef {object} NodeStyle
  * @property {string} color - node fill color
  * @property {string} outlineColor - node outline color
