@@ -367,6 +367,19 @@ describe("Renderer: viewport culling", () => {
     r.render();
     assert.ok(opsNamed(ctx, "lineTo").length >= 1, "the edge should still be stroked");
   });
+
+  test("a node seen in one frame doesn't keep its edges in the next", () => {
+    const { sim, r, ctx } = scene(false, [["a", "b"]]);
+    r.render();
+    assert.ok(opsNamed(ctx, "lineTo").length >= 1, "drawn while both nodes are on screen");
+
+    // Both off screen on the same side, so the edge can't cross the view
+    sim.nodes.get("a").x = 100000;
+    sim.nodes.get("b").x = 100100;
+    ctx.ops.length = 0;
+    r.render();
+    assert.equal(opsNamed(ctx, "lineTo").length, 0, "the edge should be culled");
+  });
 });
 
 describe("Renderer: images", () => {

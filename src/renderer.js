@@ -341,6 +341,16 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Scratch flags for `_cull()`, by node index: 1 while a node is on screen.
+   * Grown as needed and cleared before `_cull()` returns, so it can be reused
+   * every frame without allocating.
+   * @type {Uint8Array}
+   * @private
+   */
+  _onScreen = new Uint8Array(0);
+
+
+  /**
    * Box of the last label passed to `_layoutLabel()`, reused between labels
    * @type {LabelBox}
    * @private
@@ -1077,8 +1087,31 @@ export class Renderer extends Emitter {
    */
   simToCanvas(x, y) {
     if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
-    const v = this._view;
-    return [this._size.w / 2 + (x - v.x) * v.zoom, this._size.h / 2 + (y - v.y) * v.zoom];
+    return [this._canvasX(x), this._canvasY(y)];
+  }
+
+
+  /**
+   * Canvas x coordinate of a simulation x coordinate, as `simToCanvas()`
+   * gives it, for drawing loops: it doesn't check for a canvas or allocate an
+   * array. Expects a size, which drawing and hit tests already require.
+   * @param {number} x - simulation x coordinate
+   * @returns {number} canvas x coordinate
+   * @private
+   */
+  _canvasX(x) {
+    return /** @type {Size} */ (this._size).w / 2 + (x - this._view.x) * this._view.zoom;
+  }
+
+
+  /**
+   * Canvas y coordinate of a simulation y coordinate; see `_canvasX()`.
+   * @param {number} y - simulation y coordinate
+   * @returns {number} canvas y coordinate
+   * @private
+   */
+  _canvasY(y) {
+    return /** @type {Size} */ (this._size).h / 2 + (y - this._view.y) * this._view.zoom;
   }
 
 
@@ -1217,7 +1250,7 @@ export class Renderer extends Emitter {
    */
   _drawNode(sNode, nodeStyle) {
     if (!this._ctx) return;
-    const [cx, cy] = this.simToCanvas(sNode.x, sNode.y);
+    const cx = this._canvasX(sNode.x), cy = this._canvasY(sNode.y);
     const r = sNode.radius * this._view.zoom;
     this._ctx.beginPath();
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
@@ -1279,7 +1312,7 @@ export class Renderer extends Emitter {
   _drawNodeLabel(sNode, nodeStyle) {
     if (!this._ctx) return;
     const zoom = this._view.zoom, dpr = this._dpr;
-    let [x, y] = this.simToCanvas(sNode.x, sNode.y);
+    let x = this._canvasX(sNode.x), y = this._canvasY(sNode.y);
     const r = (sNode.radius + this._opts.labelMargin) * zoom;
     switch (this._opts.labelPosition) {
       case "top":   y -= r; break;
@@ -1374,7 +1407,7 @@ export class Renderer extends Emitter {
     p.width = width;
     p.fade = fade;
 
-    const [ax, ay] = this.simToCanvas(src.x, src.y);
+    const ax = this._canvasX(src.x), ay = this._canvasY(src.y);
     const ra = src.radius * z;
 
     if (src === dest) {
@@ -1388,7 +1421,7 @@ export class Renderer extends Emitter {
       return p;
     }
 
-    const [bx, by] = this.simToCanvas(dest.x, dest.y);
+    const bx = this._canvasX(dest.x), by = this._canvasY(dest.y);
     const rb = dest.radius * z;
     const dx = bx - ax, dy = by - ay;
     const d = Math.hypot(dx, dy);
@@ -1479,7 +1512,7 @@ export class Renderer extends Emitter {
     const h = Math.sqrt(h2);
     const px = -uy, py = ux;
 
-    for (const s of [1, -1]) {                   // pick the crossing that points inward
+    for (let s = 1; s >= -1; s -= 2) {           // pick the crossing that points inward
       const tipX = cx + ux * t + px * h * s;
       const tipY = cy + uy * t + py * h * s;
       let tx = -(tipY - ly), ty = tipX - lx;     // counter-clockwise tangent on the loop
@@ -1575,13 +1608,14 @@ export class Renderer extends Emitter {
     const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
 
     const nodesI = [];
-    const shouldRender = new Set();
-    const sim = this._simulation;
-    for (let i = 0; i < sim.nodeList.length; i++) {
+    const sim = this._simulation, n = sim.nodeList.length;
+    if (this._onScreen.length < n) this._onScreen = new Uint8Array(n);
+    const onScreen = this._onScreen;
+    for (let i = 0; i < n; i++) {
       const sNode = sim.nodeList[i];
       if (circleRectCollision(sNode.x, sNode.y, sNode.radius, xMin, xMax, yMin, yMax)) {
         nodesI.push(i);
-        shouldRender.add(i);
+        onScreen[i] = 1;
       }
     }
 
@@ -1589,10 +1623,10 @@ export class Renderer extends Emitter {
     if (this._opts.renderEdges) {
       const ep = sim.edgePairs;
       for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
-        if (shouldRender.has(ep[j]) || shouldRender.has(ep[j + 1])) 
-          edgesI.push(i);
+        if (onScreen[ep[j]] || onScreen[ep[j + 1]]) edgesI.push(i);
       }
     }
+    for (let k = 0; k < nodesI.length; k++) onScreen[nodesI[k]] = 0;
 
     const labelsI = [];
     if (this._opts.renderLabels) {
