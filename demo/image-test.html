@@ -1,99 +1,263 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node image downscaling test</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; color: #222; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 4px 0 12px; max-width: 70em; }
+  .layout { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #canvas { width: 900px; height: 640px; border: 1px solid #999; background: #fff; }
+  .panel { min-width: 320px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 2px 8px; text-align: right; border-bottom: 1px solid #eee; }
+  th:first-child, td:first-child { text-align: left; }
+  .swatch { display: inline-block; width: 14px; height: 14px; border: 1px solid #999; vertical-align: middle; }
+  .bad { color: #b00020; font-weight: 600; }
+  .ok { color: #1b7f3a; }
+  h2 { font-size: 15px; margin: 16px 0 6px; }
+  #strip td { vertical-align: bottom; text-align: center; }
+  #strip canvas { display: block; margin: 0 auto 2px; image-rendering: pixelated; }
+  #strip .label { text-align: left; max-width: 14em; }
+  small { color: #666; }
+</style>
 </head>
 <body>
-<p>Drag to pan, scroll to zoom. Zoom: <span id="zoom"></span></p>
-<canvas id="canvas" style="border: 1px solid black; touch-action: none"></canvas>
+<h1>Node image downscaling test</h1>
+<p>
+  Every node shows a 1-pixel black-and-white checkerboard. Shrunk properly, it's a <b>uniform mid-grey</b>.
+  Black or white patches, speckle, or moiré rings mean the browser's resize is skipping pixels (aliasing).
+  Zoom with the wheel or the buttons, drag to pan. Magenta means the image isn't drawn at all.
+  Zoom in far enough and the checkerboard itself shows: that's expected once a node is larger than the source.
+</p>
+
+<div class="layout">
+  <canvas id="canvas"></canvas>
+
+  <div class="panel">
+    <div class="controls">
+      <label>Texture
+        <select id="texture">
+          <option value="textures/checker-2048x2048.png">2048 x 2048</option>
+          <option value="textures/checker-4000x3000.png">4000 x 3000 (cropped, capped)</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="loop" checked> Animation loop</label>
+    </div>
+    <div class="controls" id="zooms">Zoom:</div>
+
+    <table id="stats"><tbody></tbody></table>
+
+    <h2>Nodes</h2>
+    <table id="nodes">
+      <thead><tr><th>radius</th><th>on screen (device px)</th><th>sprite wanted</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2>Cached sprites of this texture</h2>
+    <small>Fully opaque pixels only. SD is the standard deviation of their grey level: near 0 is a clean grey, large is aliasing.</small>
+    <table id="sprites">
+      <thead><tr><th>size</th><th>kind</th><th>mean</th><th>SD</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<h2>Reference: the browser's own resizes of this texture, without the graph</h2>
+<p><small>
+  Shown at 1 device pixel per pixel. The first row is the call the cache makes for every sprite.
+  If it's clean here but not in the graph, the problem is in the cache; if it's bad here too, it's the browser.
+</small></p>
+<table id="strip"></table>
+
 <script type="module">
 import { GraphJS } from "../src/graphjs.js";
+import { pickSpriteSize, shrink } from "../src/image-cache.js";
 
-const width = 1000;
-const height = 1000;
 const canvas = document.querySelector("#canvas");
+const textureSelect = document.querySelector("#texture");
+let texture = textureSelect.value;
 
-// Size the canvas with CSS only. Attaching measures it and sizes the drawing
-// buffer to match the device pixel ratio, so setting canvas.width/height by
-// hand would just be overwritten.
-canvas.style.width = width + "px";
-canvas.style.height = height + "px";
-
-const gjs = new GraphJS({ canvas });
-
-gjs.addNode({id: "a"});
-gjs.addNode({id: "b"});
-gjs.addNode({id: "c"});
-gjs.addNode({id: "d"});
-gjs.addNode({id: "e"});
-
-gjs.addEdge("a", "b");
-gjs.addEdge("a", "c");
-gjs.addEdge("b", "d");
-gjs.addEdge("a", "e");
-
-
-// Test on some unsplash images
-gjs.renderer.setNodeConfig("a", {
-  image: "https://plus.unsplash.com/premium_photo-1790975903282-5fd06b30f35f?w=400&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
+const gjs = new GraphJS({
+  canvas,
+  interaction: { minZoom: 0.01, maxZoom: 200 },
+  renderer: { highlightFadeDuration: 0, maxLabelSize: 14 },
 });
 
-gjs.renderer.setNodeConfig("b", {
-  image: "https://plus.unsplash.com/premium_photo-1762564681819-6f6f626ffabc?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
+// A chain of nodes from dot-sized to huge, so one zoom level shows several sprite sizes
+const RADII = [2, 6, 15, 40, 100, 250];
+for (const r of RADII) gjs.addNode({ id: "r" + r, r });
+for (let i = 1; i < RADII.length; i++) gjs.addEdge("r" + RADII[i - 1], "r" + RADII[i]);
+
+gjs.simulation.setDefaultNodeConfig({ radius: n => n.data.r });
+gjs.simulation.setDefaultEdgeConfig({ length: 20 });
+gjs.renderer.setDefaultNodeConfig({
+  image: () => texture,
+  color: "#ff00ff",            // shows wherever the image isn't drawn
+  outlineWidth: 0,
+  label: n => "r " + n.data.r,
+  labelScale: 10,
 });
 
-gjs.renderer.setNodeConfig("c", {
-  image: "https://plus.unsplash.com/premium_photo-1790117179082-8bd550a356e2?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D"
-});
+// Zoom buttons. View changes made from code need a redraw while the loop is stopped.
+const zooms = document.querySelector("#zooms");
+for (const z of [0.05, 0.2, 0.5, 1, 2, 4, 8, 16, 64]) {
+  const b = document.createElement("button");
+  b.textContent = z + "x";
+  b.onclick = () => { gjs.zoomTo(z); gjs.requestRender(); };
+  zooms.append(b);
+}
+const fit = document.createElement("button");
+fit.textContent = "Reset view";
+fit.onclick = () => { gjs.setView({ x: 0, y: 0, zoom: 1 }); gjs.requestRender(); };
+zooms.append(fit);
 
-gjs.renderer.view.zoom = 2;
+document.querySelector("#loop").onchange = e => {
+  if (e.target.checked) gjs.start();
+  else gjs.stop();
+};
 
-gjs.start();
+textureSelect.onchange = () => {
+  texture = textureSelect.value;
+  gjs.renderer.setDefaultNodeConfig({ image: () => texture });
+  gjs.requestRender();
+  drawStrip(texture);
+};
 
 
-// Drag to pan, scroll to zoom. The render loop is running, so view changes
-// show up on the next frame without calling render().
-const zoomOut = document.querySelector("#zoom");
-const showZoom = () => { zoomOut.textContent = gjs.renderer.view.zoom.toFixed(2); };
-showZoom();
+// --- Stats, updated after each frame is drawn (the loop's, or requestRender's)
 
-function pointerToCanvas(e) {
-  const r = canvas.getBoundingClientRect();
-  return [e.clientX - r.left, e.clientY - r.top];
+const cache = gjs.renderer._imageCache;   // internal: read here for debugging only
+const statsBody = document.querySelector("#stats tbody");
+const nodesBody = document.querySelector("#nodes tbody");
+const spritesBody = document.querySelector("#sprites tbody");
+const dpr = () => globalThis.devicePixelRatio || 1;
+
+const row = cells => `<tr>${cells.map(c => `<td>${c}</td>`).join("")}</tr>`;
+
+/* Mean and SD of the grey level of a sprite's fully opaque pixels. */
+const spriteStats = new WeakMap();
+function greyStats(bitmap) {
+  if (spriteStats.has(bitmap)) return spriteStats.get(bitmap);
+  const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = c.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0);
+  const result = stats(ctx.getImageData(0, 0, c.width, c.height).data, true);
+  spriteStats.set(bitmap, result);
+  return result;
+}
+function stats(data, opaqueOnly) {
+  let n = 0, sum = 0, sq = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (opaqueOnly && data[i + 3] < 255) continue;
+    const v = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    n++; sum += v; sq += v * v;
+  }
+  if (!n) return { mean: NaN, sd: NaN };
+  const mean = sum / n;
+  return { mean, sd: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
+}
+const fmtStats = ({ mean, sd }) => [
+  mean.toFixed(1),
+  `<span class="${sd > 8 ? "bad" : "ok"}">${sd.toFixed(1)}</span>`,
+];
+
+function updateStats() {
+  const view = gjs.view;
+  const entry = gjs.renderer.images.get(texture);
+  const img = entry?.image;
+  const side = img ? Math.min(img.naturalWidth, img.naturalHeight) : 0;
+  const avg = cache.average(texture);
+  statsBody.innerHTML = [
+    ["zoom", view.zoom.toFixed(3)],
+    ["device pixel ratio", dpr()],
+    ["image", `${entry?.status ?? "-"}${img ? ` (${img.naturalWidth} x ${img.naturalHeight})` : ""}`],
+    ["average colour (dots)", avg ? `<span class="swatch" style="background:${avg}"></span> ${avg}` : "-"],
+    ["sprites being built", gjs.renderer.isPreparingImages() ? "yes" : "no"],
+    ["builds", `${cache._inFlight} running (${(cache._inFlightBytes / 1048576).toFixed(1)} MB est.), ${cache._queue.length} queued`],
+    ["sprite memory", `${(cache._bytes / 1048576).toFixed(2)} MB of ${gjs.renderer.opts.imageCacheMB} MB`],
+    ["loop", gjs.isRunning() ? "running" : "stopped"],
+  ].map(row).join("");
+
+  nodesBody.innerHTML = RADII.map(r => {
+    const needed = 2 * r * view.zoom * dpr();
+    const want = !side ? "-" : needed < 6 ? "dot" : pickSpriteSize(needed, side);
+    return row([r, needed.toFixed(0), want]);
+  }).join("");
+
+  const slots = [...(cache._recs.get(texture)?.slots.values() ?? [])].sort((a, b) => a.size - b.size);
+  spritesBody.innerHTML = slots.map(slot => {
+    const kind = cache._lru.has(slot) ? "cached" : "fallback";
+    return row([slot.size, kind, ...fmtStats(greyStats(slot.bitmap)), slot.frame === cache._frameId ? "drawn" : ""]);
+  }).join("") || row(["-", "", "", "", ""]);
+}
+gjs.renderer.addHook("overlay", updateStats);
+
+
+// --- Reference strip: the browser's resizes of the texture, outside the graph
+
+const STRIP_SIZES = [16, 32, 64, 128, 256];
+const strip = document.querySelector("#strip");
+
+async function drawStrip(src) {
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  const w = img.naturalWidth, h = img.naturalHeight, side = Math.min(w, h);
+  const sx = Math.floor((w - side) / 2), sy = Math.floor((h - side) / 2);
+  const bitmapAt = quality => size => createImageBitmap(img, sx, sy, side, side,
+    { resizeWidth: size, resizeHeight: size, resizeQuality: quality });
+
+  const rows = [
+    ["exact 2x steps, then one last step (what sprites use)", size => shrink(img, sx, sy, side, size, () => true)],
+    ['createImageBitmap in one step, resizeQuality "high"', bitmapAt("high")],
+    ['createImageBitmap in one step, resizeQuality "low"', bitmapAt("low")],
+    ['canvas drawImage in one step, imageSmoothingQuality "high"', async size => {
+      const c = new OffscreenCanvas(size, size);
+      const ctx = c.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+      return c;
+    }],
+    ["expected: uniform grey", async size => {
+      const c = new OffscreenCanvas(size, size);
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "rgb(128, 128, 128)";
+      ctx.fillRect(0, 0, size, size);
+      return c;
+    }],
+  ];
+
+  strip.innerHTML = `<tr><th></th>${STRIP_SIZES.map(s => `<th>${s} px</th>`).join("")}</tr>`;
+  for (const [label, make] of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="label">${label}</td>`;
+    for (const size of STRIP_SIZES) {
+      const td = document.createElement("td");
+      try {
+        const result = await make(size);
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        c.style.width = c.style.height = size / dpr() + "px";   // 1 device px per pixel
+        const ctx = c.getContext("2d");
+        ctx.drawImage(result, 0, 0);
+        const [mean, sd] = fmtStats(stats(ctx.getImageData(0, 0, size, size).data, false));
+        td.append(c);
+        td.insertAdjacentHTML("beforeend", `<small>mean ${mean}, SD ${sd}</small>`);
+      } catch (err) {
+        td.innerHTML = `<small class="bad">${err.message}</small>`;
+      }
+      tr.append(td);
+    }
+    strip.append(tr);
+  }
 }
 
-let pan = null;
-
-canvas.addEventListener("pointerdown", e => {
-  canvas.setPointerCapture(e.pointerId);
-  const v = gjs.renderer.view;
-  pan = { sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
-});
-
-canvas.addEventListener("pointermove", e => {
-  if (!pan) return;
-  const v = gjs.renderer.view;
-  v.x = pan.vx - (e.clientX - pan.sx) / v.zoom;
-  v.y = pan.vy - (e.clientY - pan.sy) / v.zoom;
-});
-
-canvas.addEventListener("pointerup", () => { pan = null; });
-canvas.addEventListener("pointercancel", () => { pan = null; });
-
-// Wide range on purpose: small enough to hit the dot fallback, large enough
-// to need the biggest sprites.
-canvas.addEventListener("wheel", e => {
-  e.preventDefault();
-  const [cx, cy] = pointerToCanvas(e);
-  const [bx, by] = gjs.canvasToSim(cx, cy);   // keep this point under the cursor
-  const v = gjs.renderer.view;
-  v.zoom = Math.min(50, Math.max(0.02, v.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  const [ax, ay] = gjs.canvasToSim(cx, cy);
-  v.x += bx - ax;
-  v.y += by - ay;
-  showZoom();
-}, { passive: false });
-
+drawStrip(texture);
+gjs.start();
 </script>
 </body>
 </html>

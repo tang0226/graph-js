@@ -37,6 +37,7 @@ npm install @tang0226/graph-js
   - [Interaction events](#interaction-events)
   - [Graph events](#graph-events)
   - [Simulation events](#simulation-events)
+  - [Renderer events](#renderer-events)
 - [Drawing](#drawing)
   - [Highlighting](#highlighting)
   - [Custom drawing](#custom-drawing)
@@ -128,8 +129,8 @@ const gjs = new GraphJS({
     scaleStrokes: true,             // edge and outline widths scale with zoom (see "Edge and outline widths")
     minEdgeWidth: 1,                // edges thinner than this on screen (px) fade out instead
     maxEdgeWidth: 8,                // edges stop growing at this width on screen (px)
-    crossOrigin: "anonymous",       // crossOrigin for node image requests
-    imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests
+    crossOrigin: "anonymous",       // crossOrigin for node image requests, or a function of the source
+    imageReferrerPolicy: "no-referrer", // referrerPolicy for node image requests, or a function of the source
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
@@ -347,7 +348,20 @@ A node with a charge of `0` neither repels nor is repelled, so only its edges, g
 gjs.renderer.setDefaultNodeConfig({ image: node => node.data.avatar ?? null });
 ```
 
-The image is scaled to cover the node and clipped to its circle. Until it loads, or if it fails to load, the node is filled with its `color` instead. Images are fetched with the renderer's `crossOrigin` and `imageReferrerPolicy` options.
+The image is scaled to cover the node and clipped to its circle. Until it loads, or if it fails to load, the node is filled with its `color` instead.
+
+Images are fetched with the renderer's `crossOrigin` and `imageReferrerPolicy` options. Either can be a function of the image source, for graphs whose images come from hosts that need different settings:
+
+```js
+gjs.renderer.setOpts({
+  // This host sends no CORS headers, so request its images without CORS
+  crossOrigin: src => (src.startsWith("https://legacy.example.com/") ? null : "anonymous"),
+});
+```
+
+An image requested without CORS (`crossOrigin: null`) loads from hosts that don't send CORS headers, but its pixels can't be read, so small nodes using it are drawn as a dot in their `color` rather than the image's average colour. A function that returns an invalid value gets the option's default instead.
+
+Calling `setOpts()` with either option requests each cached image again whose options have changed, including failed and preloaded images. Images whose options are unchanged are kept. Nodes using a requested image show their `color` until it loads. Calling `setOpts()` with the same function again re-runs it, which is how to apply changes in anything the function reads.
 
 To avoid nodes appearing before their images do, start the requests early:
 
@@ -362,10 +376,17 @@ Each requested image has an entry in `gjs.renderer.images`, keyed by its source:
 ```js
 const entry = gjs.renderer.images.get("https://example.com/alice.png");
 entry?.status;   // "loading", "loaded" or "failed"
-entry?.image;    // the loaded HTMLImageElement, or null while loading or after a failure
+entry?.image;    // the loaded image, or null while loading or after a failure
+entry?.crossOrigin, entry?.referrerPolicy;   // the options it was requested with
 ```
 
-For speed, each image is cached at the sizes nodes are actually drawn at (from 16 to 1024 pixels, already cropped to a circle), so large graphs of image nodes stay fast when zoomed out. Nodes drawn larger than 1024 pixels use the original image, so they stay as sharp as it allows. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. The cache is limited by the renderer's `imageCacheMB` option: the least recently drawn sizes are discarded first, and images on screen are always kept. After a fast zoom, images may look slightly soft for a frame or two while their new sizes are prepared.
+Before its request counts as finished, each image is decoded and a 64-pixel copy of it is made (see below), so nodes can draw it from their first frame. A loaded image is the `HTMLImageElement` itself, which the browser can free the decoded pixels of while it isn't drawn.
+
+An image that failed to load stays failed: the renderer doesn't request it again, even when nodes using it are added or changed. To retry it, call `loadImage()` with its source, which starts a new request for a failed image. For an image that is already loading or loaded, `loadImage()` does nothing and returns `false`.
+
+When a request finishes, the renderer emits an `imageload` or `imageerror` event (see [Renderer events](#renderer-events)). GraphJS uses them to draw images as they arrive, even while the loop is stopped.
+
+For speed, nodes don't draw the image itself but copies of it at the sizes they're drawn at, already cropped to a circle. Each copy is made off the main thread when a node first needs it, from the nearest larger copy if there is one, otherwise from the image. Sizes go from 16 to 1024 pixels; nodes drawn larger, or with a source that has more detail than the next size down, get a copy at the source's own size, up to 2048 pixels. Nodes smaller than about 6 pixels are drawn as a dot in the image's average colour. Until a node's size is ready, it's drawn from the nearest size already made. `gjs.requestRender()` keeps drawing until every size it asked for is ready, so images sharpen on their own even while the loop is stopped; with your own render loop, keep calling `render()` while `renderer.isPreparingImages()` is `true`. The copies are limited by the renderer's `imageCacheMB` option: the least recently drawn are discarded first, and those on screen are always kept. The 64-pixel copy made as an image loads (16 KB) is kept as long as the image, outside that limit.
 
 ### Node labels
 
@@ -685,7 +706,7 @@ Your own listeners can also run alongside built-in interaction, for input it doe
 
 ### Listening for events
 
-`GraphJS`, the graph and the simulation each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
+`GraphJS`, the graph, the simulation and the renderer each emit events. Listen with `on()` on the object that emits them, and stop with `off()`:
 
 ```js
 function onClick(e) {
@@ -703,7 +724,7 @@ Each object only takes its own event names: `gjs.on("settle", ...)` throws, beca
 Every event has `type`, its name, and `target`, the object that emitted it, along with any data listed for that event. Every event also has `preventDefault()` and `defaultPrevented`, but what preventing does depends on where the event comes from:
 
 - **Interaction events** are emitted before GraphJS responds to the user, so calling `preventDefault()` stops the response listed in the [interaction events](#interaction-events) table. The other listeners still run, and can read `defaultPrevented`.
-- **Layer events,** from the graph and the simulation, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as removing a node from a `nodeadd` listener, or calling `heat()` from a `settle` listener.
+- **Layer events,** from the graph, the simulation and the renderer, report changes that have already happened. Their defaults can't be prevented: `preventDefault()` has no effect on them, and `defaultPrevented` only records whether a listener called it. To reverse a change, make another one, such as removing a node from a `nodeadd` listener, or calling `heat()` from a `settle` listener.
 
 How listeners run is the same for every event:
 
@@ -807,6 +828,33 @@ gjs.simulation.on("wake", () => gjs.start());
 - **Every wake:** every change that wakes the layout, listed under [Settling](#settling), goes through `heat()`, so `wake` covers them all. It's emitted straight away, before the next tick. Heating a layout that's already moving doesn't emit it.
 - **From code too:** unlike interaction events, simulation events report changes however they're made, including by your own calls to `heat()`, `setOpts()` or `pin()`.
 - **A stopped loop:** if the loop is stopped, a change wakes the layout but nothing ticks it. That's what the `wake` listener above is for. While it's stopped, call `gjs.requestRender()` after a change you want to see; it also keeps tweens and highlight fades running until they finish (see [Starting and stopping](#starting-and-stopping)).
+
+### Renderer events
+
+The renderer emits these as node images finish loading (see [Node images](#node-images)). Listen on `gjs.renderer`.
+
+| Event | When | Data |
+|---|---|---|
+| `imageload` | a node image loads | `src`, `image` |
+| `imageerror` | a node image fails to load | `src` |
+
+- **`src`:** the image's source, its key in `gjs.renderer.images`.
+- **`image`:** the loaded `HTMLImageElement` (see [Node images](#node-images)).
+
+```js
+// Retry a failed image once, after a second
+const retried = new Set();
+gjs.renderer.on("imageerror", e => {
+  if (retried.has(e.src)) return;
+  retried.add(e.src);
+  setTimeout(() => gjs.renderer.loadImage(e.src), 1000);
+});
+```
+
+- **Up to date:** each event is emitted once the image's entry in `gjs.renderer.images` has its new status.
+- **Once per request:** each request emits one event when it finishes. Retrying a failed image with `loadImage()` makes a new request, which emits again. An image cleaned up before its request finishes emits nothing.
+- **Drawing:** GraphJS listens for both events itself and calls `gjs.requestRender()`, so images show as they arrive even while the loop is stopped. A `Renderer` used on its own doesn't redraw by itself; call `render()` from a listener.
+- **No defaults:** both report what has already happened, so their defaults can't be prevented.
 
 ## Drawing
 
@@ -1019,6 +1067,8 @@ function onSettle(e: SimEvent<"settle">) {
 gjs.simulation.on("settle", onSettle);
 ```
 
+Renderer events have `RendererEvent<K>` and `RendererListener<K>` in the same way.
+
 The graph and simulation layers can also be imported on their own, for layouts without a canvas. Their types, including their events, don't depend on the DOM, so they compile in a Node project without `"dom"` in `lib`:
 
 ```ts
@@ -1038,7 +1088,9 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 - **Hand-written drag, pan and zoom code can be replaced** with `interaction: true` (see [Built-in interaction](#built-in-interaction)). Existing code keeps working, as long as interaction stays off.
 - **Invalid options now throw instead of being clamped or accepted.** `new GraphJS()`, the layer constructors and every `setOpts()` check their options (see [Changing options](#changing-options)). Previously `Renderer` clamped some out-of-range values, such as a negative `minEdgeWidth` or a `highlightAlpha` above 1, and accepted others, such as an unknown `labelPosition`, while `Simulation` accepted anything. Values that were silently fixed before now throw a `RangeError`, and misspelled option names throw a `TypeError` instead of being ignored. To keep forgiving input, clamp values yourself before passing them in.
 - **A missing edge in `setEdgeConfig()` throws a `ReferenceError`,** in both the simulation and the renderer, as a missing node or edge already did in the graph. It was a plain `Error`; `catch` blocks that check `instanceof Error` still match. The graph's error messages now start with `Graph:`, like the other layers', so code that matched the old wording (`Cannot find …`) needs updating.
-- **`renderer.images` entries are objects with a status.** Each entry is `{ status, image }`, where `status` is `"loading"`, `"loaded"` or `"failed"` and `image` is the loaded image or `null` (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
+- **`renderer.images` entries are objects with a status.** Each entry is `{ status, image, crossOrigin, referrerPolicy }`, where `status` is `"loading"`, `"loaded"` or `"failed"`, `image` is the loaded image or `null`, and the last two are the options it was requested with (see [Node images](#node-images)). Entries used to be the strings `"loading"` and `"failed"` or the image itself, and `Renderer.IMAGE_LOADING` and `Renderer.IMAGE_FAILED` are removed: compare `entry.status` instead.
+- **Changing `crossOrigin` or `imageReferrerPolicy` requests cached images again.** Images whose options change are requested with the new ones, where they used to keep the options they were first loaded with. Both options can also be a function of the image source (see [Node images](#node-images)).
+- **`renderer.loadImage()` retries a failed image.** It starts a new request and returns `true`, where it used to return `false` and leave the image failed. The renderer still never retries failed images on its own (see [Node images](#node-images)).
 - **`renderer.pin()` and `renderer.unpin()` are removed.** Pinning changes the simulation, which the renderer only draws. Use `gjs.pin(id, x, y)` and `gjs.unpin(id)`, which take canvas coordinates like the removed methods, or `gjs.simulation.pin()` with simulation coordinates.
 - **`SIM_NODE_DEFAULTS` and `SIM_EDGE_DEFAULTS` are no longer exported** from `@tang0226/graph-js/simulation`. Read the defaults a simulation is using from `simulation.defaultNodeConfig` and `simulation.defaultEdgeConfig` instead, and change them with `setDefaultNodeConfig()` and `setDefaultEdgeConfig()`. Changing the exported objects changed defaults for every simulation at once, which was never supported.
 

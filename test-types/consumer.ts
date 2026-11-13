@@ -19,9 +19,10 @@ import type {
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
-  RendererOptsInput, RendererOpts, Size, View, ImageEntry,
+  RendererOptsInput, RendererOpts, Size, View, ImageEntry, ImageCrossOrigin,
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
+  RendererEventMap, RendererEventType, RendererEvent, RendererListener,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
   GraphJSPointerEventData, GraphJSNodeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
   InteractionOptsInput, InteractionOpts,
@@ -213,11 +214,30 @@ gjs.simulation._emit("settle", {});
 
 // Image entries carry a status, and the image once loaded
 const entry: Readonly<ImageEntry> | undefined = gjs.renderer.images.get("a.png");
-if (entry?.status === "loaded") { const el: HTMLImageElement | null = entry.image; }
+if (entry?.status === "loaded") { const im: HTMLImageElement | null = entry.image; }
+const drawable: CanvasImageSource | null = entry?.image ?? null;
+gjs.renderer.on("imageload", e => { const src: string = e.image.src; });
+const preparing: boolean = gjs.renderer.isPreparingImages();
 // @ts-expect-error -- not a status
 const badStatus: ImageEntry["status"] = "pending";
+// ...and the options it was requested with
+const entryCO: ImageCrossOrigin | undefined = entry?.crossOrigin;
+const entryRP: ReferrerPolicy | undefined = entry?.referrerPolicy;
 // @ts-expect-error -- the sentinel constants are gone
 Renderer.IMAGE_LOADING;
+
+// Image events live on the renderer
+gjs.renderer.on("imageload", e => { const s: string = e.src; const i: ImageBitmap | HTMLImageElement = e.image; const r: Renderer = e.target; });
+const onImageError = (e: RendererEvent<"imageerror">) => { const s: string = e.src; };
+const rendererListener: RendererListener<"imageload"> = e => { const k: RendererEventType = e.type; };
+gjs.renderer.on("imageerror", onImageError).on("imageload", rendererListener);
+const rendererEvents: RendererEventMap["imageerror"] = { src: "a.png" };
+// @ts-expect-error -- a failed image has no image
+gjs.renderer.on("imageerror", e => { e.image; });
+// @ts-expect-error -- renderer events aren't on the facade
+gjs.on("imageload", () => {});
+// @ts-expect-error -- emitting is internal to the renderer
+gjs.renderer._emit("imageload", { src: "a.png", image: new Image() });
 
 // Internal members are private, so consumers can't depend on them
 // @ts-expect-error -- private
@@ -313,5 +333,14 @@ new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });
 new GraphJS({ renderer: { imageReferrerPolicy: "no-referer" } });
 // @ts-expect-error -- not a crossOrigin value
 new GraphJS({ renderer: { crossOrigin: "anon" } });
+// ...or functions giving them per image source
+new GraphJS({ renderer: {
+  crossOrigin: src => (src.startsWith("https://cdn.") ? "anonymous" : null),
+  imageReferrerPolicy: () => "origin",
+} });
+// @ts-expect-error -- a function must return a crossOrigin value
+new GraphJS({ renderer: { crossOrigin: () => "anon" } });
+// @ts-expect-error -- and is given the source, a string
+new GraphJS({ renderer: { imageReferrerPolicy: (src: number) => "origin" } });
 
 export {};

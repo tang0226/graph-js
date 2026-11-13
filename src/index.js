@@ -55,12 +55,17 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/renderer.js").Size} Size */
 /** @typedef {import("./typedefs/renderer.js").View} View */
 /** @typedef {import("./typedefs/renderer.js").ImageEntry} ImageEntry */
+/** @typedef {import("./typedefs/renderer.js").ImageCrossOrigin} ImageCrossOrigin */
 /** @typedef {import("./typedefs/renderer.js").NodeStyle} NodeStyle */
 /** @typedef {import("./typedefs/renderer.js").EdgeStyle} EdgeStyle */
 /** @typedef {import("./typedefs/renderer.js").NodeStyleConfig} NodeStyleConfig */
 /** @typedef {import("./typedefs/renderer.js").EdgeStyleConfig} EdgeStyleConfig */
 /** @typedef {import("./typedefs/renderer.js").RendererHookType} RendererHookType */
 /** @typedef {import("./typedefs/renderer.js").RendererHook} RendererHook */
+/** @typedef {import("./typedefs/renderer.js").RendererEventMap} RendererEventMap */
+/** @typedef {import("./typedefs/renderer.js").RendererEventType} RendererEventType */
+/** @template {RendererEventType} [K=RendererEventType] @typedef {import("./typedefs/renderer.js").RendererEvent<K>} RendererEvent */
+/** @template {RendererEventType} [K=RendererEventType] @typedef {import("./typedefs/renderer.js").RendererListener<K>} RendererListener */
 
 // GRAPHJS LAYER
 /** @typedef {import("./typedefs/graphjs.js").GraphJSOpts} GraphJSOpts */

@@ -122,20 +122,59 @@ export function dispatchPointer(canvas, type, {
    `referrerPolicy` are read when `src` is assigned, because that is when a
    browser starts the request. Anything set afterwards doesn't affect it, so a
    test asserting on this list also catches options applied too late. */
-export function installImage({ fail = () => false, size = 64, width = size, height = size } = {}) {
+/* Also installs a fake createImageBitmap, unless `bitmap` is false (as in
+   Node, which lacks it). It returns a fake bitmap of the cropped, resized
+   region, recording the `image` it came from, the `crop` [sx, sy, sw, sh]
+   (null when called without one, as `createImageBitmap(image, opts)`) and
+   whether close() was called; `restore.sources` lists them in creation order.
+   `bitmapFails(src)` decides which sources it rejects, and `decodeFails(src)`
+   which ones `decode()` rejects. */
+export function installImage({
+  fail = () => false, size = 64, width = size, height = size,
+  bitmap = true, bitmapFails = () => false, decodeFails = () => false,
+} = {}) {
   const prev = globalThis.Image;
-  const requests = [];
+  const hadBitmap = "createImageBitmap" in globalThis, prevBitmap = globalThis.createImageBitmap;
+  const requests = [], sources = [];
   globalThis.Image = class {
-    constructor() { this.width = width; this.height = height; this.onload = null; this.onerror = null; }
+    constructor() {
+      this.width = this.naturalWidth = width;
+      this.height = this.naturalHeight = height;
+      this.onload = null; this.onerror = null;
+    }
     set src(v) {
       this._src = v;
       requests.push({ src: v, crossOrigin: this.crossOrigin, referrerPolicy: this.referrerPolicy });
       queueMicrotask(() => (fail(v) ? this.onerror?.() : this.onload?.()));
     }
     get src() { return this._src; }
+    decode() {
+      return decodeFails(this._src)
+        ? Promise.reject(new DOMException("The source image cannot be decoded.", "EncodingError"))
+        : Promise.resolve();
+    }
   };
-  const restore = () => { globalThis.Image = prev; };
+  if (bitmap) {
+    globalThis.createImageBitmap = async (image, ...args) => {
+      if (bitmapFails(image._src)) throw new DOMException("The source image could not be decoded.", "InvalidStateError");
+      const crop = args.length >= 4 ? args.slice(0, 4) : null;
+      const opts = crop ? args[4] : args[0];
+      const b = {
+        width: opts?.resizeWidth ?? crop?.[2] ?? image.width, height: opts?.resizeHeight ?? crop?.[3] ?? image.height,
+        image, crop, opts, closed: false,
+        close() { this.closed = true; this.width = this.height = 0; },
+      };
+      sources.push(b);
+      return b;
+    };
+  } else delete globalThis.createImageBitmap;
+  const restore = () => {
+    globalThis.Image = prev;
+    if (hadBitmap) globalThis.createImageBitmap = prevBitmap;
+    else delete globalThis.createImageBitmap;
+  };
   restore.requests = requests;
+  restore.sources = sources;
   return restore;
 }
 

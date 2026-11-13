@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { GraphJS } from "../src/graphjs.js";
 import * as pkg from "../src/index.js";
-import { makeCanvas, installWindow, installRaf, r2 } from "./helpers/stubs.js";
+import { makeCanvas, installWindow, installRaf, installImage, flush, r2 } from "./helpers/stubs.js";
 
 function build({ dpr = 1, directed = false, w = 800, h = 600 } = {}) {
   const restoreWindow = installWindow(dpr);
@@ -845,6 +845,18 @@ describe("GraphJS: requestRender", () => {
     } finally { cleanup(); }
   });
 
+  test("keeps drawing while node image sizes are being prepared, then stops", () => {
+    const { gjs, raf, renders, cleanup } = onDemand();
+    try {
+      let preparing = 3;
+      gjs.renderer.isPreparingImages = () => preparing-- > 0;
+      gjs.requestRender();
+      raf.flushFrame(10);
+      assert.equal(renders.length, 4, "one frame per check that found sizes in preparation, plus the last");
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); }
+  });
+
   test("does nothing while the loop runs, or without a canvas", () => {
     const { gjs, raf, cleanup } = onDemand();
     try {
@@ -875,6 +887,51 @@ describe("GraphJS: requestRender", () => {
       gjs.detach();
       assert.equal(raf.pending.size, 0);
     } finally { cleanup(); }
+  });
+
+  /* Gives nodes "a" and "b" the images `a.png` and `b.png`, and starts their
+     requests. */
+  function requestImages(gjs) {
+    gjs.renderer.setDefaultNodeConfig({ image: n => `${n.id}.png` });
+    gjs.renderer.sync();
+  }
+
+  test("images settling while the loop is stopped draw on one frame", async () => {
+    const restoreImage = installImage({ fail: src => src === "b.png" });
+    const { gjs, raf, renders, ticks, cleanup } = onDemand();
+    try {
+      requestImages(gjs);
+      assert.equal(raf.pending.size, 0, "nothing until a request settles");
+      await flush();
+      assert.equal(gjs.renderer.images.get("a.png")?.status, "loaded");
+      assert.equal(gjs.renderer.images.get("b.png")?.status, "failed");
+      assert.equal(raf.pending.size, 1, "a load and an error in one go queue one frame");
+      raf.flushFrame(1, { t0: 200 });
+      assert.deepEqual(renders, [200]);
+      assert.equal(ticks(), 0);
+      assert.equal(raf.pending.size, 0);
+    } finally { cleanup(); restoreImage(); }
+  });
+
+  test("a failed image alone also queues a frame", async () => {
+    const restoreImage = installImage({ fail: () => true });
+    const { gjs, raf, cleanup } = onDemand();
+    try {
+      requestImages(gjs);
+      await flush();
+      assert.equal(raf.pending.size, 1);
+    } finally { cleanup(); restoreImage(); }
+  });
+
+  test("images settling while the loop runs queue no extra frame", async () => {
+    const restoreImage = installImage();
+    const { gjs, raf, cleanup } = onDemand();
+    try {
+      gjs.start();
+      requestImages(gjs);
+      await flush();
+      assert.equal(raf.pending.size, 1, "only the loop's own frame");
+    } finally { cleanup(); restoreImage(); }
   });
 
   test("without requestAnimationFrame, draws straight away and advances tweens", () => {

@@ -1,6 +1,7 @@
 // RENDERER LAYER
 /** @import { Renderer } from '../renderer.js' */
 /** @import { NodeOption, EdgeOption } from './graph.js' */
+/** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
 /** @typedef {CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D} CanvasContext */
@@ -35,12 +36,14 @@
  * @property {number} [highlightFadeDuration] - milliseconds for an element to
  *    fade fully between opacity 0 and 1 when highlighting changes; 0 disables
  *    fading
- * @property {ReferrerPolicy} [imageReferrerPolicy] - default referrer policy
- *    for image requests.
- * @property {"anonymous" | "use-credentials" | null} [crossOrigin] - default
- *    cross-origin parameter for image requests.
+ * @property {ReferrerPolicy | ((src: string) => ReferrerPolicy)} [imageReferrerPolicy] -
+ *    referrer policy for image requests, or a function giving it per image
+ *    source
+ * @property {ImageCrossOrigin | ((src: string) => ImageCrossOrigin)} [crossOrigin] -
+ *    cross-origin setting for image requests, or a function giving it per
+ *    image source
  * @property {number} [imageCacheMB] - soft memory budget, in megabytes, for
- *    cached node image sizes; images on screen are always kept
+ *    the cached sizes of node images; sizes on screen are always kept
  */
 
 /** @typedef {Required<Omit<RendererOptsInput, "canvas" | "nodeConfig" | "edgeConfig">>} RendererOpts */
@@ -99,13 +102,23 @@
 
 
 /**
- * A node image in the renderer's cache: whether it has loaded, and the image
- * once it has
+ * An image request's `crossOrigin`. `null` sends no CORS request, so images
+ * from hosts without CORS headers load, but their pixels can't be read.
+ * @typedef {"anonymous" | "use-credentials" | null} ImageCrossOrigin
+ */
+
+/**
+ * A node image in the renderer's cache: whether it has loaded, the image once
+ * it has, and the options it was requested with
  * @typedef {object} ImageEntry
  * @property {"loading" | "loaded" | "failed"} status - `"loading"` until the
  *    request settles, then `"loaded"` or `"failed"`
  * @property {HTMLImageElement | null} image - the loaded image, or `null`
  *    while loading or after a failure
+ * @property {ImageCrossOrigin} crossOrigin - the `crossOrigin` it was
+ *    requested with
+ * @property {ReferrerPolicy} referrerPolicy - the `referrerPolicy` it was
+ *    requested with
  */
 
 /**
@@ -118,6 +131,37 @@
  * Function called by `render()` to draw on the canvas, in canvas coordinates
  * (CSS pixels). `time` is the frame timestamp passed to `render()`.
  * @typedef {(r: Renderer, time: number) => void} RendererHook
+ */
+
+// EVENTS
+
+/**
+ * Renderer event names, each mapped to the data its events carry on top of
+ * the fields every event has. Each is emitted once the image's entry in
+ * `images` is updated. These events report what happened, so calling
+ * `preventDefault()` on them has no effect.
+ * @typedef {object} RendererEventMap
+ * @property {{ src: string, image: HTMLImageElement }} imageload - a node
+ *    image loaded: `src` is its source, `image` the loaded image
+ * @property {{ src: string }} imageerror - a node image failed to load:
+ *    `src` is its source
+ */
+
+/**
+ * Name of a renderer event
+ * @typedef {keyof RendererEventMap} RendererEventType
+ */
+
+/**
+ * Event passed to renderer listeners
+ * @template {RendererEventType} [K=RendererEventType]
+ * @typedef {EmitterEvent<RendererEventMap, K, Renderer>} RendererEvent
+ */
+
+/**
+ * Function called with each renderer event of the type it was added for
+ * @template {RendererEventType} [K=RendererEventType]
+ * @typedef {EmitterListener<RendererEventMap, K, Renderer>} RendererListener
  */
 
 export {};

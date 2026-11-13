@@ -13,7 +13,8 @@
  *  NodeStyleConfig, EdgeStyleConfig,
  *  RendererOpts, RendererOptsInput, HighlightMode,
  *  RendererHookType, RendererHook,
- *  Canvas, CanvasContext, Size, View, ImageEntry,
+ *  RendererEventMap, RendererEventType,
+ *  Canvas, CanvasContext, Size, View, ImageEntry, ImageCrossOrigin,
  * } from './typedefs/renderer.js'
  */
 
@@ -21,11 +22,22 @@
 import { Simulation } from "./simulation.js";
 import { circleRectCollision, keysOf, now } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
-import { ImageCache, pickSpriteSize } from "./image-cache.js";
+import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
 import { HookRegistry } from "./hook-registry.js";
+import { Emitter } from "./emitter.js";
+
+
+/**
+ * Every renderer event name. The type requires exactly the keys of
+ * `RendererEventMap`, so adding an event there without adding it here fails
+ * type checking.
+ * @type {Record<RendererEventType, true>}
+ */
+const RENDERER_EVENT_NAMES = { imageload: true, imageerror: true };
+const RENDERER_EVENT_TYPES = keysOf(RENDERER_EVENT_NAMES);
 
 
 /**
@@ -44,6 +56,25 @@ const REFERRER_POLICIES = [
   "", "no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin",
   "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url",
 ];
+
+/** Every `ImageCrossOrigin` value, for `crossOrigin` */
+const CROSS_ORIGINS = ["anonymous", "use-credentials", null];
+
+/**
+ * Throws unless an image request option is one of `values`, or a function
+ * giving it per image source. What such a function returns is checked when
+ * it's called, in `_imageRequestOpts()`.
+ * @param {string} name - option name
+ * @param {unknown} value - value to check
+ * @param {readonly unknown[]} values - allowed values
+ * @returns {void}
+ * @throws {RangeError} throws if the value is neither
+ */
+const checkImageRequestOpt = (name, value, values) => {
+  if (typeof value === "function") return;
+  try { checkOneOf("Renderer", name, value, values); }
+  catch (err) { throw new RangeError(`${/** @type {Error} */ (err).message}, or a function of the image source`); }
+};
 
 /**
  * A check per renderer option
@@ -64,8 +95,8 @@ const OPTION_RULES = {
   highlightMode:         v => checkOneOf("Renderer", "highlightMode", v, ["dim", "hide"]),
   highlightAlpha:        v => checkNumber("Renderer", "highlightAlpha", v, { min: 0, max: 1 }),
   highlightFadeDuration: v => checkNumber("Renderer", "highlightFadeDuration", v, { min: 0 }),
-  imageReferrerPolicy:   v => checkOneOf("Renderer", "imageReferrerPolicy", v, REFERRER_POLICIES),
-  crossOrigin:           v => checkOneOf("Renderer", "crossOrigin", v, ["anonymous", "use-credentials", null]),
+  imageReferrerPolicy:   v => checkImageRequestOpt("imageReferrerPolicy", v, REFERRER_POLICIES),
+  crossOrigin:           v => checkImageRequestOpt("crossOrigin", v, CROSS_ORIGINS),
   imageCacheMB:          v => checkNumber("Renderer", "imageCacheMB", v, { min: 0, allowInfinity: true }),
 };
 
@@ -92,8 +123,10 @@ const IMAGE_DOT_THRESHOLD = 6;
 
 /**
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
+ * Emits the events in `RendererEventMap`, through `on()` and `off()`.
+ * @extends {Emitter<RendererEventMap, Renderer>}
  */
-export class Renderer {
+export class Renderer extends Emitter {
   /** @private @type {Graph} */
   _graph;
   /**
@@ -303,11 +336,15 @@ export class Renderer {
 
 
   /**
-   * Node images and their cached sprites
+   * Node images and their cached sprites. Settled requests are emitted as
+   * `imageload` and `imageerror` events.
    * @type {ImageCache}
    * @private
    */
-  _imageCache = new ImageCache();
+  _imageCache = new ImageCache((src, entry) => {
+    if (entry.image) this._emit("imageload", { src, image: entry.image });
+    else this._emit("imageerror", { src });
+  });
   /**
    * [read-only] Node images, keyed by source: each entry's load `status`,
    * and the `image` once it has loaded
@@ -317,9 +354,10 @@ export class Renderer {
 
 
   /**
-   * Counter of deleted nodes with images. Controls periodic image garbage-
-   * collection (`_garbageCollectImages()`). GC happens when it reaches 16, at
-   * which point it is reset to 0.
+   * Counter of image sources that may have gone unused: one per deleted node
+   * with an image, and one per node whose image changed. Controls periodic
+   * image garbage-collection (`_garbageCollectImages()`). GC happens when it
+   * exceeds 16, at which point it is reset to 0.
    * @type {number}
    * @private
    */
@@ -372,6 +410,7 @@ export class Renderer {
    * @param {RendererOptsInput} [opts={}] - renderer options
    */
   constructor(simulation, opts = {}) {
+    super(RENDERER_EVENT_TYPES, "Renderer");
     this._simulation = simulation;
     this._graph = simulation.graph;
     this.setOpts(opts);
@@ -399,6 +438,8 @@ export class Renderer {
       this._labelWidthCache.clear();
       this._labelsDirty = true;
     }
+    // Images requested with other options are requested again
+    if (opts.crossOrigin !== undefined || opts.imageReferrerPolicy !== undefined) this._refetchStaleImages();
     // Mode and alpha set the dimmed target, so ease toward the new value
     if (opts.highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
@@ -674,6 +715,15 @@ export class Renderer {
 
 
   /**
+   * Whether node image sizes are being prepared. Until they're ready, nodes
+   * draw a nearby size or the original image. Loops that only render on
+   * demand should keep calling `render()` while this is `true`.
+   * @returns {boolean} whether node image sizes are being prepared
+   */
+  isPreparingImages() { return this._imageCache.busy; }
+
+
+  /**
    * Seeds a node's style config based on its underlying `Graph` node.
    * @param {GraphNode} gNode - graph node to seed the node style from
    * @returns {NodeStyle} seeded node style
@@ -706,21 +756,62 @@ export class Renderer {
    * Starts loading an image into the cache, keyed by its source. Its entry in
    * `images` has the status "loading" until the request settles, then
    * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
-   * `imageReferrerPolicy`. A source that is already cached is not requested again.
+   * `imageReferrerPolicy` for `src`. A source that is loading or loaded with
+   * those options is not requested again; one that failed is. Failed images
+   * are only retried by calling this: the renderer itself never requests them
+   * again. When the request settles, an `imageload` or `imageerror` event is
+   * emitted.
    * @param {string} src - image source; also the cache key
-   * @returns {boolean} `true` if a request was started, `false` if `src` was already cached
+   * @returns {boolean} `true` if a request was started, `false` if `src` is
+   *    already loading or loaded with the current options
    */
   loadImage(src) {
-    return this._imageCache.load(src, this._opts.crossOrigin, this._opts.imageReferrerPolicy);
+    return this._imageCache.load(src, ...this._imageRequestOpts(src), true);
   }
 
 
   /**
-   * Find and delete images that are no longer used by any nodes.
+   * Resolves the `crossOrigin` and `imageReferrerPolicy` options for an image
+   * source. A function option that returns an invalid value falls back to the
+   * option's default, as config functions do.
+   * @param {string} src - image source
+   * @returns {[ImageCrossOrigin, ReferrerPolicy]} the request's options
+   * @private
+   */
+  _imageRequestOpts(src) {
+    const { crossOrigin, imageReferrerPolicy } = this._opts;
+    let co = typeof crossOrigin === "function" ? crossOrigin(src) : crossOrigin;
+    let rp = typeof imageReferrerPolicy === "function" ? imageReferrerPolicy(src) : imageReferrerPolicy;
+    // The defaults are plain values, not functions
+    if (!CROSS_ORIGINS.includes(co)) co = /** @type {ImageCrossOrigin} */ (RENDERER_DEFAULTS.crossOrigin);
+    if (!REFERRER_POLICIES.includes(rp)) rp = /** @type {ReferrerPolicy} */ (RENDERER_DEFAULTS.imageReferrerPolicy);
+    return [co, rp];
+  }
+
+
+  /**
+   * Requests every cached image again whose options no longer match the
+   * renderer's, failed ones included. The rest are left as they are.
+   * @returns {void}
+   * @private
+   */
+  _refetchStaleImages() {
+    for (const src of [...this._imageCache.images.keys()]) {
+      const [co, rp] = this._imageRequestOpts(src);
+      this._imageCache.load(src, co, rp);
+    }
+  }
+
+
+  /**
+   * Find and delete images that are no longer used by any nodes, once
+   * `_imageDebt` exceeds 16.
    * @returns {void}
    * @private
    */
   _garbageCollectImages() {
+    if (this._imageDebt <= 16) return;
+    this._imageDebt = 0;
     /** @type {Set<string>} */
     const live = new Set();
     for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
@@ -799,13 +890,19 @@ export class Renderer {
     // Update node styles and seed new ones
     for (const [id, gNode] of this._graph.nodes) {
       let rNode = this._nodes.get(id);
-      if (rNode) this._resolveNode(gNode, rNode);
-      else {
+      if (rNode) {
+        const prevImage = rNode.image;
+        this._resolveNode(gNode, rNode);
+        if (prevImage && rNode.image !== prevImage) this._imageDebt++;
+      } else {
         rNode = this._seedNode(gNode);
         this._nodes.set(id, rNode);
       }
-      // Load node image into cache
-      if (rNode.image) this.loadImage(rNode.image);
+      // Load node image into cache. Failed images aren't retried here, or a
+      // broken source would be requested again on every graph change.
+      if (rNode.image) {
+        this._imageCache.load(rNode.image, ...this._imageRequestOpts(rNode.image));
+      }
     }
 
     // Update edge styles and seed new ones
@@ -819,7 +916,10 @@ export class Renderer {
     this._edgeConfig.markClean();
     this._labelsDirty = true;
 
-    if (this._syncedSimulation === this._simulation.version) return true;
+    if (this._syncedSimulation === this._simulation.version) {
+      this._garbageCollectImages();
+      return true;
+    }
 
     /* Alphas are about to be re-slotted. While a highlight is shown or a fade
        is running, carry each surviving element's alpha across by its style
@@ -837,7 +937,7 @@ export class Renderer {
         hl.forgetNode(id);
       }
     }
-    if (this._imageDebt > 16) { this._garbageCollectImages(); this._imageDebt = 0; }
+    this._garbageCollectImages();
 
     // Delete old edge styles
     for (const gEdge of this._edges.keys()) {
@@ -1046,26 +1146,22 @@ export class Renderer {
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
     const src = nodeStyle.image;
     const img = src ? this._imageCache.loaded(src) : null;
-    if (src && img) {
+    const side = img ? Math.min(img.naturalWidth, img.naturalHeight) : 0;
+    if (src && img && side) {
       const needed = 2 * r * this._dpr;     // on-screen diameter, device px
       if (needed < IMAGE_DOT_THRESHOLD) {
         // Too small to show detail: a dot in the image's average colour
-        this._ctx.fillStyle = this._imageCache.average(src, img) ?? nodeStyle.color;
+        this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
         this._ctx.fill();
       } else {
-        const side = Math.min(img.width, img.height);
-        const size = pickSpriteSize(needed, side);
-        // A sprite smaller than the node is stretched, which blurs it. When the
-        // source has more detail than that sprite (past the largest sprite
-        // size, or between two sizes), draw the source instead.
-        const sprite = size < needed && size < side ? null : this._imageCache.sprite(src, img, size);
+        const sprite = this._imageCache.sprite(src, needed);
         if (sprite) {
           this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
         } else {
-          // Drawing the source: no sprite is sharp enough, none is available
-          // (no canvas support), or this frame's build limit was reached
-          const scale = r * 2 / Math.min(img.width, img.height);
-          const dw = img.width * scale, dh = img.height * scale;
+          // No sprite yet (the first is being prepared, or sprites can't be
+          // made here): the image itself, clipped to the node
+          const scale = r * 2 / side;
+          const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
           this._ctx.save();
           this._ctx.clip();
           this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
