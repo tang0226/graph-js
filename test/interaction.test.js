@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { GraphJS } from "../src/graphjs.js";
 import { makeCanvas, installWindow, installRaf, dispatchPointer, r2 } from "./helpers/stubs.js";
 
-// Every event but nodepress, which would start most logs; its tests listen to it
+// Every event but nodepress and edgepress, which would start most logs; their
+// tests listen to them
 const EVENTS = [
   "nodeenter", "nodeleave", "nodeclick", "nodedblclick",
+  "edgeenter", "edgeleave", "edgeclick", "edgedblclick",
   "nodedragstart", "nodedrag", "nodedragend", "backgroundclick",
   "panstart", "pan", "panend", "zoom",
 ];
@@ -47,10 +49,13 @@ function place(gjs, id, x, y) {
 
 const types = log => log.map(e => e.type);
 // Event types without hover, for tests that press without moving there first
-const acts = log => types(log).filter(t => t !== "nodeenter" && t !== "nodeleave");
+const HOVER = new Set(["nodeenter", "nodeleave", "edgeenter", "edgeleave"]);
+const acts = log => types(log).filter(t => !HOVER.has(t));
 const pos = (gjs, id) => gjs.simulation.getPosition(id).map(r2);
 const fixed = (gjs, id) => { gjs.simulation.sync(); return gjs.simulation.nodes.get(id).fixed; };
 const view = gjs => ({ ...gjs.renderer.view });
+// Each event's type and its node's id, or its edge as "src-dest"
+const edgeLog = log => log.map(e => [e.type, e.id ?? (e.edge && `${e.srcId}-${e.destId}`)]);
 
 describe("Interaction: enabling", () => {
   test("interaction is off by default: no listeners, no events", () => {
@@ -455,7 +460,7 @@ describe("Interaction: dragging nodes", () => {
       ptr.down(400, 300); ptr.move(450, 300); ptr.move(460, 300); ptr.up(460, 300);
       assert.deepEqual(pos(gjs, "a"), [0, 0]);
       assert.equal(fixed(gjs, "a"), false);
-      assert.deepEqual(types(log), ["nodedragstart"], "and it isn't a click either");
+      assert.deepEqual(acts(log), ["nodedragstart"], "and it isn't a click either");
     } finally { restoreWindow(); }
   });
 
@@ -749,6 +754,225 @@ describe("Interaction: removed nodes", () => {
       gjs.removeNode("b");
       assert.deepEqual(log, []);
       assert.equal(gjs.graph._hasListeners("noderemove"), false);
+    } finally { restoreWindow(); }
+  });
+});
+
+// The edge a-b runs along canvas y = 300, between the nodes at x = 400 and 600
+describe("Interaction: edges", () => {
+  test("a press and release on an edge is an edgeclick, not a backgroundclick", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.down(500, 300);
+      const up = ptr.up(500, 300);
+      assert.deepEqual(acts(log), ["edgeclick"]);
+      const [e] = log;
+      assert.equal(e.edge, gjs.graph.getEdge("a", "b"));
+      assert.deepEqual([e.srcId, e.destId], ["a", "b"]);
+      assert.deepEqual([e.x, e.y], [500, 300]);
+      assert.equal(e.originalEvent, up);
+      assert.equal(e.target, gjs);
+      assert.equal("id" in e, false);
+    } finally { restoreWindow(); }
+  });
+
+  test("pressing an edge emits edgepress straight away, and the press goes on as on the background", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("edgepress", e => log.push(e));
+      const down = ptr.down(500, 300);
+      assert.deepEqual(types(log), ["edgepress"], "emitted on press, not release");
+      const [e] = log;
+      assert.equal(e.edge, gjs.graph.getEdge("a", "b"));
+      assert.deepEqual([e.srcId, e.destId, e.x, e.y], ["a", "b", 500, 300]);
+      assert.equal(e.originalEvent, down);
+      ptr.move(550, 300); ptr.up(550, 300);
+      assert.deepEqual(acts(log), ["edgepress", "panstart", "pan", "panend"], "dragging an edge pans, and isn't a click");
+    } finally { restoreWindow(); }
+  });
+
+  test("preventing edge events changes nothing", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      for (const type of ["edgepress", "edgeenter", "edgeleave", "edgeclick", "edgedblclick"]) {
+        gjs.on(type, e => e.preventDefault());
+      }
+      ptr.move(500, 300);
+      ptr.down(500, 300); ptr.up(500, 300);
+      ptr.down(500, 300); ptr.move(550, 300); ptr.up(550, 300);
+      ptr.dblclick(500, 300);
+      ptr.move(100, 100);
+      assert.deepEqual(types(log), [
+        "edgeenter", "edgeclick", "panstart", "pan", "panend", "edgedblclick", "edgeleave",
+      ]);
+      assert.notDeepEqual(view(gjs), { x: 0, y: 0, zoom: 1 }, "the view still panned");
+    } finally { restoreWindow(); }
+  });
+
+  test("an edgepress listener that turns interaction off stops the press cleanly", () => {
+    const { gjs, canvas, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.on("edgepress", e => e.target.disableInteraction());
+      const before = view(gjs);
+      assert.doesNotThrow(() => { ptr.down(500, 300); ptr.move(550, 300); ptr.up(550, 300); });
+      assert.deepEqual(log, []);
+      assert.deepEqual(view(gjs), before);
+      assert.equal(canvas.captured.size, 0);
+    } finally { restoreWindow(); }
+  });
+
+  test("nodes win over edges under the pointer", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      let edgePresses = 0;
+      gjs.on("edgepress", () => { edgePresses++; });
+      ptr.move(400, 300);
+      ptr.down(400, 300); ptr.up(400, 300);
+      ptr.dblclick(400, 300);
+      assert.deepEqual(types(log), ["nodeenter", "nodeclick", "nodedblclick"]);
+      assert.equal(edgePresses, 0);
+    } finally { restoreWindow(); }
+  });
+
+  test("a double-click on an edge is an edgedblclick", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      const dbl = ptr.dblclick(500, 300);
+      assert.deepEqual(edgeLog(log), [["edgedblclick", "a-b"]]);
+      assert.equal(log[0].edge, gjs.graph.getEdge("a", "b"));
+      assert.equal(log[0].originalEvent, dbl);
+    } finally { restoreWindow(); }
+  });
+
+  test("moving onto and off edges emits edgeenter and edgeleave, between node hovers", () => {
+    const { log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(100, 100);
+      ptr.move(500, 300);
+      ptr.move(510, 300);
+      ptr.move(400, 300);
+      ptr.move(500, 300);
+      ptr.move(500, 340);
+      assert.deepEqual(edgeLog(log), [
+        ["edgeenter", "a-b"], ["edgeleave", "a-b"], ["nodeenter", "a"],
+        ["nodeleave", "a"], ["edgeenter", "a-b"], ["edgeleave", "a-b"],
+      ]);
+      assert.deepEqual([log[1].x, log[1].y], [400, 300], "leave events report the pointer that left");
+    } finally { restoreWindow(); }
+  });
+
+  test("leaving the canvas leaves the hovered edge", () => {
+    const { log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(500, 300);
+      ptr.leave(500, -5);
+      assert.deepEqual(edgeLog(log), [["edgeenter", "a-b"], ["edgeleave", "a-b"]]);
+    } finally { restoreWindow(); }
+  });
+
+  test("edge hover is held during a press, and updated on release", () => {
+    // Without panning, so b stays under the release
+    const { log, ptr, restoreWindow } = setup({ pan: false });
+    try {
+      ptr.move(500, 300);
+      ptr.down(500, 300);
+      ptr.move(600, 300);
+      ptr.leave(900, 300);
+      assert.deepEqual(types(log), ["edgeenter"]);
+      ptr.up(600, 300);
+      assert.deepEqual(edgeLog(log).slice(-2), [["edgeleave", "a-b"], ["nodeenter", "b"]]);
+    } finally { restoreWindow(); }
+  });
+
+  test("with renderEdges off, edges aren't found", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.renderer.setOpts({ renderEdges: false });
+      ptr.move(500, 300);
+      ptr.down(500, 300); ptr.up(500, 300);
+      ptr.dblclick(500, 300);
+      assert.deepEqual(types(log), ["backgroundclick"]);
+    } finally { restoreWindow(); }
+  });
+});
+
+describe("Interaction: removed edges", () => {
+  test("removing the hovered edge emits edgeleave straight away, at the latest pointer position", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      const over = ptr.move(500, 300);
+      const edge = gjs.graph.getEdge("a", "b");
+      log.length = 0;
+      gjs.removeEdge("a", "b");
+      assert.deepEqual(log.map(e => [e.type, e.srcId, e.destId, e.x, e.y]), [["edgeleave", "a", "b", 500, 300]]);
+      assert.equal(log[0].edge, edge);
+      assert.equal(log[0].originalEvent, over);
+      ptr.move(501, 300);
+      assert.equal(log.length, 1, "no second edgeleave on the next move");
+    } finally { restoreWindow(); }
+  });
+
+  test("removing a node leaves its hovered edge", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(500, 300);
+      log.length = 0;
+      gjs.removeNode("a");
+      assert.deepEqual(edgeLog(log), [["edgeleave", "a-b"]]);
+    } finally { restoreWindow(); }
+  });
+
+  test("removing a pressed edge before the press is dragged cancels the press", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      const before = view(gjs);
+      ptr.down(500, 300);
+      gjs.removeEdge("a", "b");
+      ptr.up(500, 300);
+      assert.deepEqual(acts(log), [], "no click");
+      gjs.addEdge("a", "b");
+      ptr.down(500, 300);
+      gjs.removeEdge("a", "b");
+      ptr.move(550, 300); ptr.up(550, 300);
+      assert.deepEqual(acts(log), [], "no pan");
+      assert.deepEqual(view(gjs), before);
+    } finally { restoreWindow(); }
+  });
+
+  test("removing a pressed edge mid-pan lets the pan go on", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.down(500, 300); ptr.move(550, 300);
+      gjs.removeEdge("a", "b");
+      ptr.move(560, 300); ptr.up(560, 300);
+      assert.deepEqual(acts(log), ["panstart", "pan", "pan", "panend"]);
+    } finally { restoreWindow(); }
+  });
+
+  test("removing an unrelated edge changes nothing", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      gjs.addNode({ id: "c" });
+      gjs.addEdge("b", "c");
+      ptr.move(500, 300);
+      ptr.down(500, 300);
+      log.length = 0;
+      gjs.removeEdge("b", "c");
+      assert.deepEqual(log, []);
+      ptr.up(500, 300);
+      assert.deepEqual(acts(log), ["edgeclick"]);
+    } finally { restoreWindow(); }
+  });
+
+  test("turning interaction off stops listening for removed edges", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      ptr.move(500, 300);
+      gjs.disableInteraction();
+      log.length = 0;
+      gjs.removeEdge("a", "b");
+      assert.deepEqual(log, []);
+      assert.equal(gjs.graph._hasListeners("edgeremove"), false);
     } finally { restoreWindow(); }
   });
 });

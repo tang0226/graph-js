@@ -73,6 +73,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/graphjs.js").GraphJSHook} GraphJSHook */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSPointerEventData} GraphJSPointerEventData */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSNodeEventData} GraphJSNodeEventData */
+/** @typedef {import("./typedefs/graphjs.js").GraphJSEdgeEventData} GraphJSEdgeEventData */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSMoveEventData} GraphJSMoveEventData */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSViewEventData} GraphJSViewEventData */
 /** @typedef {import("./typedefs/graphjs.js").GraphJSEventMap} GraphJSEventMap */

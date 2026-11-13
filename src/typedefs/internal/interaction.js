@@ -1,7 +1,7 @@
 // INTERNAL INTERACTION TYPES
 // Not exported from the package root, so they may change between versions.
 /** @import { GraphJSEventMap, GraphJSEventType } from '../graphjs.js' */
-/** @import { NodeId } from '../graph.js' */
+/** @import { NodeId, GraphEdge } from '../graph.js' */
 
 /**
  * Function GraphJS hands to `Interaction` to emit its events with. Returns
@@ -13,7 +13,10 @@
  * State of the pointer press being tracked
  * @typedef {object} InteractionPress
  * @property {number} pointerId - id of the pressed pointer
- * @property {NodeId | null} id - node pressed, or `null` for the background
+ * @property {NodeId | null} id - node pressed, or `null` for an edge or the
+ *    background
+ * @property {GraphEdge | null} edge - edge pressed, or `null` for a node or
+ *    the background
  * @property {number} startX - canvas x coordinate of the press
  * @property {number} startY - canvas y coordinate of the press
  * @property {number} lastX - canvas x coordinate of the previous move

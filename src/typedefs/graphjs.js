@@ -1,6 +1,6 @@
 // GRAPHJS LAYER
 /** @import { GraphJS } from '../graphjs.js' */
-/** @import { GraphOpts, NodeId } from './graph.js' */
+/** @import { GraphOpts, NodeId, GraphEdge } from './graph.js' */
 /** @import { SimOptsInput } from './simulation.js' */
 /** @import { RendererOptsInput, Canvas, View } from './renderer.js' */
 /** @import { TweenUnit } from './tween.js' */
@@ -53,6 +53,15 @@
  */
 
 /**
+ * Event data of the edge an event is about. `srcId` and `destId` are the ids
+ * the edge is stored with, as in the graph's edge events.
+ * @typedef {object} GraphJSEdgeEventData
+ * @property {NodeId} srcId - id of the edge's source node
+ * @property {NodeId} destId - id of the edge's destination node
+ * @property {GraphEdge} edge - the edge
+ */
+
+/**
  * Event data of movement during a drag
  * @typedef {object} GraphJSMoveEventData
  * @property {number} dx - the pointer's x movement in canvas px since the
@@ -72,7 +81,10 @@
  * Event names, each mapped to the data its events carry on top of the fields
  * every event has (see `GraphJSEvent`). Events are emitted before GraphJS
  * responds to them, so where `view` is "the view it moves to", calling
- * `preventDefault()` keeps the current one.
+ * `preventDefault()` keeps the current one. GraphJS has no response of its
+ * own to edge events, so calling `preventDefault()` on them has no effect.
+ * Nodes are drawn over edges, so the pointer is only on an edge where it
+ * isn't on a node.
  * @typedef {object} GraphJSEventMap
  * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodeenter - the
  *    pointer moved onto a node
@@ -92,8 +104,19 @@
  *    - a dragged node moved
  * @property {GraphJSPointerEventData & GraphJSNodeEventData} nodedragend - a
  *    node stopped being dragged
+ * @property {GraphJSPointerEventData & GraphJSEdgeEventData} edgeenter - the
+ *    pointer moved onto an edge
+ * @property {GraphJSPointerEventData & GraphJSEdgeEventData} edgeleave - the
+ *    pointer moved off an edge
+ * @property {GraphJSPointerEventData & GraphJSEdgeEventData} edgepress - the
+ *    pointer was pressed on an edge. The press goes on as if on the
+ *    background, so dragging it pans.
+ * @property {GraphJSPointerEventData & GraphJSEdgeEventData} edgeclick - an
+ *    edge was clicked
+ * @property {GraphJSPointerEventData & GraphJSEdgeEventData} edgedblclick - an
+ *    edge was double-clicked
  * @property {GraphJSPointerEventData} backgroundclick - the canvas was clicked
- *    away from any node
+ *    away from any node or edge
  * @property {GraphJSPointerEventData & GraphJSViewEventData} panstart - the
  *    background started being dragged; `view` is the current view
  * @property {GraphJSPointerEventData & GraphJSViewEventData & GraphJSMoveEventData} pan

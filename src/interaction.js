@@ -1,5 +1,5 @@
 /** @import { GraphJS } from './graphjs.js' */
-/** @import { NodeId, GraphEvent } from './typedefs/graph.js' */
+/** @import { NodeId, GraphEdge, GraphEvent } from './typedefs/graph.js' */
 /** @import { Canvas } from './typedefs/renderer.js' */
 /** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 /** @import { InteractionEmit, InteractionPress } from './typedefs/internal/interaction.js' */
@@ -17,8 +17,9 @@ const OPTION_NAMES = new Set(Object.keys(INTERACTION_DEFAULTS));
  * Built-in pointer interaction for a `GraphJS` instance: turns DOM pointer and
  * wheel events on its canvas into GraphJS events, then applies the built-in
  * response to each (dragging nodes, panning, zooming) unless a listener calls
- * `preventDefault()`. Owned by `GraphJS`, which binds it to the canvas on
- * attach and unbinds it on detach.
+ * `preventDefault()`. Edge events have no built-in response: a press on an
+ * edge goes on as a press on the background. Owned by `GraphJS`, which binds
+ * it to the canvas on attach and unbinds it on detach.
  */
 export class Interaction {
   /** @private @type {GraphJS} */
@@ -64,7 +65,15 @@ export class Interaction {
    * @type {NodeId | null}
    * @private
    */
-  _hovered = null;
+  _hoveredNode = null;
+
+  /**
+   * Edge under the pointer, or `null`. Only set while no node is hovered,
+   * since nodes are drawn over edges. Frozen while a press is held.
+   * @type {GraphEdge | null}
+   * @private
+   */
+  _hoveredEdge = null;
 
 
   /**
@@ -84,6 +93,15 @@ export class Interaction {
    * @private
    */
   _onGraphNodeRemove = e => this._nodeRemoved(e.id);
+
+
+  /**
+   * Graph listener that ends a press or hover on an edge when it's removed.
+   * Kept as a field so `unbind()` can remove it.
+   * @type {(e: GraphEvent<"edgeremove">) => void}
+   * @private
+   */
+  _onGraphEdgeRemove = e => this._edgeRemoved(e.edge);
 
 
   /**
@@ -157,6 +175,7 @@ export class Interaction {
     el.addEventListener("wheel", e => this._onWheel(e), { signal, passive: false });
 
     this._gjs.graph.on("noderemove", this._onGraphNodeRemove);
+    this._gjs.graph.on("edgeremove", this._onGraphEdgeRemove);
 
     // Stops touch drags from scrolling the page instead
     if (el.style) {
@@ -169,7 +188,8 @@ export class Interaction {
 
   /**
    * Removes the DOM listeners, if bound. Ends a press without emitting
-   * events, unpinning a node it was dragging, and forgets the hovered node.
+   * events, unpinning a node it was dragging, and forgets the hovered node or
+   * edge.
    * @returns {this} self reference
    */
   unbind() {
@@ -179,10 +199,12 @@ export class Interaction {
     this._abort = null;
     this._canvas = null;
     this._gjs.graph.off("noderemove", this._onGraphNodeRemove);
+    this._gjs.graph.off("edgeremove", this._onGraphEdgeRemove);
     if (el.style) el.style.touchAction = this._prevTouchAction;
     if (this._press?.unpin) this._gjs.simulation.unpin(this._press.id);
     this._press = null;
-    this._hovered = null;
+    this._hoveredNode = null;
+    this._hoveredEdge = null;
     this._last = null;
     return this;
   }
@@ -202,8 +224,34 @@ export class Interaction {
 
 
   /**
+   * Finds what's under a canvas point: a node, else an edge, since nodes are
+   * drawn over edges.
+   * @param {number} x - canvas x coordinate
+   * @param {number} y - canvas y coordinate
+   * @returns {{ id: NodeId | null, edge: GraphEdge | null }} the node's id,
+   *    or the edge, or neither
+   * @private
+   */
+  _pick(x, y) {
+    const id = this._gjs.nodeAt(x, y);
+    return { id, edge: id === null ? this._gjs.edgeAt(x, y) : null };
+  }
+
+
+  /**
+   * Edge event data for an edge
+   * @param {GraphEdge} edge - the edge
+   * @returns {{ srcId: NodeId, destId: NodeId, edge: GraphEdge }} the data
+   * @private
+   */
+  _edgeData(edge) {
+    return { srcId: edge.src.id, destId: edge.dest.id, edge };
+  }
+
+
+  /**
    * Starts tracking a press of the primary pointer's main button, after
-   * emitting `nodepress` for a press on a node.
+   * emitting `nodepress` or `edgepress` for a press on a node or edge.
    * @param {PointerEvent} e - DOM event
    * @returns {void}
    * @private
@@ -213,11 +261,16 @@ export class Interaction {
     if (!el || this._press || !e.isPrimary || e.button !== 0) return;
     const [x, y] = this._toCanvas(e, el);
     this._last = { x, y, event: e };
-    const id = this._gjs.nodeAt(x, y);
+    const { id, edge } = this._pick(x, y);
     // Preventing nodepress ignores the press; a listener may also have unbound
     if (id !== null && (this._emit("nodepress", { x, y, id, originalEvent: e }) || this._canvas !== el)) return;
+    // edgepress has nothing to prevent, but a listener may have unbound
+    if (edge !== null) {
+      this._emit("edgepress", { x, y, ...this._edgeData(edge), originalEvent: e });
+      if (this._canvas !== el) return;
+    }
     this._press = {
-      pointerId: e.pointerId, id,
+      pointerId: e.pointerId, id, edge,
       startX: x, startY: y, lastX: x, lastY: y,
       drag: null, grabX: 0, grabY: 0, unpin: false,
     };
@@ -352,6 +405,7 @@ export class Interaction {
       this._emit("panend", { x, y, view: { ...gjs.view }, originalEvent: e });
     } else if (press.drag === null && click) {
       if (press.id !== null) this._emit("nodeclick", { x, y, id: press.id, originalEvent: e });
+      else if (press.edge !== null) this._emit("edgeclick", { x, y, ...this._edgeData(press.edge), originalEvent: e });
       else this._emit("backgroundclick", { x, y, originalEvent: e });
     }
 
@@ -363,8 +417,8 @@ export class Interaction {
 
 
   /**
-   * Emits `nodeleave` and `nodeenter` when the node under the pointer
-   * changes.
+   * When the node or edge under the pointer changes, emits the leave event of
+   * the one it was on, then the enter event of the one it's on now.
    * @param {number} x - canvas x coordinate of the pointer
    * @param {number} y - canvas y coordinate of the pointer
    * @param {PointerEvent} e - DOM event
@@ -372,13 +426,21 @@ export class Interaction {
    * @private
    */
   _hover(x, y, e) {
-    const id = this._gjs.nodeAt(x, y);
-    const prev = this._hovered;
-    if (id === prev) return;
-    this._hovered = id;
-    if (prev !== null) this._emit("nodeleave", { x, y, id: prev, originalEvent: e });
-    // A nodeleave listener may have unbound, or moved the hover on
-    if (id !== null && this._hovered === id) this._emit("nodeenter", { x, y, id, originalEvent: e });
+    const { id, edge } = this._pick(x, y);
+    const prevId = this._hoveredNode, prevEdge = this._hoveredEdge;
+    if (id === prevId && edge === prevEdge) return;
+    this._hoveredNode = id;
+    this._hoveredEdge = edge;
+    if (prevId !== null && prevId !== id) this._emit("nodeleave", { x, y, id: prevId, originalEvent: e });
+    if (prevEdge !== null && prevEdge !== edge) {
+      this._emit("edgeleave", { x, y, ...this._edgeData(prevEdge), originalEvent: e });
+    }
+    // A leave listener may have unbound, or moved the hover on
+    if (id !== null && id !== prevId && this._hoveredNode === id) {
+      this._emit("nodeenter", { x, y, id, originalEvent: e });
+    } else if (edge !== null && edge !== prevEdge && this._hoveredEdge === edge) {
+      this._emit("edgeenter", { x, y, ...this._edgeData(edge), originalEvent: e });
+    }
   }
 
 
@@ -403,30 +465,54 @@ export class Interaction {
       if (dragging) this._emit("nodedragend", { x: last.x, y: last.y, id, originalEvent: last.event });
     }
     // A listener above may have unbound, which clears the hover
-    if (this._hovered === id) {
-      this._hovered = null;
+    if (this._hoveredNode === id) {
+      this._hoveredNode = null;
       this._emit("nodeleave", { x: last.x, y: last.y, id, originalEvent: last.event });
     }
   }
 
 
   /**
-   * Emits `nodeleave` for the hovered node, if any, and forgets it.
+   * Ends what the pointer was doing with an edge that has just been removed:
+   * a press on it that hasn't become a drag is cancelled, so no click or pan
+   * follows, and hovering it ends with `edgeleave`, reporting the latest
+   * pointer input. A pan the press already started goes on.
+   * @param {GraphEdge} edge - the removed edge
+   * @returns {void}
+   * @private
+   */
+  _edgeRemoved(edge) {
+    const last = this._last, press = this._press;
+    if (!last) return;
+    if (press && press.edge === edge && press.drag === null) press.drag = "none";
+    if (this._hoveredEdge === edge) {
+      this._hoveredEdge = null;
+      this._emit("edgeleave", { x: last.x, y: last.y, ...this._edgeData(edge), originalEvent: last.event });
+    }
+  }
+
+
+  /**
+   * Emits `nodeleave` or `edgeleave` for the hovered node or edge, if any,
+   * and forgets it.
    * @param {PointerEvent} e - DOM event
    * @returns {void}
    * @private
    */
   _clearHover(e) {
-    const el = this._canvas, prev = this._hovered;
-    if (!el || prev === null) return;
-    this._hovered = null;
+    const el = this._canvas, prevId = this._hoveredNode, prevEdge = this._hoveredEdge;
+    if (!el || (prevId === null && prevEdge === null)) return;
+    this._hoveredNode = null;
+    this._hoveredEdge = null;
     const [x, y] = this._toCanvas(e, el);
-    this._emit("nodeleave", { x, y, id: prev, originalEvent: e });
+    if (prevId !== null) this._emit("nodeleave", { x, y, id: prevId, originalEvent: e });
+    if (prevEdge !== null) this._emit("edgeleave", { x, y, ...this._edgeData(prevEdge), originalEvent: e });
   }
 
 
   /**
-   * Emits `nodedblclick` for a double-click on a node.
+   * Emits `nodedblclick` or `edgedblclick` for a double-click on a node or
+   * edge.
    * @param {MouseEvent} e - DOM event
    * @returns {void}
    * @private
@@ -435,8 +521,9 @@ export class Interaction {
     const el = this._canvas;
     if (!el) return;
     const [x, y] = this._toCanvas(e, el);
-    const id = this._gjs.nodeAt(x, y);
+    const { id, edge } = this._pick(x, y);
     if (id !== null) this._emit("nodedblclick", { x, y, id, originalEvent: e });
+    else if (edge !== null) this._emit("edgedblclick", { x, y, ...this._edgeData(edge), originalEvent: e });
   }
 
 

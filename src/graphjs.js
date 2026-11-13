@@ -24,6 +24,7 @@ import { keysOf, now } from "./utils.js";
 const EVENT_NAMES = {
   nodeenter: true, nodeleave: true, nodepress: true, nodeclick: true, nodedblclick: true,
   nodedragstart: true, nodedrag: true, nodedragend: true,
+  edgeenter: true, edgeleave: true, edgepress: true, edgeclick: true, edgedblclick: true,
   backgroundclick: true,
   panstart: true, pan: true, panend: true, zoom: true,
 };

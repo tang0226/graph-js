@@ -24,7 +24,7 @@ import type {
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
   GraphJSOpts, GraphJSHookType, GraphJSHook,
-  GraphJSPointerEventData, GraphJSNodeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
+  GraphJSPointerEventData, GraphJSNodeEventData, GraphJSEdgeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
   InteractionOptsInput, InteractionOpts,
   TweenValue, TweenUnit, Easing, EasingName, TweenOpts,
 } from "@tang0226/graph-js";
@@ -292,6 +292,20 @@ const bgClick: GraphJSEventMap["backgroundclick"] = { x: 0, y: 0, originalEvent:
 // One handler can serve both drags through the shared movement piece
 const onMove = (e: GraphJSEvent<"pan" | "nodedrag">) => { const m: GraphJSMoveEventData = e; const p: GraphJSPointerEventData = e; };
 gjs.on("pan", onMove).on("nodedrag", onMove);
+// Edge events carry the edge and its stored ids, but no node id or movement
+const edgeData: GraphJSEdgeEventData = { srcId: "a", destId: "b", edge: gjs.graph.getEdge("a", "b")! };
+const edgeClickData: GraphJSEventMap["edgeclick"] = { ...pointerData, ...edgeData };
+const onEdgeEvent = (e: GraphJSEvent<"edgeenter" | "edgeleave" | "edgepress" | "edgeclick" | "edgedblclick">) => {
+  const edge: GraphEdge = e.edge;
+  const [src, dest]: [NodeId, NodeId] = [e.srcId, e.destId];
+  const p: GraphJSPointerEventData = e;
+};
+gjs.on("edgeenter", onEdgeEvent).on("edgeleave", onEdgeEvent).on("edgepress", onEdgeEvent)
+  .on("edgeclick", onEdgeEvent).on("edgedblclick", onEdgeEvent);
+// @ts-expect-error -- edge events have no node id
+gjs.on("edgeclick", e => { e.id; });
+// @ts-expect-error -- edges aren't dragged, so there's no edge drag event
+gjs.on("edgedrag", () => {});
 // A handler for every node event reads the node piece
 const onNode = (e: GraphJSEvent<"nodeenter" | "nodeleave" | "nodeclick">) => { const id: NodeId = e.id; };
 gjs.on("nodeenter", onNode).on("nodeleave", onNode).on("nodeclick", onNode);

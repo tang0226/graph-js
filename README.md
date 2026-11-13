@@ -573,13 +573,13 @@ While it's on and a canvas is attached:
 
 | Gesture | Response | Events |
 |---|---|---|
-| Press a node | | `nodepress` |
+| Press a node or an edge | | `nodepress`, `edgepress` |
 | Drag a node | the node follows the pointer | `nodedragstart`, `nodedrag`, `nodedragend` |
-| Drag the background | the view pans | `panstart`, `pan`, `panend` |
+| Drag the background or an edge | the view pans | `panstart`, `pan`, `panend` |
 | Turn the wheel | the view zooms around the pointer | `zoom` |
-| Click a node, or the background | | `nodeclick`, `backgroundclick` |
-| Double-click a node | | `nodedblclick` |
-| Move onto or off a node | | `nodeenter`, `nodeleave` |
+| Click a node, an edge, or the background | | `nodeclick`, `edgeclick`, `backgroundclick` |
+| Double-click a node or an edge | | `nodedblclick`, `edgedblclick` |
+| Move onto or off a node or an edge | | `nodeenter`, `nodeleave`, `edgeenter`, `edgeleave` |
 
 Listeners can change or cancel each response (see [Interaction events](#interaction-events)).
 
@@ -597,11 +597,13 @@ Listeners can change or cancel each response (see [Interaction events](#interact
 
 - **Clicks and drags:** a press becomes a drag once the pointer moves more than `dragThreshold` pixels. Otherwise, releasing it is a click. A drag is never also a click, and a cancelled press (such as a touch interrupted by the browser) is neither.
 - **Dragged nodes:** the node keeps its offset from the pointer, so it doesn't jump to centre on it. It's pinned while dragged and unpinned when dropped. A node that was already fixed stays fixed where it's dropped.
-- **Hover:** while a press is held, the hovered node doesn't change, so a dragged node stays hovered even if the pointer outruns it. Hover updates when the press ends. Touch has no hover.
+- **Nodes and edges:** nodes are drawn over edges, so the pointer is only on an edge where it isn't on a node. Edges are found like `gjs.edgeAt()` finds them, so with `renderEdges` off there are none. Interaction has no response of its own to edge events: a press on an edge goes on as one on the background, so dragging it pans.
+- **Hover:** while a press is held, the hovered node or edge doesn't change, so a dragged node stays hovered even if the pointer outruns it. Hover updates when the press ends. Touch has no hover.
 - **Pointers:** only the primary pointer's main button is used, and pinch-to-zoom isn't supported. While listening, the canvas's CSS `touch-action` is set to `none`, so touch drags don't scroll the page; the previous value is restored afterwards.
 - **The wheel:** the page doesn't scroll while the wheel zooms, even at a zoom limit. Horizontal scrolling is left to the page. A view that code has set past `minZoom` or `maxZoom` isn't snapped back; the wheel only stops it going further.
 - **Drawing:** while the animation runs, changes show on the next frame. While it's stopped, interaction calls `gjs.requestRender()` after each change it makes, so the change shows, and any tween or highlight fade in progress runs to the end. Changes your listeners make, such as highlighting on `nodeenter`, need their own `gjs.requestRender()` while the loop is stopped.
 - **Removed nodes:** if the node being dragged is removed from the graph, the drag ends straight away with `nodedragend`, and the rest of the press does nothing. A press on a node removed before it's dragged is cancelled, so no click or drag follows, and a hovered node that's removed gets its `nodeleave` straight away. Removed nodes aren't found by `nodeAt()`, even before the next tick.
+- **Removed edges:** a press on an edge removed before it's dragged is cancelled, so no click or pan follows; a pan it already started goes on. A hovered edge that's removed, including by removing one of its nodes, gets its `edgeleave` straight away.
 - **The canvas:** interaction listens on whichever canvas is attached, and stops when it's detached. A canvas that can't receive pointer input, such as an `OffscreenCanvas`, is ignored. Turning interaction off or detaching during a drag ends it without events, and unpins the node.
 
 ### Panning and zooming
@@ -745,7 +747,12 @@ How listeners run is the same for every event:
 | `nodepress` | the pointer is pressed on a node, before it's known whether the press is a click or a drag | pointer, `id` | the press is ignored: no drag or click follows |
 | `nodeclick` | a node is clicked | pointer, `id` | |
 | `nodedblclick` | a node is double-clicked | pointer, `id` | |
-| `backgroundclick` | the canvas is clicked away from any node | pointer | |
+| `edgeenter` | the pointer moves onto an edge | pointer, edge | |
+| `edgeleave` | the pointer moves off an edge, or leaves the canvas | pointer, edge | |
+| `edgepress` | the pointer is pressed on an edge | pointer, edge | |
+| `edgeclick` | an edge is clicked | pointer, edge | |
+| `edgedblclick` | an edge is double-clicked | pointer, edge | |
+| `backgroundclick` | the canvas is clicked away from any node or edge | pointer | |
 | `nodedragstart` | a node starts being dragged | pointer, `id` | the node isn't dragged |
 | `nodedrag` | a dragged node moves | pointer, `id`, `dx`, `dy` | the node doesn't move this time |
 | `nodedragend` | a dragged node is dropped | pointer, `id` | the node stays pinned where it was dropped |
@@ -756,8 +763,9 @@ How listeners run is the same for every event:
 
 The data fields are:
 
-- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began. When a node is removed mid-drag or while hovered, its `nodedragend` or `nodeleave` reports the latest pointer input instead, since no pointer input caused it.
+- **pointer:** `x` and `y`, the pointer's position in canvas coordinates (see [Coordinates and hit-testing](#coordinates-and-hit-testing)), and `originalEvent`, the DOM event that caused this one. A drag's start event has the position where the press began. When a node or edge is removed mid-drag or while hovered, its `nodedragend`, `nodeleave` or `edgeleave` reports the latest pointer input instead, since no pointer input caused it.
 - **`id`:** the node's id.
+- **edge:** `edge`, the edge, and `srcId` and `destId`, the ids it's stored with, as in the graph's edge events.
 - **`dx`, `dy`:** how far the pointer moved, in canvas pixels, since the drag's previous event.
 - **`view`:** a copy of the view. For `panstart` and `panend` it's the current view; for `pan` and `zoom`, it's the view the change moves to.
 
