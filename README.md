@@ -648,6 +648,9 @@ Canvas coordinates are CSS pixels from the canvas's top-left corner, at any devi
 ```js
 gjs.nodeAt(100, 50);         // id of the node at (100, 50) on the canvas, or null
 gjs.nodeAt(100, 50, 4);      // with 4 px of slack around each node (the default is 2)
+gjs.edgeAt(100, 50);         // the edge drawn at (100, 50), or null
+gjs.edgeAt(100, 50, 6);      // reaching 6 px beyond each stroke (the default is 3)
+gjs.edgesAt(100, 50);        // every edge within reach, best match first
 gjs.getPosition("alice");    // [x, y] on the canvas, or null if the node doesn't exist
 gjs.simToCanvas(0, 0);       // canvas coordinates of the simulation's center
 gjs.canvasToSim(100, 50);    // converts (100, 50) on the canvas to simulation coordinates
@@ -657,6 +660,8 @@ gjs.unpin("alice");          // allows the node to move freely again
 ```
 
 These helpers, except `unpin()`, require an attached canvas and throw without one.
+
+Edge hits match what's drawn: trimmed ends, bowed reciprocal pairs, self-loops, arrowheads and scaled strokes. Edges too faint or too short to draw, edges hidden by highlighting, and every edge while `renderEdges` is off can't be hit. When edges overlap, the one whose stroke is nearest the point wins, then the one drawn on top, so a highlighted edge wins ties. `edgesAt()` ranks them the same way, which is useful for letting the user cycle through overlapping edges. Nodes are drawn over edges, but `edgeAt()` and `edgesAt()` don't check for them: call `nodeAt()` first to give nodes priority, as built-in interaction does.
 
 ### Building your own interaction
 
