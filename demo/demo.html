@@ -91,6 +91,23 @@
     border: 1px solid var(--line); border-radius: 5px;
   }
   input[type=checkbox] { accent-color: var(--accent); }
+  input[type=number] {
+    width: 82px; justify-self: end;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 5px;
+    padding: 3px 6px; font: inherit; font-size: 12px;
+  }
+  input:disabled, select:disabled { opacity: .45; }
+
+  #exportPreview {
+    display: none; width: 100%; margin-top: 10px;
+    border: 1px solid var(--line); border-radius: 5px;
+    /* A checkerboard, so transparent backgrounds show */
+    background: repeating-conic-gradient(#2a2e36 0 25%, #1f2229 0 50%) 0 0 / 14px 14px;
+  }
+  #exportPreview.shown { display: block; }
+  #exportStatus:empty { display: none; }
+  #exportStatus.error { color: #e06c75; }
 
   .btns { display: flex; flex-wrap: wrap; gap: 6px; }
   button {
@@ -350,6 +367,69 @@
       <button id="recenter">Recenter</button>
       <button id="zoomFit">Zoom to fit</button>
     </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Export</legend>
+    <div class="row inline">
+      <label for="exportArea">Area</label>
+      <select id="exportArea">
+        <option value="view">current view</option>
+        <option value="fit" selected>whole graph</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="exportPadding">Padding (CSS px)</label><output id="exportPaddingOut">16</output>
+      <input type="range" id="exportPadding" min="0" max="200" step="1" value="16">
+    </div>
+    <div class="row inline">
+      <label for="exportWidth">Width (CSS px)</label>
+      <input type="number" id="exportWidth" min="1" step="1" placeholder="auto">
+    </div>
+    <div class="row inline">
+      <label for="exportHeight">Height (CSS px)</label>
+      <input type="number" id="exportHeight" min="1" step="1" placeholder="auto">
+    </div>
+    <div class="row inline">
+      <label for="exportPixelRatio">Pixel ratio</label>
+      <select id="exportPixelRatio">
+        <option value="" selected>device</option>
+        <option value="1">1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="3">3&times;</option>
+        <option value="4">4&times;</option>
+      </select>
+    </div>
+    <div class="row inline">
+      <label for="exportBackground">Background</label>
+      <select id="exportBackground">
+        <option value="same" selected>same as view</option>
+        <option value="transparent">transparent</option>
+        <option value="custom">custom</option>
+      </select>
+    </div>
+    <div class="row inline">
+      <label for="exportBgColor">Custom color</label>
+      <input type="color" id="exportBgColor" value="#ffffff">
+    </div>
+    <div class="row inline">
+      <label for="exportType">Format</label>
+      <select id="exportType">
+        <option value="image/png" selected>PNG</option>
+        <option value="image/jpeg">JPEG</option>
+        <option value="image/webp">WebP</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="exportQuality">Quality</label><output id="exportQualityOut">0.92</output>
+      <input type="range" id="exportQuality" min="0.05" max="1" step="0.01" value="0.92">
+    </div>
+    <div class="btns">
+      <button id="exportPreviewBtn">Preview</button>
+      <button id="exportDownload" class="primary">Download</button>
+    </div>
+    <p class="note" id="exportStatus"></p>
+    <img id="exportPreview" alt="Export preview">
   </fieldset>
 
   <p class="note">
@@ -680,6 +760,7 @@ for (const el of document.querySelectorAll("input, select")) {
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
     if (LABEL_IDS.includes(el.id)) applyLabelConfig();
     if (VIEW_IDS.includes(el.id)) applyViewConfig();
+    if (el.id.startsWith("export")) { updateExportControls(); return; }
     redraw();
   });
 }
@@ -740,6 +821,80 @@ $("zoomFit").addEventListener("click", () => {
   if (!fitView()) return;
   const v = gjs.view;
   flyTo(() => fitView() ?? [v.x, v.y, v.zoom]);
+});
+
+/* ---------- export ----------
+   gjs.toBlob() draws onto a canvas of its own, so the view on screen and
+   the running layout are left alone. Options left undefined take their
+   defaults: the canvas's size and pixel ratio, and the view's background.  */
+
+const EXPORT_EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+const EXPORT_NAMES = { "image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WebP" };
+
+/* Greys out the controls the current choices don't use. */
+function updateExportControls() {
+  $("exportPadding").disabled = ui.exportArea !== "fit";
+  $("exportBgColor").disabled = ui.exportBackground !== "custom";
+  $("exportQuality").disabled = ui.exportType === "image/png";
+}
+
+function exportOpts() {
+  const size = v => (v === "" ? undefined : Number(v));
+  return {
+    fit: ui.exportArea === "fit",
+    padding: ui.exportPadding,
+    width: size(ui.exportWidth),
+    height: size(ui.exportHeight),
+    pixelRatio: ui.exportPixelRatio === "" ? undefined : Number(ui.exportPixelRatio),
+    background: ui.exportBackground === "transparent" ? null
+              : ui.exportBackground === "custom" ? ui.exportBgColor
+              : undefined,
+    type: ui.exportType,
+    quality: ui.exportQuality,
+  };
+}
+
+function exportStatus(text, error = false) {
+  $("exportStatus").textContent = text;
+  $("exportStatus").classList.toggle("error", error);
+}
+
+/* Draws and encodes the image, reporting its size, or the error. */
+async function exportImage() {
+  exportStatus("Exporting…");
+  try {
+    const opts = exportOpts();
+    const blob = await gjs.toBlob(opts);
+    const { width, height } = await createImageBitmap(blob);
+    // Browsers encode types they don't support as PNG
+    const format = EXPORT_NAMES[blob.type] ?? blob.type;
+    const note = opts.type !== blob.type ? ` (${EXPORT_NAMES[opts.type]} isn't supported here)` : "";
+    exportStatus(`${width} × ${height} px · ${format}${note} · ${(blob.size / 1024).toFixed(1)} KB`);
+    return blob;
+  } catch (err) {
+    exportStatus(String(err.message ?? err), true);
+    return null;
+  }
+}
+
+let previewUrl = null;
+$("exportPreviewBtn").addEventListener("click", async () => {
+  const blob = await exportImage();
+  if (!blob) return;
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(blob);
+  $("exportPreview").src = previewUrl;
+  $("exportPreview").classList.add("shown");
+});
+
+$("exportDownload").addEventListener("click", async () => {
+  const blob = await exportImage();
+  if (!blob) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `graph.${EXPORT_EXTENSIONS[blob.type] ?? "png"}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 });
 
 /* ---------- animation ----------
@@ -820,6 +975,7 @@ function redraw() {
 }
 
 readUI();
+updateExportControls();
 buildGraph();
 </script>
 </body>
