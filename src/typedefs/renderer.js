@@ -12,7 +12,8 @@
 /**
  * @typedef {object} RendererOptsInput
  * @property {Canvas} [canvas] - canvas to render to
- * @property {string} [background] - background color
+ * @property {string | null} [background] - background color, or `null` to
+ *    leave the canvas transparent
  * @property {NodeStyleConfig} [nodeConfig] - default node config
  * @property {EdgeStyleConfig} [edgeConfig] - default edge config
  * @property {boolean} [renderEdges] - whether to render edges

@@ -996,7 +996,7 @@ describe("Renderer: option checks", () => {
     const { r } = scene(false, []);
     const before = { ...r.opts };
     for (const [bad, pattern] of [
-      [{ background: 0 }, /^TypeError: Renderer: `background` must be a string$/],
+      [{ background: 0 }, /^TypeError: Renderer: `background` must be a string or null$/],
       [{ renderEdges: 1 }, /renderEdges/],
       [{ labelMargin: NaN }, /labelMargin/],
       [{ highlightMode: "fade" }, /highlightMode/],
@@ -1047,6 +1047,26 @@ describe("Renderer: options", () => {
     const r = new Renderer(sim(), { canvas, background: "#123456" });
     r.render();
     assert.equal(canvas.ctx.fillStyle, "#123456");
+  });
+
+  test("each frame clears the whole canvas before painting the background", () => {
+    const canvas = makeCanvas({ w: 300, h: 200 });
+    const r = new Renderer(sim(), { canvas, background: "#12345680" });
+    r.render();
+    const ops = canvas.ctx.ops.filter(o => o[0] === "clearRect" || o[0] === "fillRect");
+    assert.deepEqual(ops.map(o => o[0]), ["clearRect", "fillRect"]);
+    assert.deepEqual(ops[0].slice(1), [0, 0, 300, 200]);
+  });
+
+  test("a null background clears the canvas without painting it", () => {
+    const canvas = makeCanvas();
+    const r = new Renderer(sim(), { canvas, background: null });
+    assert.equal(r.opts.background, null);
+    r.render();
+    assert.equal(opsNamed(canvas.ctx, "clearRect").length, 1);
+    assert.equal(opsNamed(canvas.ctx, "fillRect").length, 0);
+    r.setOpts({ background: "#000" });
+    assert.equal(r.opts.background, "#000", "a color can be set again");
   });
 });
 

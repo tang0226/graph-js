@@ -118,7 +118,7 @@ const gjs = new GraphJS({
   },
 
   renderer: {                       // the following are the same as the default values
-    background: "#ffffff",
+    background: "#ffffff",        // canvas fill each frame; null for a transparent canvas
     renderEdges: true,              // set false to draw nodes only
     renderLabels: true,             // set false to hide every node label (see "Node labels")
     labelFont: "Arial",             // font family for labels
@@ -930,7 +930,7 @@ gjs.on("nodeleave", () => gjs.requestRender());
 
 ### Custom drawing
 
-Renderer hooks draw your own content as part of each frame. A `"background"` hook runs after the background is filled, beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp. For non-drawing per-frame code, use [loop hooks](#loop-hooks).
+Renderer hooks draw your own content as part of each frame. A `"background"` hook runs after the canvas is cleared and filled with the background (if there is one), beneath edges, nodes and labels. An `"overlay"` hook runs after everything else, on top. Each hook is called with the renderer and the frame's timestamp. For non-drawing per-frame code, use [loop hooks](#loop-hooks).
 
 ```js
 // A grid behind the graph that pans and zooms with it, 100 simulation units apart

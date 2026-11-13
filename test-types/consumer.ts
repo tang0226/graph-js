@@ -100,7 +100,8 @@ gjs.renderer.setDefaultEdgeConfig({ width: e => (e.src.id === "a" ? 2 : 1) });
 
 // Renderer stores persistent settings only; setup values are not kept
 const r: Renderer = gjs.renderer;
-const bg: string = r.opts.background;
+const bg: string | null = r.opts.background;
+r.setOpts({ background: null });
 // @ts-expect-error -- canvas is a setup value, not stored in opts
 r.opts.canvas;
 

@@ -81,7 +81,11 @@ const checkImageRequestOpt = (name, value, values) => {
  * @type {Record<keyof RendererOpts, (v: any) => void>}
  */
 const OPTION_RULES = {
-  background:            v => checkString("Renderer", "background", v),
+  background: v => {
+    if (v === null) return;
+    try { checkString("Renderer", "background", v); }
+    catch { throw new TypeError("Renderer: `background` must be a string or null"); }
+  },
   renderEdges:           v => checkBoolean("Renderer", "renderEdges", v),
   renderLabels:          v => checkBoolean("Renderer", "renderLabels", v),
   labelFont:             v => checkString("Renderer", "labelFont", v),
@@ -1593,8 +1597,13 @@ export class Renderer extends Emitter {
 
     const inFrame = this._cull();
 
-    this._ctx.fillStyle = this._opts.background;
-    this._ctx.fillRect(0, 0, this._size.w, this._size.h);
+    // Cleared first so a transparent or translucent background doesn't build
+    // up over earlier frames
+    this._ctx.clearRect(0, 0, this._size.w, this._size.h);
+    if (this._opts.background !== null) {
+      this._ctx.fillStyle = this._opts.background;
+      this._ctx.fillRect(0, 0, this._size.w, this._size.h);
+    }
 
     this._runHooks("background", time);
 
