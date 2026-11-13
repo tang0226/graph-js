@@ -2155,6 +2155,134 @@ describe("Renderer: picking", () => {
   });
 });
 
+describe("Renderer: edge picking", () => {
+  /* In `scene()`, edge a-b runs along canvas y = 300, trimmed to x 320..480.
+     At the default width of 1 and slack of 3, it reaches 3.5px either side. */
+  const EPS = 0.01;
+
+  /* Edges a-b along y = 0 and c-d along y = `gap` (world units = canvas px
+     at zoom 1), so canvas y 300 and 300 + gap. c-d is added second, so it's
+     drawn on top. */
+  function parallel(gap, opts = {}) {
+    const g = new Graph();
+    for (const id of ["a", "b", "c", "d"]) g.addNode({ id });
+    g.addEdge("a", "b");
+    g.addEdge("c", "d");
+    const sim = new Simulation(g, {});
+    sim.setDefaultNodeConfig({ radius: 20 });
+    sim.sync();
+    const at = { a: [-100, 0], b: [100, 0], c: [-100, gap], d: [100, gap] };
+    for (const [id, [x, y]] of Object.entries(at)) Object.assign(sim.nodes.get(id), { x, y });
+    const r = new Renderer(sim, { canvas: makeCanvas(), ...opts });
+    r.sync();
+    return { g, r, ab: g.getEdge("a", "b"), cd: g.getEdge("c", "d") };
+  }
+
+  test("returns the edge object, or null off the edge", () => {
+    const { g, r } = scene(false, [["a", "b"]]);
+    assert.equal(r.edgeAt(400, 300), g.getEdge("a", "b"));
+    assert.equal(r.edgeAt(400, 350), null);
+    assert.deepEqual(r.edgesAt(400, 350), []);
+  });
+
+  test("the default reach is half the stroke plus 3 canvas pixels, on both sides", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    for (const dy of [3.5 - EPS, -(3.5 - EPS)]) assert.ok(r.edgeAt(400, 300 + dy), `miss at ${dy}`);
+    for (const dy of [3.5 + EPS, -(3.5 + EPS)]) assert.equal(r.edgeAt(400, 300 + dy), null, `hit at ${dy}`);
+  });
+
+  test("slack is in canvas pixels at every zoom, and negative slack counts as 0", () => {
+    const { r } = scene(false, [["a", "b"]], { opts: { scaleStrokes: false } });
+    for (const zoom of [0.5, 1, 4]) {
+      r.view = { x: 0, y: 0, zoom };
+      assert.ok(r.edgeAt(400, 300 + 10.5 - EPS, 10), `miss at zoom ${zoom}`);
+      assert.equal(r.edgeAt(400, 300 + 10.5 + EPS, 10), null, `hit at zoom ${zoom}`);
+    }
+    r.view = { x: 0, y: 0, zoom: 1 };
+    assert.ok(r.edgeAt(400, 300.5 - EPS, -5));
+    assert.equal(r.edgeAt(400, 300.5 + EPS, -5), null);
+  });
+
+  test("a thicker stroke reaches farther", () => {
+    const { r } = scene(false, [["a", "b"]], { edgeCfg: { width: 6 } });
+    assert.ok(r.edgeAt(400, 306 - EPS));
+    assert.equal(r.edgeAt(400, 306 + EPS), null);
+  });
+
+  test("the part of an edge hidden under its nodes isn't hit", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    assert.equal(r.edgeAt(305, 300), null, "15px inside node a, past the trimmed end");
+    assert.ok(r.edgeAt(317, 300), "3px short of the trimmed end");
+  });
+
+  test("an edge that isn't drawn can't be hit", () => {
+    assert.equal(scene(false, [["a", "b"]], { radius: 200 }).r.edgeAt(400, 300), null,
+      "overlapping nodes draw no edge");
+    assert.equal(scene(false, [["a", "b"]], { opts: { renderEdges: false } }).r.edgeAt(400, 300), null);
+  });
+
+  test("each half of a bowed pair is hit along its own curve", () => {
+    const { g, r } = scene(true, [["a", "b"], ["b", "a"]]);
+    const ab = g.getEdge("a", "b"), ba = g.getEdge("b", "a");
+    // a->b bows toward +y; its curve passes (400, ~308.4) at the midpoint
+    assert.equal(r.edgeAt(400, 308.4, 0), ab);
+    assert.equal(r.edgeAt(400, 300 - 8.4, 0), ba);
+    assert.equal(r.edgeAt(400, 300, 0), null, "the straight chord between them is empty");
+    assert.deepEqual(new Set(r.edgesAt(400, 300, 10)), new Set([ab, ba]));
+  });
+
+  test("a self-loop is hit on its circle, not inside it", () => {
+    const { g, r } = scene(true, [["a", "a"]]);
+    // Loop radius 16, centred 29.6px from node a towards the upper right
+    const lx = 300 + Math.SQRT1_2 * 29.6, ly = 300 - Math.SQRT1_2 * 29.6;
+    assert.equal(r.edgeAt(lx, ly - 16), g.getEdge("a", "a"));
+    assert.equal(r.edgeAt(lx, ly), null);
+  });
+
+  test("the nearest stroke wins, even when another is drawn on top", () => {
+    const { r, ab, cd } = parallel(2);
+    assert.equal(r.edgeAt(400, 300.4), ab);
+    assert.equal(r.edgeAt(400, 301.6), cd);
+    assert.deepEqual(r.edgesAt(400, 300.4), [ab, cd]);
+  });
+
+  test("among strokes equally near, the one drawn on top wins", () => {
+    const { r, ab, cd } = parallel(0);
+    assert.equal(r.edgeAt(400, 300), cd);
+    assert.deepEqual(r.edgesAt(400, 300), [cd, ab]);
+    // Both strokes cover y 300.5..301.5 when 2px apart, so both are 0 away
+    const two = parallel(1);
+    assert.deepEqual(two.r.edgesAt(400, 300.5), [two.cd, two.ab]);
+  });
+
+  test("a highlighted edge is drawn on top, so it wins ties", () => {
+    const { r, ab, cd } = parallel(0, { highlightFadeDuration: 0 });
+    r.setHighlight({ edges: [["a", "b"]] });
+    r.render();
+    assert.deepEqual(r.edgesAt(400, 300), [ab, cd]);
+  });
+
+  test("edges hidden by highlighting can't be hit", () => {
+    const { r, ab } = parallel(0, { highlightFadeDuration: 0, highlightMode: "hide" });
+    r.setHighlight({ edges: [["a", "b"]] });
+    r.render();
+    assert.deepEqual(r.edgesAt(400, 300), [ab]);
+  });
+
+  test("a removed edge isn't found, even before the next render", () => {
+    const { g, r } = scene(false, [["a", "b"]]);
+    assert.ok(r.edgeAt(400, 300));
+    g.removeEdge("a", "b");
+    assert.equal(r.edgeAt(400, 300), null);
+  });
+
+  test("throws without a canvas", () => {
+    const r = new Renderer(new Simulation(new Graph(), {}), {});
+    assert.throws(() => r.edgeAt(0, 0), /no canvas attached/);
+    assert.throws(() => r.edgesAt(0, 0), /no canvas attached/);
+  });
+});
+
 describe("Renderer: view", () => {
   const plain = () => new Renderer(new Simulation(new Graph(), {}), {});
   // 800x600 canvas, so canvas (400, 300) is the view centre

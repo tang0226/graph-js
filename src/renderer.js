@@ -4,7 +4,7 @@
 /**
  * @import {
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
- *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors,
+ *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors, EdgeLayout,
  * } from './typedefs/internal/renderer.js'
  */
 /**
@@ -20,7 +20,7 @@
 
 
 import { Simulation } from "./simulation.js";
-import { circleRectCollision, keysOf, now } from "./utils.js";
+import { circleRectCollision, keysOf, now, segmentDistance2 } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
@@ -278,6 +278,18 @@ export class Renderer extends Emitter {
    * @private
    */
   _edgeBow = new Int8Array(0);
+
+
+  /**
+   * Layout of the last edge passed to `_layoutEdge()`, reused between edges
+   * @type {EdgeLayout}
+   * @private
+   */
+  _edgeLayout = {
+    width: 0, fade: 1, loop: false, bowed: false,
+    sx: 0, sy: 0, ex: 0, ey: 0, cx: 0, cy: 0, tx: 0, ty: 0,
+    head: 0, r: 0, d: 0, lr: 0,
+  };
 
 
   /**
@@ -1233,7 +1245,45 @@ export class Renderer extends Emitter {
    */
   _drawEdge(src, dest, style, bowDir, alpha = 1) {
     if (!this._ctx) return;
-    const ctx = this._ctx, z = this._view.zoom;
+    const p = this._layoutEdge(src, dest, style, bowDir);
+    if (!p) return;
+    const ctx = this._ctx;
+
+    if (p.fade < 1) ctx.globalAlpha = alpha * p.fade;
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = p.width;
+    if (p.loop) {
+      this._drawSelfLoop(p, style);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(p.sx, p.sy);
+      // Stop the stroke at the arrowhead's base so a thick line can't show
+      // through the notch of the filled triangle.
+      const baseX = p.ex - p.tx * p.head, baseY = p.ey - p.ty * p.head;
+      if (p.bowed) ctx.quadraticCurveTo(p.cx, p.cy, baseX, baseY);
+      else ctx.lineTo(baseX, baseY);
+      ctx.stroke();
+      if (style.arrow) this._drawArrowhead(p.ex, p.ey, p.tx, p.ty, p.head, style);
+    }
+    if (p.fade < 1) ctx.globalAlpha = alpha;
+  }
+
+
+  /**
+   * Lays out an edge as it's drawn at the current view, in canvas px. Shared
+   * by `_drawEdge()` and the edge hit tests, so a hit always matches what's
+   * on screen. Writes into one reused object, so the render loop doesn't
+   * allocate: read it before laying out the next edge.
+   * @param {SimNode} src - source node
+   * @param {SimNode} dest - destination node
+   * @param {EdgeStyle} style - resolved edge style
+   * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
+   * @returns {EdgeLayout | null} the layout, or `null` when the edge isn't
+   *    drawn: too thin and faint to see, or its nodes overlap
+   * @private
+   */
+  _layoutEdge(src, dest, style, bowDir) {
+    const p = this._edgeLayout, z = this._view.zoom;
 
     /* Stroke size in canvas px. A scaled edge follows the zoom, and `k` sizes
        its arrowhead and self-loop to match, so they shrink along with it
@@ -1252,29 +1302,36 @@ export class Renderer extends Emitter {
         fade = width / minEdgeWidth;
         width = minEdgeWidth;
       }
-      if (fade < MIN_EDGE_FADE || !(width > 0)) return;    // too faint to see
+      if (fade < MIN_EDGE_FADE || !(width > 0)) return null;    // too faint to see
     }
+    p.width = width;
+    p.fade = fade;
 
     const [ax, ay] = this.simToCanvas(src.x, src.y);
-    const [bx, by] = this.simToCanvas(dest.x, dest.y);
-    const ra = src.radius * z, rb = dest.radius * z;
+    const ra = src.radius * z;
 
     if (src === dest) {
-      if (fade < 1) ctx.globalAlpha = alpha * fade;
-      this._drawSelfLoop(ax, ay, ra, style, width, k);
-      if (fade < 1) ctx.globalAlpha = alpha;
-      return;
+      // A circle overlapping the node's upper right
+      const lr = Math.max(ra * 0.8, (style.arrow ? style.arrowSize * k : 6 * k) * 1.6);
+      const D = ra + lr * 0.6;                     // node centre -> loop centre
+      p.loop = true;
+      p.sx = ax; p.sy = ay; p.r = ra; p.d = D;
+      p.cx = ax + Math.SQRT1_2 * D; p.cy = ay - Math.SQRT1_2 * D; p.lr = lr;
+      p.head = style.arrowSize * k;
+      return p;
     }
 
+    const [bx, by] = this.simToCanvas(dest.x, dest.y);
+    const rb = dest.radius * z;
     const dx = bx - ax, dy = by - ay;
     const d = Math.hypot(dx, dy);
-    if (d < 1e-6) return;
+    if (d < 1e-6) return null;
 
     const head = style.arrow ? style.arrowSize * k : 0;
-    if (d <= ra + rb + head) return;
+    if (d <= ra + rb + head) return null;
 
     const ux = dx / d, uy = dy / d;
-    const bow = bowDir * style.bow * this._view.zoom;  // Scale bow with zoom
+    const bow = bowDir * style.bow * z;          // Scale bow with zoom
 
     // Tangents at each end, and the trimmed endpoints along them.
     let t0x = ux, t0y = uy, t1x = ux, t1y = uy, cx = 0, cy = 0;
@@ -1287,22 +1344,14 @@ export class Renderer extends Emitter {
       t1x = (bx - cx) / l1; t1y = (by - cy) / l1;
     }
 
-    const sx = ax + t0x * ra, sy = ay + t0y * ra;
-    const ex = bx - t1x * rb, ey = by - t1y * rb;
-
-    if (fade < 1) ctx.globalAlpha = alpha * fade;
-    ctx.strokeStyle = style.color;
-    ctx.lineWidth = width;
-    ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    // Stop the stroke at the arrowhead's base so a thick line can't show
-    // through the notch of the filled triangle.
-    if (bow) ctx.quadraticCurveTo(cx, cy, ex - t1x * head, ey - t1y * head);
-    else ctx.lineTo(ex - ux * head, ey - uy * head);
-    ctx.stroke();
-
-    if (style.arrow) this._drawArrowhead(ex, ey, t1x, t1y, head, style);
-    if (fade < 1) ctx.globalAlpha = alpha;
+    p.loop = false;
+    p.bowed = !!bow;
+    p.sx = ax + t0x * ra; p.sy = ay + t0y * ra;
+    p.ex = bx - t1x * rb; p.ey = by - t1y * rb;
+    p.cx = cx; p.cy = cy;
+    p.tx = t1x; p.ty = t1y;
+    p.head = head;
+    return p;
   }
 
 
@@ -1335,29 +1384,19 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Draws a self-loop as a circle overlapping the node's upper right, with an
-   * arrowhead on the node boundary if `style.arrow` is set.
-   * @param {number} cx - canvas x of the node center
-   * @param {number} cy - canvas y of the node center
-   * @param {number} r - node radius, in canvas px
+   * Draws a self-loop laid out by `_layoutEdge()`, with an arrowhead on the
+   * node boundary if `style.arrow` is set. The caller sets the stroke.
+   * @param {EdgeLayout} p - the loop's layout
    * @param {EdgeStyle} style - resolved edge style
-   * @param {number} width - line width, in canvas px
-   * @param {number} k - canvas px per unit of `arrowSize`
    * @returns {void}
    * @private
    */
-  _drawSelfLoop(cx, cy, r, style, width, k) {
+  _drawSelfLoop(p, style) {
     if (!this._ctx) return;
     const ctx = this._ctx;
-    const head = style.arrowSize * k;
-    const lr = Math.max(r * 0.8, (style.arrow ? head : 6 * k) * 1.6);
-    const a = -Math.PI / 4;
-    const D = r + lr * 0.6;                      // node centre -> loop centre
-    const ux = Math.cos(a), uy = Math.sin(a);
-    const lx = cx + ux * D, ly = cy + uy * D;
+    const { sx: cx, sy: cy, r, d: D, cx: lx, cy: ly, lr, head } = p;
+    const ux = Math.SQRT1_2, uy = -Math.SQRT1_2;   // node centre -> loop centre
 
-    ctx.strokeStyle = style.color;
-    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.arc(lx, ly, lr, 0, Math.PI * 2);
     ctx.stroke();
@@ -1646,6 +1685,94 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Returns the edge drawn at a point on the canvas, or `null` if there is
+   * none. When several edges are within reach, the one whose stroke is
+   * nearest the point wins; among edges the point is right on (or equally
+   * near), the one drawn on top wins. Use `edgesAt()` to get them all, for
+   * example to let the user cycle through overlapping edges.
+   *
+   * Edges are drawn under nodes, but this doesn't check for nodes covering
+   * the point: call `nodeAt()` first to give nodes priority. Syncs first,
+   * like `render()`, so hits match the graph's current shape.
+   * @param {number} cx - canvas x coordinate
+   * @param {number} cy - canvas y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels
+   * @returns {GraphEdge | null} the edge
+   * @throws {Error} throws when no canvas is attached
+   */
+  edgeAt(cx, cy, slack = 3) {
+    /** @type {GraphEdge | null} */
+    let best = null;
+    let bestGap = Infinity, bestOrder = -1;
+    this._hitEdges(cx, cy, slack, (edge, gap, order) => {
+      if (gap < bestGap || (gap === bestGap && order > bestOrder)) {
+        best = edge; bestGap = gap; bestOrder = order;
+      }
+    });
+    return best;
+  }
+
+
+  /**
+   * Returns every edge drawn within reach of a point on the canvas, best
+   * match first, in the order `edgeAt()` ranks them: nearest stroke first,
+   * then the one drawn on top. Like `edgeAt()`, ignores nodes covering the
+   * point.
+   * @param {number} cx - canvas x coordinate
+   * @param {number} cy - canvas y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels
+   * @returns {GraphEdge[]} the edges, in a new array; empty if none are in reach
+   * @throws {Error} throws when no canvas is attached
+   */
+  edgesAt(cx, cy, slack = 3) {
+    /** @type {{ edge: GraphEdge, gap: number, order: number }[]} */
+    const hits = [];
+    this._hitEdges(cx, cy, slack, (edge, gap, order) => hits.push({ edge, gap, order }));
+    hits.sort((a, b) => a.gap - b.gap || b.order - a.order);
+    return hits.map(h => h.edge);
+  }
+
+
+  /**
+   * Finds every visible edge within reach of a canvas point, laid out exactly
+   * as `render()` draws it.
+   * @param {number} cx - canvas x coordinate
+   * @param {number} cy - canvas y coordinate
+   * @param {number} slack - reach beyond each stroke, in canvas px; negative
+   *    values count as 0
+   * @param {(edge: GraphEdge, gap: number, order: number) => void} visit -
+   *    called per hit with the distance from the point to the stroke (0 when
+   *    the point is on it) and the edge's draw order (higher is drawn later)
+   * @returns {void}
+   * @throws {Error} throws when no canvas is attached
+   * @private
+   */
+  _hitEdges(cx, cy, slack, visit) {
+    if (!this._canvas) throw new Error("Renderer: no canvas attached");
+    this.sync();
+    if (!this._opts.renderEdges) return;
+
+    const sim = this._simulation, nodes = sim.nodeList, ep = sim.edgePairs;
+    const edges = sim.edgeList, styles = this._edgeStyles, n = edges.length;
+    const s = Math.max(slack, 0);
+    // While highlighting, highlighted edges are drawn after the rest, and
+    // fully faded ones not at all
+    const hl = this._highlighter, layered = hl.has() || hl.isFading();
+    const { edgeState, edgeAlpha } = hl;
+
+    for (let i = 0; i < n; i++) {
+      if (layered && edgeAlpha[i] === 0) continue;
+      const p = this._layoutEdge(nodes[ep[2 * i]], nodes[ep[2 * i + 1]], styles[i], this._edgeBow[i]);
+      if (!p) continue;
+      const gap = edgeDistance(p, cx, cy, p.width / 2 + s) - p.width / 2;
+      if (gap <= s) visit(edges[i], Math.max(gap, 0), layered ? edgeState[i] * n + i : i);
+    }
+  }
+
+
+  /**
    * Returns the canvas coordinates of the node with the specified id, or null
    * if the node does not exist
    * @param {NodeId} id - node id
@@ -1657,6 +1784,46 @@ export class Renderer extends Emitter {
     const p = this._simulation.getPosition(id);
     return p ? this.simToCanvas(...p) : null;
   }
+}
+
+/** Straight pieces a bowed edge is split into for hit testing. A curve
+    bowed by `b` px strays at most about b / (2 * n^2) px from them. */
+const BOW_HIT_SEGMENTS = 16;
+
+/**
+ * Distance from a point to the centre line of an edge laid out by
+ * `_layoutEdge()`, through its arrowhead to the tip. Returns `Infinity` early
+ * when the point is clearly farther than `reach`.
+ * @param {EdgeLayout} p - edge layout, in canvas px
+ * @param {number} x - point x, in canvas px
+ * @param {number} y - point y, in canvas px
+ * @param {number} reach - farthest distance the caller cares about
+ * @returns {number} the distance, in canvas px
+ */
+function edgeDistance(p, x, y, reach) {
+  if (p.loop) return Math.abs(Math.hypot(x - p.cx, y - p.cy) - p.lr);
+
+  // A curve stays inside the hull of its end and control points
+  const minX = Math.min(p.sx, p.ex, p.bowed ? p.cx : p.sx) - reach;
+  const maxX = Math.max(p.sx, p.ex, p.bowed ? p.cx : p.sx) + reach;
+  const minY = Math.min(p.sy, p.ey, p.bowed ? p.cy : p.sy) - reach;
+  const maxY = Math.max(p.sy, p.ey, p.bowed ? p.cy : p.sy) + reach;
+  if (x < minX || x > maxX || y < minY || y > maxY) return Infinity;
+
+  if (!p.bowed) return Math.sqrt(segmentDistance2(x, y, p.sx, p.sy, p.ex, p.ey));
+
+  // The stroke curves to the arrowhead's base, then runs straight to the tip
+  const bx = p.ex - p.tx * p.head, by = p.ey - p.ty * p.head;
+  let best = segmentDistance2(x, y, bx, by, p.ex, p.ey);
+  let px = p.sx, py = p.sy;
+  for (let k = 1; k <= BOW_HIT_SEGMENTS; k++) {
+    const t = k / BOW_HIT_SEGMENTS, u = 1 - t;
+    const qx = u * u * p.sx + 2 * u * t * p.cx + t * t * bx;
+    const qy = u * u * p.sy + 2 * u * t * p.cy + t * t * by;
+    best = Math.min(best, segmentDistance2(x, y, px, py, qx, qy));
+    px = qx; py = qy;
+  }
+  return Math.sqrt(best);
 }
 
 /**

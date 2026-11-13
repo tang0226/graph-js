@@ -85,3 +85,22 @@ export const growI32 = (a, n) => { const b = new Int32Array(n); b.set(a); return
  */
 export const circleRectCollision = (cx, cy, cr, xMin, xMax, yMin, yMax) =>
   (cx - clamp(cx, xMin, xMax)) ** 2 + (cy - clamp(cy, yMin, yMax)) ** 2 < cr * cr;
+
+
+/**
+ * Squared distance from a point to a line segment.
+ * @param {number} x - point x
+ * @param {number} y - point y
+ * @param {number} ax - segment start x
+ * @param {number} ay - segment start y
+ * @param {number} bx - segment end x
+ * @param {number} by - segment end y
+ * @returns {number} the squared distance
+ */
+export const segmentDistance2 = (x, y, ax, ay, bx, by) => {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / len2, 0, 1) : 0;
+  const ox = ax + t * dx - x, oy = ay + t * dy - y;
+  return ox * ox + oy * oy;
+};
