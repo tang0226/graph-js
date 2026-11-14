@@ -106,8 +106,14 @@
     background: repeating-conic-gradient(#2a2e36 0 25%, #1f2229 0 50%) 0 0 / 14px 14px;
   }
   #exportPreview.shown { display: block; }
-  #exportStatus:empty { display: none; }
-  #exportStatus.error { color: #e06c75; }
+  .status:empty { display: none; }
+  .status.error { color: #e06c75; }
+  #gotoStatus { margin: 0 0 8px; }
+
+  .goto { display: flex; align-items: center; gap: 4px; justify-self: end; }
+  .goto .prefix { color: var(--muted); }
+  .goto input[type=number] { width: 64px; }
+  .goto button { flex: none; padding: 3px 9px; }
 
   .btns { display: flex; flex-wrap: wrap; gap: 6px; }
   button {
@@ -363,6 +369,31 @@
       <label for="highlightAlpha">Highlight alpha</label><output id="highlightAlphaOut">0.15</output>
       <input type="range" id="highlightAlpha" min="0" max="1" step="0.01" value="0.15">
     </div>
+    <div class="row inline">
+      <label for="gotoNode">Go to node</label>
+      <span class="goto">
+        <span class="prefix">n</span>
+        <input type="number" id="gotoNode" min="0" step="1" placeholder="#">
+        <button id="gotoBtn">Go</button>
+      </span>
+    </div>
+    <p class="note status" id="gotoStatus"></p>
+    <div class="row">
+      <label for="focusZoomOut">Zoom out on the way</label><output id="focusZoomOutOut">1.0</output>
+      <input type="range" id="focusZoomOut" min="0" max="4" step="0.1" value="1">
+    </div>
+    <div class="row">
+      <label for="gotoDuration">Go to node time (ms)</label><output id="gotoDurationOut">900</output>
+      <input type="range" id="gotoDuration" min="0" max="5000" step="50" value="900">
+    </div>
+    <div class="row">
+      <label for="dblclickDuration">Double-click time (ms)</label><output id="dblclickDurationOut">900</output>
+      <input type="range" id="dblclickDuration" min="0" max="5000" step="50" value="900">
+    </div>
+    <div class="row">
+      <label for="fitDuration">Zoom to fit time (ms)</label><output id="fitDurationOut">700</output>
+      <input type="range" id="fitDuration" min="0" max="5000" step="50" value="700">
+    </div>
     <div class="btns">
       <button id="recenter">Recenter</button>
       <button id="zoomFit">Zoom to fit</button>
@@ -428,7 +459,7 @@
       <button id="exportPreviewBtn">Preview</button>
       <button id="exportDownload" class="primary">Download</button>
     </div>
-    <p class="note" id="exportStatus"></p>
+    <p class="note status" id="exportStatus"></p>
     <img id="exportPreview" alt="Export preview">
   </fieldset>
 
@@ -610,14 +641,16 @@ function applyViewConfig() {
 new ResizeObserver(() => { if (gjs) { gjs.resize(); gjs.renderer.render(); } }).observe(canvas);
 
 /* ---------- camera ----------
-   Recenter, Zoom to fit and double-click all glide the view with one tween,
-   keyed "camera": starting a new move replaces the old one mid-flight, and
-   grabbing the view (panning, wheel, Zoom slider) cancels it.
+   Zoom to fit and double-click use gjs.fitView() and gjs.focusNode(). Recenter
+   uses flyTo() below, which follows the same path as those with no zoom-out.
+   All three glide the view with the tween keyed "view": starting a new move
+   replaces the old one mid-flight, and built-in panning and wheel zooming
+   cancel it, as the Zoom slider does.
 
-   The tween only runs a plain 0 -> 1 progress value. Each frame, set() reads
-   where the camera should end up *now* and blends toward it, so the move
-   tracks nodes that are still drifting and lands exactly on them. Zoom is
-   blended in log space, so zooming 0.1 -> 1 feels as fast as 1 -> 10.     */
+   flyTo()'s tween only runs a plain 0 -> 1 progress value. Each frame, set()
+   reads where the camera should end up *now* and blends toward it, so the
+   move tracks nodes that are still drifting and lands exactly on them. Zoom
+   is blended in log space, so zooming 0.1 -> 1 feels as fast as 1 -> 10.  */
 
 const ZOOM_MIN = 0.01, ZOOM_MAX = 10;     // the Zoom slider's range, also the wheel's
 const clampZoom = z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
@@ -650,7 +683,7 @@ function flyTo(target, duration = 700) {
   const { x: sx, y: sy, zoom } = gjs.view;
   const sz = Math.log(zoom);
   gjs.tween({
-    key: "camera",
+    key: "view",
     from: 0, to: 1, duration,
     ease: "inOutCubic",
     set: p => {
@@ -673,33 +706,28 @@ function centroid() {
   return [x / list.length, y / list.length];
 }
 
-/* Centre and zoom that fit every node, with a margin, or null for an empty
-   graph. */
-function fitView() {
-  const list = gjs.simulation.nodeList, size = gjs.renderer.size;
-  if (!list.length || !size) return null;
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const nd of list) {
-    x0 = Math.min(x0, nd.x - nd.radius); x1 = Math.max(x1, nd.x + nd.radius);
-    y0 = Math.min(y0, nd.y - nd.radius); y1 = Math.max(y1, nd.y + nd.radius);
-  }
-  const zoom = 0.9 * Math.min(size.w / (x1 - x0), size.h / (y1 - y0));
-  return [(x0 + x1) / 2, (y0 + y1) / 2, zoom];
+/* Mirrors the zoom on the slider while a move from fitView() or focusNode()
+   changes it; flyTo() sets the slider itself. */
+function syncZoom() {
+  if (gjs.getTween("view") && gjs.view.zoom !== ui.zoom) showZoom(gjs.view.zoom);
+}
+
+/* Flies to a node, zooming in to at least 2x. focusNode() follows it if it's
+   still moving, and zooms out on the way to a node that's far away, as
+   readily as the "Zoom out on the way" slider says (its zoomOut option).  */
+function flyToNode(id, duration) {
+  gjs.focusNode(id, { zoom: Math.max(ui.zoom, 2), zoomOut: ui.focusZoomOut, duration });
+  redraw();
 }
 
 /* ---------- interaction ----------
    Dragging nodes, panning and wheel zoom are built in (the `interaction`
    option). The demo only adds its own responses through events: the cursor,
-   hover highlighting, keeping the Zoom slider in sync, cancelling camera
-   moves, and flying to a double-clicked node.                               */
+   hover highlighting, keeping the Zoom slider in sync, and flying to a
+   double-clicked node. Grabbing the view cancels a camera move by itself.   */
 
 function addInteraction(g) {
-  // Grabbing the view stops a camera move, which would otherwise fight it
-  g.on("panstart", () => { g.cancelTween("camera"); });
-  g.on("zoom", e => {
-    g.cancelTween("camera");
-    showZoom(e.view.zoom);                 // the view this zoom moves to
-  });
+  g.on("zoom", e => showZoom(e.view.zoom));   // the view this zoom moves to
 
   for (const type of ["nodedragstart", "panstart"]) g.on(type, () => canvas.classList.add("dragging"));
   for (const type of ["nodedragend", "panend"]) g.on(type, () => canvas.classList.remove("dragging"));
@@ -709,15 +737,7 @@ function addInteraction(g) {
   g.on("nodeenter", e => updateHover(e.id));
   g.on("nodeleave", () => updateHover(null));
 
-  // Fly to a node, zooming in to at least 2x, and follow it if it's still moving
-  g.on("nodedblclick", e => {
-    const zoom = Math.max(ui.zoom, 2);
-    let last = g.simulation.getPosition(e.id);
-    flyTo(() => {
-      last = g.simulation.getPosition(e.id) ?? last;   // keep the last spot if it's removed
-      return [...last, zoom];
-    });
-  });
+  g.on("nodedblclick", e => flyToNode(e.id, ui.dblclickDuration));
 }
 
 /* ---------- hover highlighting ---------- */
@@ -754,7 +774,7 @@ for (const el of document.querySelectorAll("input, select")) {
     readUI();
     if (el.id === "directed") { buildGraph(); return; }
     if (el.id === "hoverHighlight") updateHover(null);
-    if (el.id === "zoom") gjs.cancelTween("camera");
+    if (el.id === "zoom") gjs.cancelTween("view");
     if (SIM_IDS.includes(el.id))  applySimConfig();
     if (NODE_IDS.includes(el.id)) applyNodeConfig();
     if (EDGE_IDS.includes(el.id)) applyEdgeConfig();
@@ -818,10 +838,30 @@ $("recenter").addEventListener("click", () => {
 });
 
 $("zoomFit").addEventListener("click", () => {
-  if (!fitView()) return;
-  const v = gjs.view;
-  flyTo(() => fitView() ?? [v.x, v.y, v.zoom]);
+  if (gjs.fitView({ duration: ui.fitDuration })) redraw();
 });
+
+/* Go to node: flies to the node with id "n" + the number typed, which
+   reaches nodes too far off screen to double-click.                        */
+function gotoStatus(text, error = false) {
+  $("gotoStatus").textContent = text;
+  $("gotoStatus").classList.toggle("error", error);
+}
+
+function gotoNode() {
+  const raw = $("gotoNode").value.trim();
+  if (raw === "") return;
+  const id = "n" + Number(raw);            // "007" -> "n7"
+  if (!gjs.graph.hasNode(id)) { gotoStatus(`No node ${id}`, true); return; }
+  gotoStatus("");
+  flyToNode(id, ui.gotoDuration);
+}
+
+$("gotoBtn").addEventListener("click", gotoNode);
+$("gotoNode").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); gotoNode(); }
+});
+$("gotoNode").addEventListener("input", () => gotoStatus(""));
 
 /* ---------- export ----------
    gjs.toBlob() draws onto a canvas of its own, so the view on screen and
@@ -933,6 +973,7 @@ function addLoopHooks(g) {
     phaseStart = now;
   });
   g.addHook("postRender", (g, time) => {
+    syncZoom();
     renderMs += performance.now() - phaseStart;
     frames++;
     if (time - fpsClock < 500) return;
@@ -969,6 +1010,7 @@ function redraw() {
     if (gjs.isRunning()) return;
     gjs.stepTweens(time);
     gjs.renderer.render(time);
+    syncZoom();
     updateCounts();
     if (gjs.renderer.isFading() || gjs.isTweening()) redraw();
   });
