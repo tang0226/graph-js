@@ -39,6 +39,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/simulation.js").SimEdge} SimEdge */
 /** @typedef {import("./typedefs/simulation.js").SimEdgeConfig} SimEdgeConfig */
 /** @typedef {import("./typedefs/simulation.js").SimForce} SimForce */
+/** @typedef {import("./typedefs/simulation.js").SimConstraint} SimConstraint */
 /** @typedef {import("./typedefs/simulation.js").BarnesHutOpts} BarnesHutOpts */
 /** @typedef {import("./typedefs/simulation.js").BarnesHutOptsInput} BarnesHutOptsInput */
 /** @typedef {import("./typedefs/simulation.js").SimEventMap} SimEventMap */

@@ -485,17 +485,16 @@ let tickStart = 0, tickMs = 0;
 gjs.addHook("preTick", () => { tickStart = performance.now(); });
 gjs.addHook("postTick", () => { tickMs = performance.now() - tickStart; });
 
-// Keep every node inside a 1000 x 1000 box
-function keepInBox(gjs) {
-  for (const node of gjs.simulation.nodeList) {
-    node.x = Math.max(-500, Math.min(500, node.x));
-    node.y = Math.max(-500, Math.min(500, node.y));
-  }
+// Show the layout's temperature
+function showTemp(gjs) {
+  document.getElementById("temp").textContent = gjs.simulation.temp.toFixed(3);
 }
-gjs.addHook("postTick", keepInBox);
+gjs.addHook("postTick", showTemp);
 
-gjs.removeHook("postTick", keepInBox);   // true if it existed and was removed
+gjs.removeHook("postTick", showTemp);   // true if it existed and was removed
 ```
+
+To change the layout itself every tick, use [custom forces](#custom-forces) and [constraints](#custom-constraints), which also run in a headless simulation.
 
 - **Arguments:** each hook is called with the GraphJS instance and the frame's timestamp. That's the `requestAnimationFrame` time in the loop, or `performance.now()` for `step()`, and the renderer is given the same one.
 - **When they run:** on every frame, including after the layout settles. The tick does nothing then, but `"preTick"` and `"postTick"` hooks still run.
@@ -1189,7 +1188,29 @@ gjs.simulation.removeForce(cluster);   // true if it was added; also wakes the l
 - **Slots are only valid during the call.** Nodes can move to different slots when the graph changes, so look nodes up by `sim.nodeId[i]` rather than keeping slot numbers between ticks.
 - Forces run in the order they were added, and adding the same function again does nothing. A force that throws is logged with `console.error`, and the tick carries on.
 
-To move nodes directly instead, such as keeping them inside a box, change their positions after the tick: in a `"postTick"` [loop hook](#loop-hooks), or after calling `tick()` yourself.
+To move nodes directly instead, use a [custom constraint](#custom-constraints).
+
+### Custom constraints
+
+A custom constraint is a function that the simulation calls at the end of each tick, after collisions. It moves nodes by changing their positions in `sim.nodeX` and `sim.nodeY` directly, and can change their velocities in `sim.nodeVx` and `sim.nodeVy` too:
+
+```js
+// Keep every node inside a 1000 x 1000 box, stopping it at the walls
+function keepInBox(sim) {
+  const { nodeX, nodeY, nodeVx, nodeVy } = sim;
+  for (let i = 0; i < nodeX.length; i++) {
+    if (Math.abs(nodeX[i]) > 500) { nodeX[i] = Math.sign(nodeX[i]) * 500; nodeVx[i] = 0; }
+    if (Math.abs(nodeY[i]) > 500) { nodeY[i] = Math.sign(nodeY[i]) * 500; nodeVy[i] = 0; }
+  }
+}
+
+gjs.simulation.addConstraint(keepInBox);      // wakes the layout
+gjs.simulation.removeConstraint(keepInBox);   // true if it was added; also wakes the layout
+```
+
+- **The tick ends with constraints satisfied,** since they run last. A constraint can move nodes back into overlap, which the next tick's collisions resolve.
+- **Pinned nodes aren't skipped.** `keepInBox` above also keeps a dragged node inside the box. To leave pinned nodes alone, skip slots where `sim.nodeFixed[i]` is 1.
+- Like forces, constraints only run while the layout moves, slots are only valid during the call, they run in the order they were added, and one that throws is logged while the tick carries on.
 
 ## TypeScript
 

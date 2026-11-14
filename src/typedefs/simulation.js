@@ -80,6 +80,15 @@
  * @typedef {(sim: Simulation) => void} SimForce
  */
 
+/**
+ * Custom constraint, added with `addConstraint()`. Called at the end of each
+ * tick, after collisions, with the simulation; it moves nodes by changing
+ * `sim.nodeX[i]` and `sim.nodeY[i]` directly, and can change `sim.nodeVx[i]`
+ * and `sim.nodeVy[i]` too. Pinned nodes aren't skipped: check
+ * `sim.nodeFixed[i]` to leave them alone.
+ * @typedef {(sim: Simulation) => void} SimConstraint
+ */
+
 
 
 // BARNES-HUT

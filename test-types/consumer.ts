@@ -15,7 +15,7 @@ import type {
   GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
   GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
-  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig, SimForce,
+  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig, SimForce, SimConstraint,
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
@@ -301,6 +301,9 @@ nodeX[gjs.simulation.nodeIndex.get("b") ?? 0] = 10;
 const centre: SimForce = s => { for (let i = 0; i < s.nodeX.length; i++) s.nodeFx[i] -= 0.01 * s.nodeX[i]; };
 gjs.simulation.addForce(centre).addForce(s => { s.nodeFy[0] += 1; });
 const forceRemoved: boolean = gjs.simulation.removeForce(centre);
+// Constraints move nodes directly at the end of each tick
+const floor: SimConstraint = s => { for (let i = 0; i < s.nodeY.length; i++) if (s.nodeY[i] > 0) { s.nodeY[i] = 0; s.nodeVy[i] = 0; } };
+const constraintRemoved: boolean = gjs.simulation.addConstraint(floor).removeConstraint(floor);
 const hookType: RendererHookType = "overlay";
 const hook: RendererHook = ring;
 const loopType: GraphJSHookType = "postTick";

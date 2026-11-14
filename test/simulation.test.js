@@ -1586,3 +1586,77 @@ describe("Simulation: custom forces", () => {
     assert.equal(node.x, 3);
   });
 });
+
+describe("Simulation: custom constraints", () => {
+  // Keeps every node within x <= limit, stopping its x velocity there
+  const wall = limit => s => {
+    for (let i = 0; i < s.nodeX.length; i++) {
+      if (s.nodeX[i] > limit) { s.nodeX[i] = limit; s.nodeVx[i] = 0; }
+    }
+  };
+
+  test("a constraint holds at the end of the tick", () => {
+    const sim = new Simulation(chain(1), { gravity: 0, friction: 1, cooling: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 0; node.y = 0; node.vx = 50;
+    sim.addConstraint(wall(10));
+    sim.tick(1);
+    assert.equal(node.x, 10);
+    assert.equal(node.vx, 0);
+  });
+
+  test("it runs once per tick, after collisions, and not while frozen", () => {
+    const sim = new Simulation(chain(2), { gravity: 0, cooling: 1, edgeConfig: { stiffness: 0 } });
+    const [a, b] = sim.nodeList;
+    a.x = 0; a.y = 0; b.x = 1; b.y = 0;   // overlapping: radii are 20
+    const gaps = [];
+    sim.addConstraint(s => { gaps.push(Math.hypot(s.nodeX[0] - s.nodeX[1], s.nodeY[0] - s.nodeY[1])); });
+    sim.tick();
+    assert.equal(gaps.length, 1);
+    assert.ok(gaps[0] >= 39.99, `it ran before collisions: gap ${gaps[0]}`);
+    sim.heat(0);
+    sim.tick();
+    assert.equal(gaps.length, 1);
+  });
+
+  test("removeConstraint stops it, and reports whether it was there", () => {
+    const sim = new Simulation(chain(1), { gravity: 0, friction: 1, cooling: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 0; node.y = 0; node.vx = 50;
+    const c = wall(10);
+    sim.addConstraint(c);
+    assert.equal(sim.removeConstraint(c), true);
+    assert.equal(sim.removeConstraint(c), false);
+    sim.tick(1);
+    assert.equal(node.x, 50);
+  });
+
+  test("adding a constraint wakes a frozen simulation", () => {
+    const sim = new Simulation(chain(1), {});
+    sim.heat(0);
+    let woke = 0;
+    sim.on("wake", () => { woke++; });
+    sim.addConstraint(() => {});
+    assert.equal(woke, 1);
+  });
+
+  test("forces and constraints are kept apart", () => {
+    const sim = new Simulation(chain(1), {});
+    const f = () => {};
+    sim.addForce(f);
+    assert.equal(sim.removeConstraint(f), false);
+    assert.equal(sim.removeForce(f), true);
+  });
+
+  test("a throwing constraint is logged, and the others still run", (t) => {
+    const errors = t.mock.method(console, "error", () => {});
+    const sim = new Simulation(chain(1), { gravity: 0, friction: 1, cooling: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 0; node.y = 0; node.vx = 50;
+    sim.addConstraint(() => { throw new Error("boom"); });
+    sim.addConstraint(wall(10));
+    sim.tick(1);
+    assert.equal(errors.mock.callCount(), 1);
+    assert.equal(node.x, 10);
+  });
+});

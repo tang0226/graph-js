@@ -6,7 +6,7 @@
  * @import {
  *  SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
- *  SimEventMap, SimEventType, SimForce,
+ *  SimEventMap, SimEventType, SimForce, SimConstraint,
  * } from './typedefs/simulation.js'
  */
 /**
@@ -424,11 +424,12 @@ export class Simulation extends Emitter {
   _collisionGrid = new CollisionGrid();
 
   /**
-   * Custom forces, run each tick after the built-in ones
-   * @type {HookRegistry<"force", SimForce>}
+   * Custom forces, run each tick after the built-in ones, and constraints,
+   * run at the end of each tick
+   * @type {HookRegistry<"force" | "constraint", SimForce | SimConstraint>}
    * @private
    */
-  _forces = new HookRegistry(["force"], "Simulation");
+  _physics = new HookRegistry(["force", "constraint"], "Simulation");
 
   /** @private @type {number} */
   _version = 1;
@@ -1008,7 +1009,7 @@ export class Simulation extends Emitter {
     this._applyRepulsion();
     this._applySprings();
     this._applyGravity();
-    this._forces.run("force", f => f(this));
+    this._physics.run("force", f => f(this));
 
     const xs = this._nodeX, ys = this._nodeY, vxs = this._nodeVx, vys = this._nodeVy;
     const fxs = this._nodeFx, fys = this._nodeFy, ms = this._nodeMass, fixed = this._nodeFixed;
@@ -1036,8 +1037,9 @@ export class Simulation extends Emitter {
       vys.fill(0);
     }
 
-    // Enforce radius
+    // Enforce radius, then custom constraints, so the tick ends satisfying them
     this._enforceRadius();
+    this._physics.run("constraint", f => f(this));
     // Last, so listeners see the tick's final positions
     if (settled) this._emit("settle", {});
     return this;
@@ -1116,7 +1118,7 @@ export class Simulation extends Emitter {
    * @returns {this} self reference
    */
   addForce(f) {
-    this._forces.add("force", f);
+    this._physics.add("force", f);
     return this.heat();
   }
 
@@ -1127,7 +1129,34 @@ export class Simulation extends Emitter {
    * @returns {boolean} whether the force was there
    */
   removeForce(f) {
-    const removed = this._forces.remove("force", f);
+    const removed = this._physics.remove("force", f);
+    if (removed) this.heat();
+    return removed;
+  }
+
+
+  /**
+   * Adds a custom constraint, and wakes the layout. At the end of each tick,
+   * after collisions, it's called with the simulation and can change node
+   * positions and velocities in `nodeX`, `nodeY`, `nodeVx` and `nodeVy`.
+   * Constraints run in the order they were added; adding the same function
+   * again has no effect.
+   * @param {SimConstraint} f - constraint function
+   * @returns {this} self reference
+   */
+  addConstraint(f) {
+    this._physics.add("constraint", f);
+    return this.heat();
+  }
+
+
+  /**
+   * Removes a custom constraint, and wakes the layout if it was there.
+   * @param {SimConstraint} f - constraint function to remove
+   * @returns {boolean} whether the constraint was there
+   */
+  removeConstraint(f) {
+    const removed = this._physics.remove("constraint", f);
     if (removed) this.heat();
     return removed;
   }
