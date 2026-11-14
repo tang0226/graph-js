@@ -3,7 +3,7 @@
 /** @import { GraphOpts, NodeId, GraphEdge } from './graph.js' */
 /** @import { SimOptsInput } from './simulation.js' */
 /** @import { RendererOptsInput, Canvas, View } from './renderer.js' */
-/** @import { TweenUnit } from './tween.js' */
+/** @import { TweenUnit, Easing, EasingName } from './tween.js' */
 /** @import { InteractionOptsInput } from './interaction.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
@@ -18,6 +18,38 @@
  * @property {boolean | InteractionOptsInput} [interaction] - turns on
  *    built-in pointer interaction (see `enableInteraction()`): `true` for the
  *    default options, or the options to use. Off by default.
+ */
+
+/**
+ * Options for how `fitView()` and `focusNode()` move the view
+ * @typedef {object} ViewMoveOpts
+ * @property {number} [duration] - length of the move, in `unit`s: 600 ms or
+ *    36 frames by default. 0 moves the view straight there.
+ * @property {EasingName | Easing} [ease] - easing of the move's progress:
+ *    `"inOutCubic"` by default
+ * @property {TweenUnit} [unit] - what `duration` counts: the instance's
+ *    `tweenUnit` by default
+ */
+
+/**
+ * Options for `fitView()`
+ * @typedef {ViewMoveOpts & {
+ *   padding?: number,
+ * }} FitViewOpts
+ * `padding` is the space to leave around the graph, in canvas px: 16 by
+ * default.
+ */
+
+/**
+ * Options for `focusNode()`
+ * @typedef {ViewMoveOpts & {
+ *   zoom?: number,
+ *   zoomOut?: number,
+ * }} FocusNodeOpts
+ * `zoom` is the zoom to end at: the current zoom by default. `zoomOut` sets
+ * how readily the move zooms out to reach a node that's far away, rather than
+ * panning a long way: 1 by default, higher zooms out further, and 0 never
+ * zooms out past the start and end zoom.
  */
 
 /**

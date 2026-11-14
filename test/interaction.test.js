@@ -672,6 +672,56 @@ describe("Interaction: zooming", () => {
   });
 });
 
+describe("Interaction: view moves", () => {
+  // A long move that's still running whenever the test checks
+  const startMove = gjs => gjs.focusNode("b", { duration: 60000 });
+
+  test("panning cancels a fitView() or focusNode() move", () => {
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      const tw = startMove(gjs);
+      ptr.down(100, 100);
+      assert.equal(gjs.getTween("view"), tw, "a press alone doesn't grab the view");
+      ptr.move(150, 100);
+      assert.equal(gjs.getTween("view"), null);
+      ptr.up(150, 100);
+    } finally { restoreWindow(); }
+  });
+
+  test("wheel zooming cancels a move", () => {
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      gjs.fitView({ duration: 60000 });
+      ptr.wheel(400, 300, { deltaY: -100 });
+      assert.equal(gjs.getTween("view"), null);
+    } finally { restoreWindow(); }
+  });
+
+  test("a prevented pan or zoom leaves the move running", () => {
+    const { gjs, ptr, restoreWindow } = setup();
+    try {
+      const tw = startMove(gjs);
+      gjs.on("zoom", e => e.preventDefault());
+      gjs.on("panstart", e => e.preventDefault());
+      ptr.wheel(400, 300, { deltaY: -100 });
+      ptr.down(100, 100); ptr.move(150, 100); ptr.up(150, 100);
+      assert.equal(gjs.getTween("view"), tw);
+    } finally { restoreWindow(); }
+  });
+
+  test("dragging a node leaves the move running", () => {
+    const { gjs, log, ptr, restoreWindow } = setup();
+    try {
+      const tw = startMove(gjs);
+      // "a" is still at canvas (400, 300): the move's first step only starts
+      // its clock, at the starting view
+      ptr.down(400, 300); ptr.move(450, 300); ptr.up(450, 300);
+      assert.ok(acts(log).includes("nodedragstart"), "the drag happened");
+      assert.equal(gjs.getTween("view"), tw);
+    } finally { restoreWindow(); }
+  });
+});
+
 describe("Interaction: removed nodes", () => {
   test("removing the dragged node ends the drag straight away, at the latest pointer position", () => {
     const { gjs, log, ptr, restoreWindow } = setup();

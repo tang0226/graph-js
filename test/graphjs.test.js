@@ -565,6 +565,237 @@ describe("GraphJS: view", () => {
   });
 });
 
+describe("GraphJS: fitView and focusNode", () => {
+  // The path itself is tested in view-path.test.js; these check the moves.
+
+  /* Nodes "a" and "b" (radius 20) at fixed spots on an 800x600 canvas, at
+     view { x: 0, y: 0, zoom: 1 }. Frames are queued but never run, so only
+     `advance()` moves tweens; nothing ticks the layout. */
+  function moves({ a = [0, 0], b = [200, 0], tweenUnit = undefined } = {}) {
+    const raf = installRaf();
+    const restoreWindow = installWindow(1);
+    const gjs = new GraphJS({ canvas: makeCanvas(), tweenUnit });
+    gjs.addNode({ id: "a" });
+    gjs.addNode({ id: "b" });
+    gjs.addEdge("a", "b");
+    gjs.simulation.sync();
+    put(gjs, "a", ...a);
+    put(gjs, "b", ...b);
+    gjs.setView({ x: 0, y: 0, zoom: 1 });
+    let time = 1000;
+    const advance = (ms = 0) => { gjs.stepTweens(time += ms); };
+    return { gjs, raf, advance, done: () => { restoreWindow(); raf.restore(); } };
+  }
+
+  function put(gjs, id, x, y) {
+    const node = gjs.simulation.nodes.get(id);
+    node.x = x; node.y = y; node.vx = 0; node.vy = 0;
+  }
+
+  const assertView = (actual, expected) => {
+    for (const k of ["x", "y", "zoom"]) assertNear(actual[k], expected[k], `${k}: ${actual[k]} vs ${expected[k]}`);
+  };
+  const assertNear = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b)), msg);
+
+  test("viewFitted frames every node, with padding on each side", () => {
+    const { gjs, done } = moves();
+    try {
+      // Nodes span x -20..220 and y -20..20; the width limits the zoom
+      assertView(gjs.viewFitted(), { x: 100, y: 0, zoom: (800 - 32) / 240 });
+      assertView(gjs.viewFitted(0), { x: 100, y: 0, zoom: 800 / 240 });
+      assert.deepEqual(gjs.view, { x: 0, y: 0, zoom: 1 }, "nothing is applied");
+    } finally { done(); }
+  });
+
+  test("fitView glides to the fitted view, zooming at a steady exponential rate", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      const target = gjs.viewFitted();
+      gjs.fitView();
+      advance();                                  // the first step starts the clock
+      assert.deepEqual(gjs.view, { x: 0, y: 0, zoom: 1 });
+      advance(300);                               // halfway: inOutCubic(0.5) = 0.5
+      assertNear(Math.log(gjs.view.zoom), Math.log(target.zoom) / 2, "zoom halfway in log space");
+      assert.ok(gjs.view.x > 0 && gjs.view.x < 100);
+      advance(300);
+      assert.deepEqual(gjs.view, target);
+      assert.equal(gjs.isTweening(), false);
+    } finally { done(); }
+  });
+
+  test("fitView aims for the graph as it moves", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      gjs.fitView();
+      advance();
+      advance(300);
+      put(gjs, "b", 400, 0);                      // the layout spreads out mid-move
+      advance(300);
+      assertView(gjs.view, gjs.viewFitted());
+      assertNear(gjs.view.x, 200);
+    } finally { done(); }
+  });
+
+  test("fitView returns null for an empty graph, without starting a move", () => {
+    const { gjs, done } = moves();
+    try {
+      gjs.graph.clear();
+      assert.equal(gjs.viewFitted(), null);
+      assert.equal(gjs.fitView(), null);
+      assert.equal(gjs.isTweening(), false);
+    } finally { done(); }
+  });
+
+  test("focusNode centres a node at the given zoom, or the current one", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      gjs.focusNode("b", { zoom: 2 });
+      advance();
+      advance(600);
+      assert.deepEqual(gjs.view, { x: 200, y: 0, zoom: 2 });
+      gjs.focusNode("a");
+      advance();
+      advance(600);
+      assert.deepEqual(gjs.view, { x: 0, y: 0, zoom: 2 });
+    } finally { done(); }
+  });
+
+  test("focusNode follows a node that's still moving", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      gjs.focusNode("b");
+      advance();
+      advance(300);
+      put(gjs, "b", 400, 100);
+      advance(300);
+      assert.deepEqual(gjs.view, { x: 400, y: 100, zoom: 1 });
+    } finally { done(); }
+  });
+
+  test("a node removed mid-move leaves the move ending where it was", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      gjs.focusNode("b");
+      advance();
+      advance(300);
+      gjs.removeNode("b");
+      advance(300);
+      assert.deepEqual(gjs.view, { x: 200, y: 0, zoom: 1 });
+    } finally { done(); }
+  });
+
+  test("a node added since the last frame can be focused", () => {
+    const { gjs, done } = moves();
+    try {
+      gjs.addNode({ id: "c" });
+      gjs.focusNode("c", { duration: 0 });
+      const [x, y] = gjs.simulation.getPosition("c");
+      assert.deepEqual(gjs.view, { x, y, zoom: 1 });
+    } finally { done(); }
+  });
+
+  test("reaching a far node zooms out on the way, unless zoomOut is 0", () => {
+    const halfway = zoomOut => {
+      const { gjs, advance, done } = moves({ b: [50 * 800, 0] });
+      try {
+        gjs.focusNode("b", zoomOut === undefined ? {} : { zoomOut });
+        advance();
+        advance(300);
+        return gjs.view.zoom;
+      } finally { done(); }
+    };
+    assert.ok(halfway(undefined) < 0.1, "the default zooms out a long way for 50 views");
+    assert.ok(halfway(2) < halfway(undefined), "a higher zoomOut zooms out further");
+    assertNear(halfway(0), 1, "zoomOut 0 keeps the zoom");
+  });
+
+  test("a nearby node is reached without zooming out", () => {
+    const { gjs, advance, done } = moves();
+    try {
+      gjs.focusNode("b");
+      advance();
+      for (let i = 0; i < 6; i++) { advance(100); assert.equal(gjs.view.zoom, 1); }
+    } finally { done(); }
+  });
+
+  test("duration 0 moves the view straight there", async () => {
+    const { gjs, done } = moves();
+    try {
+      const tw = gjs.focusNode("b", { zoom: 3, duration: 0 });
+      assert.deepEqual(gjs.view, { x: 200, y: 0, zoom: 3 });
+      assert.equal(gjs.isTweening(), false);
+      assert.equal(await tw.finished, true);
+      gjs.fitView({ duration: 0 });
+      assert.deepEqual(gjs.view, gjs.viewFitted());
+    } finally { done(); }
+  });
+
+  test("a move is the \"view\" tween, so a new move replaces it", async () => {
+    const { gjs, done } = moves();
+    try {
+      const first = gjs.fitView();
+      assert.equal(gjs.getTween("view"), first);
+      const second = gjs.focusNode("a");
+      assert.equal(gjs.getTween("view"), second);
+      assert.equal(await first.finished, false, "the first was cancelled");
+      assert.equal(gjs.cancelTween("view"), true);
+    } finally { done(); }
+  });
+
+  test("duration and ease follow the unit, which defaults to tweenUnit", () => {
+    const { gjs, advance, done } = moves({ tweenUnit: "frames" });
+    try {
+      gjs.focusNode("b", { ease: "linear" });
+      for (let i = 0; i < 35; i++) advance(1000);
+      assert.equal(gjs.isTweening(), true, "36 frames by default");
+      advance(1000);
+      assert.equal(gjs.isTweening(), false);
+      gjs.focusNode("a", { unit: "ms", duration: 100 });
+      advance();
+      advance(100);
+      assert.equal(gjs.isTweening(), false);
+    } finally { done(); }
+  });
+
+  test("moves request frames while the loop is stopped", () => {
+    const { gjs, raf, done } = moves();
+    try {
+      assert.equal(raf.pending.size, 0);
+      gjs.fitView();
+      assert.equal(raf.pending.size, 1);
+    } finally { done(); }
+  });
+
+  test("invalid and unknown options throw", () => {
+    const { gjs, done } = moves();
+    try {
+      assert.throws(() => gjs.fitView({ speed: 2 }), /unknown option `speed`/);
+      assert.throws(() => gjs.focusNode("a", { padding: 2 }), /unknown option `padding`/);
+      assert.throws(() => gjs.fitView({ padding: -1 }), RangeError);
+      assert.throws(() => gjs.fitView({ padding: 400 }), /no room/);
+      assert.throws(() => gjs.fitView({ duration: -1 }), RangeError);
+      assert.throws(() => gjs.fitView({ unit: "s" }), RangeError);
+      assert.throws(() => gjs.fitView({ ease: "wobble" }), TypeError);
+      assert.throws(() => gjs.focusNode("a", { zoom: 0 }), RangeError);
+      assert.throws(() => gjs.focusNode("a", { zoomOut: -1 }), RangeError);
+      assert.throws(() => gjs.viewFitted(-5), RangeError);
+      assert.equal(gjs.isTweening(), false, "nothing started");
+    } finally { done(); }
+  });
+
+  test("an unknown node throws, and so does a move without a canvas", () => {
+    const { gjs, done } = moves();
+    try {
+      assert.throws(() => gjs.focusNode("zzz"), ReferenceError);
+    } finally { done(); }
+    const headless = new GraphJS();
+    headless.addNode({ id: "a" });
+    assert.throws(() => headless.fitView(), /no canvas/);
+    assert.throws(() => headless.focusNode("a"), /no canvas/);
+    assert.throws(() => headless.viewFitted(), /no canvas/);
+  });
+});
+
 describe("GraphJS: events", () => {
   // _emit is private: the interaction layer calls it, so tests stand in for it
   const pointer = (id = "a") => ({ id, x: 1, y: 2, originalEvent: { type: "pointerdown" } });

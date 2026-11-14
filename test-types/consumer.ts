@@ -23,7 +23,7 @@ import type {
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
-  GraphJSOpts, GraphJSHookType, GraphJSHook,
+  GraphJSOpts, GraphJSHookType, GraphJSHook, ViewMoveOpts, FitViewOpts, FocusNodeOpts,
   GraphJSPointerEventData, GraphJSNodeEventData, GraphJSEdgeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
   InteractionOptsInput, InteractionOpts,
   TweenValue, TweenUnit, Easing, EasingName, TweenOpts,
@@ -354,6 +354,23 @@ const unit: TweenUnit = "ms";
 const value: TweenValue = [1, 2];
 const tweenOpts: TweenOpts<number> = { set: n => {}, from: 0, to: 1, duration: 10 };
 new Tween(tweenOpts).step(16);
+
+// View moves
+const fitMove: Tween<number> | null = gjs.fitView({ padding: 24, duration: 400, ease: "outCubic" });
+const focusMove: Tween<number> = gjs.focusNode("a", { zoom: 2, zoomOut: 0.5, unit: "frames", ease: t => t });
+const fitted: View | null = gjs.viewFitted(8);
+const rendererFitted: View | null = r.viewFitted();
+const moveOpts: ViewMoveOpts = { duration: 0 };
+const fitOpts: FitViewOpts = { ...moveOpts, padding: 0 };
+const focusOpts: FocusNodeOpts = { ...moveOpts, zoom: 1, zoomOut: 2 };
+gjs.fitView(fitOpts);
+gjs.focusNode("a", focusOpts);
+// @ts-expect-error -- padding is for fitView only
+gjs.focusNode("a", { padding: 4 });
+// @ts-expect-error -- zoomOut is for focusNode only
+gjs.fitView({ zoomOut: 1 });
+// @ts-expect-error -- not a built-in easing
+gjs.fitView({ ease: "springy" });
 
 // Image request options use the DOM's own types, so invalid values are rejected
 new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });

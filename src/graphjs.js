@@ -2,6 +2,7 @@
 /** @import { Canvas, View, ExportOpts, ExportBlobOpts } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
+/** @import { ViewMoveOpts, FitViewOpts, FocusNodeOpts } from './typedefs/graphjs.js' */
 /** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
 /** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
 
@@ -13,6 +14,8 @@ import { Tween } from "./tween.js";
 import { Interaction } from "./interaction.js";
 import { Emitter } from "./emitter.js";
 import { HookRegistry } from "./hook-registry.js";
+import { viewPath } from "./view-path.js";
+import { checkKnownKeys, checkEach, checkNumber, checkOneOf } from "./validate.js";
 import { keysOf, now } from "./utils.js";
 
 
@@ -28,6 +31,36 @@ const EVENT_NAMES = {
   backgroundclick: true,
   panstart: true, pan: true, panend: true, zoom: true,
 };
+
+
+/**
+ * Key of the tween that `fitView()` and `focusNode()` move the view with, so
+ * a new move replaces one in progress
+ */
+const VIEW_TWEEN_KEY = "view";
+
+/** Default length of a view move, by tween unit */
+const VIEW_MOVE_DURATION = Object.freeze({ ms: 600, frames: 36 });
+
+/** Checks for the options every view move takes. `ease` is checked by `Tween`. */
+const VIEW_MOVE_RULES = {
+  duration: (/** @type {unknown} */ v) => checkNumber("GraphJS", "duration", v, { min: 0 }),
+  ease: () => {},
+  unit: (/** @type {unknown} */ v) => checkOneOf("GraphJS", "unit", v, ["ms", "frames"]),
+};
+
+const FIT_VIEW_RULES = {
+  ...VIEW_MOVE_RULES,
+  padding: (/** @type {unknown} */ v) => checkNumber("GraphJS", "padding", v, { min: 0 }),
+};
+const FIT_VIEW_OPTION_NAMES = new Set(Object.keys(FIT_VIEW_RULES));
+
+const FOCUS_NODE_RULES = {
+  ...VIEW_MOVE_RULES,
+  zoom: (/** @type {unknown} */ v) => checkNumber("GraphJS", "zoom", v, { min: 0, aboveMin: true }),
+  zoomOut: (/** @type {unknown} */ v) => checkNumber("GraphJS", "zoomOut", v, { min: 0 }),
+};
+const FOCUS_NODE_OPTION_NAMES = new Set(Object.keys(FOCUS_NODE_RULES));
 const EVENT_TYPES = keysOf(EVENT_NAMES);
 
 
@@ -220,7 +253,14 @@ export class GraphJS extends Emitter {
       this._interaction.setOpts(opts);
       return this;
     }
-    this._interaction = new Interaction(this, (type, data) => this._emit(type, data), opts);
+    this._interaction = new Interaction(this, (type, data) => {
+      const prevented = this._emit(type, data);
+      // Grabbing the view stops a fitView() or focusNode() move, which would
+      // otherwise pull it back. A listener that prevents the pan or zoom
+      // stops this too, as part of the built-in response.
+      if (!prevented && (type === "panstart" || type === "zoom")) this.cancelTween(VIEW_TWEEN_KEY);
+      return prevented;
+    }, opts);
     if (this.canvas) this._interaction.bind(this.canvas);
     return this;
   }
@@ -790,5 +830,117 @@ export class GraphJS extends Emitter {
   zoomBy(factor, cx = undefined, cy = undefined) {
     this._renderer.zoomBy(factor, cx, cy);
     return this;
+  }
+
+
+  /**
+   * Returns the view that frames the whole graph, without applying it.
+   * Delegates to `Renderer.viewFitted()`.
+   * @param {number} [padding=16] - canvas px to leave around the graph
+   * @returns {View | null} the fitted view, or `null` if the graph has no
+   *    nodes
+   * @throws {RangeError} throws if `padding` is invalid or leaves no room
+   *    for the graph
+   * @throws {Error} throws if no canvas is attached
+   */
+  viewFitted(padding = undefined) {
+    this._requireCanvas();
+    return this._renderer.viewFitted(padding);
+  }
+
+
+  /**
+   * Moves the view to frame the whole graph, as `viewFitted()` works it out.
+   * The move zooms at a steady exponential rate and pans at a steady speed on
+   * screen. It aims for the graph's current frame on every frame, so it ends
+   * framing a layout that's still settling.
+   *
+   * The move is a tween with the key `"view"`: it replaces another
+   * `fitView()` or `focusNode()` move, `cancelTween("view")` stops it, and
+   * built-in panning and wheel zooming cancel it. Frames are requested while
+   * the loop is stopped, as `requestRender()` does.
+   * @param {FitViewOpts} [opts={}] - `padding` around the graph, in canvas
+   *    px (16 by default), and the move's `duration`, `ease` and `unit`
+   * @returns {Tween<number> | null} the move's tween, or `null` if the graph
+   *    has no nodes
+   * @throws {TypeError | RangeError} throws if an option is invalid or
+   *    unknown, or `padding` leaves no room for the graph
+   * @throws {Error} throws if no canvas is attached
+   */
+  fitView(opts = {}) {
+    checkKnownKeys("GraphJS", opts, FIT_VIEW_OPTION_NAMES);
+    checkEach(opts, FIT_VIEW_RULES);
+    this._requireCanvas();
+    const { padding, ...move } = opts;
+    const first = this._renderer.viewFitted(padding);
+    if (!first) return null;
+    let last = first;
+    // Nodes removed mid-move leave the last frame as the target
+    return this._moveView(() => (last = this._renderer.viewFitted(padding) ?? last), 0, move);
+  }
+
+
+  /**
+   * Moves the view to centre a node, at the current zoom or a given one. The
+   * move zooms at a steady exponential rate and pans at a steady speed on
+   * screen. To reach a node that's far away, in terms of how much of the
+   * graph the current and target views show, it zooms out on the way and
+   * back in, rather than panning a long way across the canvas. `zoomOut`
+   * sets how readily it does that. It follows the node if it's still moving,
+   * and ends where the node was last if it's removed.
+   *
+   * The move is a tween with the key `"view"`, as for `fitView()`.
+   * @param {NodeId} id - id of the node
+   * @param {FocusNodeOpts} [opts={}] - the `zoom` to end at (the current zoom
+   *    by default), `zoomOut` (1 by default; 0 never zooms out past the two
+   *    ends), and the move's `duration`, `ease` and `unit`
+   * @returns {Tween<number>} the move's tween
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
+   * @throws {ReferenceError} throws if there's no node with the id
+   * @throws {Error} throws if no canvas is attached
+   */
+  focusNode(id, opts = {}) {
+    checkKnownKeys("GraphJS", opts, FOCUS_NODE_OPTION_NAMES);
+    checkEach(opts, FOCUS_NODE_RULES);
+    this._requireCanvas();
+    if (!this._graph.hasNode(id)) throw new ReferenceError(`GraphJS: no node with id "${id}"`);
+    const { zoom = this.view.zoom, zoomOut = 1, ...move } = opts;
+    this._simulation.sync();                   // a node added since the last frame
+    let last = /** @type {[number, number]} */ (this._simulation.getPosition(id));
+    return this._moveView(() => {
+      last = this._simulation.getPosition(id) ?? last;
+      return { x: last[0], y: last[1], zoom };
+    }, zoomOut, move);
+  }
+
+
+  /**
+   * Starts a view move along `viewPath()`, from the view when the move
+   * starts to `target()`, which is read again on every frame.
+   * @param {() => View} target - the view to end at
+   * @param {number} zoomOut - how readily the path zooms out (see `viewPath()`)
+   * @param {ViewMoveOpts} move - `duration`, `ease` and `unit`
+   * @returns {Tween<number>} the move's tween
+   * @private
+   */
+  _moveView(target, zoomOut, { duration, ease = "inOutCubic", unit = this._tweenUnit }) {
+    /** @type {View | null} */
+    let start = null;
+    const tw = this.tween({
+      key: VIEW_TWEEN_KEY,
+      // Read when the move starts: the view may change before the next frame
+      from: () => { start = { ...this.view }; return 0; },
+      to: /** @type {number} */ (1),
+      duration: duration ?? VIEW_MOVE_DURATION[unit],
+      ease, unit,
+      set: p => {
+        const size = this._renderer.size;
+        if (!start || !size) return;           // detached mid-move
+        this._renderer.setView(viewPath(start, target(), size.w, size.h, zoomOut)(p));
+      },
+    });
+    if (duration === 0) tw.finish();
+    else this.requestRender();
+    return tw;
   }
 }

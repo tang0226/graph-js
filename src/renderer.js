@@ -1225,6 +1225,32 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Returns the view that frames the whole graph on the canvas, without
+   * applying it: centred on the graph, at the largest zoom that fits it with
+   * `padding` to spare on each side. The graph includes self-loops, bowed
+   * edges and the labels shown at that zoom, as `toCanvas({ fit: true })`
+   * frames it.
+   * @param {number} [padding=16] - canvas px to leave around the graph
+   * @returns {View | null} the fitted view, or `null` if the graph has no
+   *    nodes
+   * @throws {RangeError} throws if `padding` isn't a finite number, 0 or
+   *    more, or leaves no room for the graph
+   * @throws {Error} throws if no canvas is attached
+   */
+  viewFitted(padding = 16) {
+    checkNumber("Renderer", "padding", padding, { min: 0 });
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+    this.sync();
+    if (this._simulation.nodeList.length === 0) return null;
+    if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
+    const { w, h } = this._size;
+    const zoom = this._fitZoom(w, h, padding);
+    const b = this._graphBounds(zoom);
+    return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom };
+  }
+
+
+  /**
    * Multiplies the zoom by a factor: above 1 zooms in, below 1 zooms out.
    * Anchored as `zoomTo()` is.
    * @param {number} factor - factor to multiply the zoom by
@@ -1881,6 +1907,38 @@ export class Renderer extends Emitter {
 
 
   /**
+   * The largest zoom at which the whole graph fits in a width and height,
+   * leaving `padding` around it. Expects at least one node, and labels to be
+   * measured.
+   * @param {number | undefined} width - width to fit, in canvas px;
+   *    `undefined` to fit the height only
+   * @param {number | undefined} height - height to fit, in canvas px;
+   *    `undefined` to fit the width only
+   * @param {number} padding - canvas px to leave on each side
+   * @returns {number} the zoom; the current zoom for a graph with no extent
+   * @throws {RangeError} throws if `padding` leaves no room for the graph
+   * @private
+   */
+  _fitZoom(width, height, padding) {
+    /** @param {Bounds} b @returns {number} the largest zoom that fits `b` */
+    const fitZoom = b => Math.min(
+      width === undefined ? Infinity : (width - 2 * padding) / (b.x1 - b.x0),
+      height === undefined ? Infinity : (height - 2 * padding) / (b.y1 - b.y0),
+    );
+    // Label sizes depend on the zoom: fit them at full size, then at the
+    // size they are at that zoom. The second fit is closer, but labels
+    // that only show once zoomed in could make it overflow, so it's only
+    // kept if it still fits.
+    const first = fitZoom(this._graphBounds(null));
+    const second = fitZoom(this._graphBounds(first));
+    let zoom = fitZoom(this._graphBounds(second)) >= second ? second : first;
+    if (zoom === Infinity) zoom = this._view.zoom;    // a graph with no extent
+    if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
+    return zoom;
+  }
+
+
+  /**
    * Works out an export's size and view.
    * @param {boolean} fit - whether to frame the whole graph
    * @param {number} padding - canvas px around a fitted graph
@@ -1902,24 +1960,8 @@ export class Renderer extends Emitter {
       return { size: { w, h }, view: { ...current } };
     }
 
-    let zoom = current.zoom;
-    if (width !== undefined || height !== undefined) {
-      /** @param {Bounds} b @returns {number} the largest zoom that fits `b` */
-      const fitZoom = b => Math.min(
-        width === undefined ? Infinity : (width - 2 * padding) / (b.x1 - b.x0),
-        height === undefined ? Infinity : (height - 2 * padding) / (b.y1 - b.y0),
-      );
-      // Label sizes depend on the zoom: fit them at full size, then at the
-      // size they are at that zoom. The second fit is closer, but labels
-      // that only show once zoomed in could make it overflow, so it's only
-      // kept if it still fits.
-      const first = fitZoom(this._graphBounds(null));
-      const second = fitZoom(this._graphBounds(first));
-      zoom = fitZoom(this._graphBounds(second)) >= second ? second : first;
-      if (zoom === Infinity) zoom = current.zoom;     // a graph with no extent
-      if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
-    }
-
+    const zoom = width !== undefined || height !== undefined ?
+      this._fitZoom(width, height, padding) : current.zoom;
     const b = this._graphBounds(zoom);
     return {
       size: { w: width ?? (b.x1 - b.x0) * zoom + 2 * padding, h: height ?? (b.y1 - b.y0) * zoom + 2 * padding },

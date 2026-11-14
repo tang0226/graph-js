@@ -30,6 +30,7 @@ npm install @tang0226/graph-js
 - [Interaction](#interaction)
   - [Built-in interaction](#built-in-interaction)
   - [Panning and zooming](#panning-and-zooming)
+  - [Fitting and focusing the view](#fitting-and-focusing-the-view)
   - [Coordinates and hit-testing](#coordinates-and-hit-testing)
   - [Building your own interaction](#building-your-own-interaction)
 - [Events](#events)
@@ -628,7 +629,7 @@ const next = gjs.viewZoomedTo(2, 300, 200);   // { x, y, zoom }
 gjs.setView(next);                            // the same as gjs.zoomTo(2, 300, 200)
 ```
 
-To animate the view, set it from a tween. Zooming with `zoomTo()` keeps the anchor fixed the whole way:
+To frame the graph or fly to a node, use `fitView()` and `focusNode()` (see [below](#fitting-and-focusing-the-view)). For other animations, set the view from a tween. Zooming with `zoomTo()` keeps the anchor fixed the whole way:
 
 ```js
 gjs.tween({
@@ -641,6 +642,47 @@ gjs.tween({
 - **Drawing:** like other changes made from code, view changes show on the next frame. If the animation is stopped, call `gjs.renderer.render()`.
 - **On the renderer:** the same methods are on `gjs.renderer`, where they return the renderer. `gjs.view` is the renderer's `view`.
 - **Assigning:** `gjs.renderer.view = { zoom: 2 }` is checked the same way as `setView()`. Writing a single field, as in `gjs.renderer.view.zoom = 2`, isn't checked, so prefer `setView()`.
+
+### Fitting and focusing the view
+
+```js
+gjs.fitView();                          // frame the whole graph
+gjs.fitView({ padding: 40 });           // ... with 40 px around it (16 by default)
+
+gjs.focusNode("alice");                 // centre a node, at the current zoom
+gjs.focusNode("alice", { zoom: 3 });    // ... zooming to 3x on the way
+gjs.focusNode("alice", { zoomOut: 0 }); // ... without zooming out (see below)
+
+gjs.viewFitted();                       // the view fitView() aims for: { x, y, zoom }, or null
+```
+
+Both glide the view there, by default over 600 ms with `"inOutCubic"` easing. They aim for where the graph or node is on every frame, so they land on a layout that's still settling, or a node that's still moving. `fitView()` frames the graph as `toCanvas({ fit: true })` does, including self-loops, bowed edges and the labels shown at the fitted zoom. `fitView()` returns `null` for an empty graph, `focusNode()` throws a `ReferenceError` for an unknown node, and both need an attached canvas.
+
+**How the view moves.** The zoom changes at a steady exponential rate, so zooming from 0.1x to 1x takes as long as zooming from 1x to 10x. The pan keeps a steady speed on screen rather than in the graph: it covers less of the graph while zoomed in, and more while zoomed out, so the picture never crawls or races.
+
+**Zooming out on the way.** To reach a node that's far away, `focusNode()` zooms out partway and back in, rather than panning a long way across the canvas. How far is worked out from the distance to the node, counted in canvas widths and heights at the start and end zoom. It zooms out further for nodes that are further away, and not at all for nearby ones. `zoomOut` sets how readily it does this:
+
+| `zoomOut` | |
+|---|---|
+| `0` | never zooms out past the start and end zoom |
+| `1` | the default. A node 5 canvas widths away is reached by zooming out about 2.4x, one 10 widths away about 6.5x. Nodes up to about 3 widths away are reached without zooming out. |
+| higher | zooms out further, and for shorter distances |
+
+Zooming out costs time too, since the view has to zoom back in. `zoomOut` weighs one canvas width of panning against zooming by a factor of e (about 2.7x), and the path takes whichever mix costs least.
+
+**Options.** Both take `duration`, `ease` and `unit`, as `tween()` does. `duration` defaults to 600 ms, or 36 frames when the unit is `"frames"`, and `0` moves the view straight there. `unit` defaults to the `tweenUnit` option of `new GraphJS()`.
+
+**Stopping a move.** A move is a tween with the key `"view"`, and returns it:
+
+```js
+const move = gjs.focusNode("alice");
+await move.finished;                    // true once it arrives, false if cancelled
+gjs.cancelTween("view");                // stop wherever it is
+```
+
+- **One at a time:** starting a move replaces one in progress, and so does any tween you start with the key `"view"`.
+- **Interaction:** with [built-in interaction](#built-in-interaction), panning or zooming with the wheel cancels a move, so it doesn't pull the view back. A listener that prevents the `panstart` or `zoom` event leaves the move running.
+- **Drawing:** while the loop is stopped, a move requests frames as `requestRender()` does, until it ends.
 
 ### Coordinates and hit-testing
 
