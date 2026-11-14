@@ -97,7 +97,16 @@ All parameters are optional. Each layer's options are passed under that layer's 
 const gjs = new GraphJS({
   canvas,                           // or attach one later
   tweenUnit: "ms",                  // default unit of tweens: "ms" or "frames" (see "Tweens")
-  interaction: false,               // true, or options, to drag, pan and zoom (see "Built-in interaction")
+
+  interaction: {                    // off by default; true, or options, turns it on (see "Built-in interaction")
+    dragNodes: true,                // dragging a node moves it; false pans instead
+    pan: true,                      // dragging the background pans the view
+    zoom: true,                     // the wheel zooms; false leaves the wheel to the page
+    dragThreshold: 4,               // px the pointer moves while pressed before a drag starts
+    zoomSpeed: 0.002,               // zoom change per wheel step
+    minZoom: 0.01,                  // the wheel doesn't zoom out past this
+    maxZoom: 100,                   // the wheel doesn't zoom in past this
+  },
 
   graph: {
     directed: true,                 // default false; cannot be changed after instantiation
@@ -115,12 +124,20 @@ const gjs = new GraphJS({
     useBarnesHut: true,             // speed up repulsion on large graphs (see "Barnes-Hut")
     barnesHut: { theta: 0.9, maxDepth: 20, capacity: 1024 },  // tuning for Barnes-Hut
     collision: "grid",              // how overlapping nodes are found (see "Collisions")
-    nodeConfig: { radius: 20 },     // default physical settings for nodes
-    edgeConfig: { length: 50, stiffness: 0.015 },  // default spring settings for edges
+    nodeConfig: {                   // default physical settings for nodes (see "Configuring nodes and edges")
+      radius: 20,                   // physical and drawn radius
+      mass: 1,                      // heavier nodes are pushed around less
+      charge: 1,                    // repulsion strength; 0 for none (see "Node charge")
+      fixed: false,                 // true holds the node in place
+    },
+    edgeConfig: {                   // default spring settings for edges
+      length: 50,                   // resting length
+      stiffness: 0.015,             // how strongly the edge holds its length
+    },
   },
 
   renderer: {                       // the following are the same as the default values
-    background: "#ffffff",        // canvas fill each frame; null for a transparent canvas
+    background: "#ffffff",          // canvas fill each frame; null for a transparent canvas
     renderEdges: true,              // set false to draw nodes only
     renderLabels: true,             // set false to hide every node label (see "Node labels")
     labelFont: "Arial",             // font family for labels
@@ -137,8 +154,23 @@ const gjs = new GraphJS({
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
     imageCacheMB: 64,               // soft memory budget for cached node image sizes
-    nodeConfig: { color: "#ffffff" },
-    edgeConfig: { color: "#000000", width: 1 },
+    nodeConfig: {                   // default style for nodes (see "Configuring nodes and edges")
+      color: "#ffffff",             // fill color
+      outlineColor: "#000000",
+      outlineWidth: 1,              // in simulation units; 0 for no outline
+      image: null,                  // image URL drawn inside the node (see "Node images")
+      label: null,                  // text drawn beside the node (see "Node labels")
+      renderLabel: true,            // false hides this node's label
+      labelScale: 15,               // label font size, in simulation units
+      labelTextColor: "#000000",
+    },
+    edgeConfig: {                   // default style for edges
+      color: "#000000",             // also used for the arrowhead
+      width: 1,                     // in simulation units (see "Edge and outline widths")
+      arrow: null,                  // null follows the graph: arrows only when it's directed
+      arrowSize: 10,                // arrowhead length, in simulation units
+      bow: 14,                      // how far a pair of opposite directed edges curve apart
+    },
   },
 });
 ```
