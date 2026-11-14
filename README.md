@@ -223,11 +223,32 @@ gjs.graph.nodes;             // Map: id -> { id, data }
 gjs.graph.edges;             // Set of { src, dest, data }
 gjs.graph.directed;
 
-gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, charge, fixed, ... }
+gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, charge, fixed, fx, fy }
 gjs.simulation.nodeList;     // the same nodes as an array
 ```
 
-These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`.
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`; assigning them throws a `TypeError`, as does assigning `fx` and `fy`, the force totals from the last tick.
+
+Simulation nodes are live views: each field reads the simulation's current state, so a node object never goes stale, and a node keeps the same object for as long as it's in the graph. Once a node is removed and the simulation syncs, its old object reads `undefined` (and `fixed` reads `false`), and setting its fields does nothing.
+
+The simulation stores that state in typed arrays, one slot per node. For code that loops over every node, such as statistics or custom drawing, reading them directly is faster than going through node objects:
+
+```js
+const sim = gjs.simulation;
+sim.nodeId;                  // id of the node in each slot
+sim.nodeIndex.get("alice");  // alice's slot
+sim.nodeX; sim.nodeY;        // Float64Array positions
+sim.nodeVx; sim.nodeVy;      // velocities
+sim.nodeRadius; sim.nodeMass; sim.nodeCharge;
+sim.nodeFixed;               // Uint8Array: 1 if fixed
+sim.nodeFx; sim.nodeFy;      // force totals from the last tick
+
+// Average position of every node
+let cx = 0, cy = 0;
+for (let i = 0; i < sim.nodeX.length; i++) { cx += sim.nodeX[i]; cy += sim.nodeY[i]; }
+```
+
+Elements of `nodeX`, `nodeY`, `nodeVx` and `nodeVy` can be set, like the node fields (followed by `heat()`); the other arrays are read-only. The arrays are replaced whenever nodes or edges are added or removed, which increments `sim.version`, so read them from the simulation each time rather than keeping them.
 
 The graph also answers questions about single nodes and edges:
 
@@ -1188,6 +1209,11 @@ import { Simulation } from "@tang0226/graph-js/simulation";
 Members whose names start with `_` are internal and declared `private`, so TypeScript rejects them. Types that aren't exported from the package root are internal too, and may change between versions.
 
 ## Upgrading
+
+### From 0.7
+
+- **Simulation nodes are live views of typed arrays** (see [Reading graph and simulation state](#reading-graph-and-simulation-state)). `x`, `y`, `vx` and `vy` can still be set, and code that reads node fields or loops over `nodeList` keeps working. Assigning `radius`, `mass`, `charge`, `fixed`, `fx` or `fy` now throws a `TypeError`: config fields were already overwritten at the next sync, so set them with `setNodeConfig()`. The fields are getters, so `Object.keys(node)` and spreading (`{ ...node }`) only include `id`; read the fields by name instead. A removed node's object reads `undefined` once the simulation syncs, where it used to keep its last values; copy any values you need before removing the node.
+- **The `SimNode` type is a class.** It still describes the objects in `simulation.nodes`, but has read-only `radius`, `mass`, `charge`, `fixed`, `fx` and `fy`, so TypeScript code that assigns them no longer compiles.
 
 ### From 0.6
 

@@ -4,7 +4,7 @@
 /** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
 /**
  * @import {
- *  SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
+ *  SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
  *  SimEventMap, SimEventType,
  * } from './typedefs/simulation.js'
@@ -57,6 +57,91 @@ const SIM_EVENT_TYPES = keysOf(SIM_EVENT_NAMES);
 
 
 /**
+ * Moves a `SimNode` view to another node slot. Set by `SimNode`'s static block,
+ * so the node slot stays private to the class and this module.
+ * @type {(node: SimNode, i: number) => void}
+ */
+let setNodeSlot;
+
+
+/**
+ * Live view of one simulation node. It stores nothing but its id and slot:
+ * every field reads or writes the simulation's `node*` arrays, so it is always
+ * current. A node keeps the same view while it stays in the graph.
+ *
+ * `x`, `y`, `vx` and `vy` can be set directly (followed by `heat()`). The
+ * other fields are read-only: `mass`, `radius`, `charge` and `fixed` are
+ * resolved from config, so set them with `setNodeConfig()`. Once its node is
+ * removed and the simulation syncs, a view's numeric fields read `undefined`,
+ * `fixed` reads `false`, and writes do nothing.
+ *
+ * Created by `Simulation`; not meant to be constructed directly.
+ */
+export class SimNode {
+  /** @type {Simulation} */
+  #sim;
+  /** @type {number} */
+  #i;
+
+  /**
+   * Node id (matches corresponding `GraphNode`)
+   * @readonly
+   * @type {NodeId}
+   */
+  id;
+
+  static {
+    setNodeSlot = (node, i) => { node.#i = i; };
+  }
+
+  /**
+   * @param {Simulation} sim - owning simulation
+   * @param {NodeId} id - node id
+   * @param {number} i - slot in the simulation's `node*` arrays
+   */
+  constructor(sim, id, i) {
+    this.#sim = sim;
+    this.id = id;
+    this.#i = i;
+  }
+
+  /** x coordinate */
+  get x() { return this.#sim.nodeX[this.#i]; }
+  set x(v) { this.#sim.nodeX[this.#i] = v; }
+
+  /** y coordinate */
+  get y() { return this.#sim.nodeY[this.#i]; }
+  set y(v) { this.#sim.nodeY[this.#i] = v; }
+
+  /** x velocity */
+  get vx() { return this.#sim.nodeVx[this.#i]; }
+  set vx(v) { this.#sim.nodeVx[this.#i] = v; }
+
+  /** y velocity */
+  get vy() { return this.#sim.nodeVy[this.#i]; }
+  set vy(v) { this.#sim.nodeVy[this.#i] = v; }
+
+  /** [read-only] x force total, reset and accumulated every tick */
+  get fx() { return this.#sim.nodeFx[this.#i]; }
+
+  /** [read-only] y force total, reset and accumulated every tick */
+  get fy() { return this.#sim.nodeFy[this.#i]; }
+
+  /** [read-only, set with `setNodeConfig()`] physical mass of the node */
+  get mass() { return this.#sim.nodeMass[this.#i]; }
+
+  /** [read-only, set with `setNodeConfig()`] physical (and rendered) radius */
+  get radius() { return this.#sim.nodeRadius[this.#i]; }
+
+  /** [read-only, set with `setNodeConfig()`] charge for electrostatic repulsion */
+  get charge() { return this.#sim.nodeCharge[this.#i]; }
+
+  /** [read-only, set with `setNodeConfig()`] whether the node is immovable */
+  get fixed() { return this.#sim.nodeFixed[this.#i] === 1; }
+}
+
+
+/**
  * Simulates repulsion, springs, friction, gravity,
  * and collision resolution for an underlying `Graph` instance.
  * Emits the events in `SimEventMap`, through `on()` and `off()`.
@@ -81,8 +166,9 @@ export class Simulation extends Emitter {
   /** @private @type {Map<NodeId, SimNode>} */
   _nodes = new Map();
   /**
-   * Map of mutable physical node objects, keyed by keys used in the
-   * underlying `graph` (mirrors Map shape of `Graph.nodes`).
+   * Map of live node views, keyed by keys used in the underlying `graph`
+   * (mirrors Map shape of `Graph.nodes`). A node keeps the same view while it
+   * stays in the graph.
    * @returns {ReadonlyMap<NodeId, SimNode>}
    */
   get nodes() { return this._nodes; }
@@ -91,7 +177,7 @@ export class Simulation extends Emitter {
   /** @private @type {SimNode[]} */
   _nodeList = [];
   /**
-   * Cached array of mutable simulation nodes, recreated in effective
+   * Cached array of live node views, in slot order. Recreated in effective
    * `sync()` calls.
    * @returns {ReadonlyArray<SimNode>}
    */
@@ -104,74 +190,111 @@ export class Simulation extends Emitter {
    */
   _nodeIndex = new Map();
   /**
-   * Cached map connecting node ids to indices in `nodeList`.
-   * Recreated in effective `sync()` calls.
+   * Cached map connecting node ids to their slots in `nodeList` and the
+   * `node*` arrays. Recreated in effective `sync()` calls.
    * @returns {ReadonlyMap<NodeId, number>}
    */
   get nodeIndex() { return this._nodeIndex; }
 
 
+  /*
+   * Node state, one slot per node, parallel to `nodeList`. These arrays are the
+   * only store of node state: `SimNode` views read and write them. Replaced
+   * whenever `version` changes, so re-read them after a structural sync rather
+   * than keeping them.
+   */
+
+  /** @private @type {NodeId[]} */
+  _nodeId = [];
   /**
-   * Cached array of resolved node radius values.
+   * [read-only] Id of the node in each slot
+   * @returns {ReadonlyArray<NodeId>}
+   */
+  get nodeId() { return this._nodeId; }
+
+  /** @private @type {Float64Array} */
+  _nodeX = new Float64Array(0);
+  /**
+   * x coordinate of each node. Elements can be set (followed by `heat()`).
+   * @returns {Float64Array}
+   */
+  get nodeX() { return this._nodeX; }
+
+  /** @private @type {Float64Array} */
+  _nodeY = new Float64Array(0);
+  /**
+   * y coordinate of each node. Elements can be set (followed by `heat()`).
+   * @returns {Float64Array}
+   */
+  get nodeY() { return this._nodeY; }
+
+  /** @private @type {Float64Array} */
+  _nodeVx = new Float64Array(0);
+  /**
+   * x velocity of each node. Elements can be set (followed by `heat()`).
+   * @returns {Float64Array}
+   */
+  get nodeVx() { return this._nodeVx; }
+
+  /** @private @type {Float64Array} */
+  _nodeVy = new Float64Array(0);
+  /**
+   * y velocity of each node. Elements can be set (followed by `heat()`).
+   * @returns {Float64Array}
+   */
+  get nodeVy() { return this._nodeVy; }
+
+  /** @private @type {Float64Array} */
+  _nodeFx = new Float64Array(0);
+  /**
+   * [read-only] x force total of each node, reset and accumulated every tick
+   * @returns {Readonly<Float64Array>}
+   */
+  get nodeFx() { return this._nodeFx; }
+
+  /** @private @type {Float64Array} */
+  _nodeFy = new Float64Array(0);
+  /**
+   * [read-only] y force total of each node, reset and accumulated every tick
+   * @returns {Readonly<Float64Array>}
+   */
+  get nodeFy() { return this._nodeFy; }
+
+  /** @private @type {Float64Array} */
+  _nodeMass = new Float64Array(0);
+  /**
+   * [read-only, set with `setNodeConfig()`] Resolved mass of each node.
    * Updated in effective `sync()` calls.
-   * @type {Float64Array}
-   * @private
+   * @returns {Readonly<Float64Array>}
    */
-  _nodeRadius = new Float64Array();
+  get nodeMass() { return this._nodeMass; }
 
-
+  /** @private @type {Float64Array} */
+  _nodeRadius = new Float64Array(0);
   /**
-   * Cached array of resolved node charge values.
+   * [read-only, set with `setNodeConfig()`] Resolved radius of each node.
    * Updated in effective `sync()` calls.
-   * @type {Float64Array}
-   * @private
+   * @returns {Readonly<Float64Array>}
    */
-  _nodeCharge = new Float64Array();
+  get nodeRadius() { return this._nodeRadius; }
 
-  
+  /** @private @type {Float64Array} */
+  _nodeCharge = new Float64Array(0);
   /**
-   * Cached array of resolved node fixed flags.
+   * [read-only, set with `setNodeConfig()`] Resolved charge of each node.
    * Updated in effective `sync()` calls.
-   * @type {Uint8Array}
-   * @private
+   * @returns {Readonly<Float64Array>}
    */
-  _nodeFixed = new Uint8Array();
+  get nodeCharge() { return this._nodeCharge; }
 
-
+  /** @private @type {Uint8Array} */
+  _nodeFixed = new Uint8Array(0);
   /**
-   * Cached array of resolved node x coordinates. Resized when `sync()`
-   * updates the node count. Updated by `_packPositions()`
-   * @type {Float64Array}
-   * @private
+   * [read-only, set with `setNodeConfig()`] Resolved fixed flag of each node:
+   * 1 if fixed, 0 if not. Updated in effective `sync()` calls.
+   * @returns {Readonly<Uint8Array>}
    */
-  _nodeX = new Float64Array();
-
-
-  /**
-   * Cached array of resolved node y coordinates. Resized when `sync()`
-   * updates the node count. Updated by `_packPositions()`
-   * @type {Float64Array}
-   * @private
-   */
-  _nodeY = new Float64Array();
-
-
-  /**
-   * Scratch array for accumulating x force values in Barnes-Hut repulsion
-   * before applying them to SimNode objects.
-   * @type {Float64Array}
-   * @private
-   */
-  _nodeFx = new Float64Array();
-
-
-  /**
-   * Scratch array for accumulating x force values in Barnes-Hut repulsion
-   * before applying them to SimNode objects.
-   * @type {Float64Array}
-   * @private
-   */
-  _nodeFy = new Float64Array();
+  get nodeFixed() { return this._nodeFixed; }
 
 
   /** @private @type {Int32Array} */
@@ -185,7 +308,6 @@ export class Simulation extends Emitter {
    */
   get springs() { return this._springs; }
 
-
   /**
    * Edge indices (into `edgeList`) behind each spring, two slots per spring:
    * the spring's edge, and its reverse twin in a directed graph (or -1).
@@ -194,7 +316,6 @@ export class Simulation extends Emitter {
    * @private
    */
   _springEdges = new Int32Array(0);
-
 
   /** @private @type {Float64Array} */
   _springLength = new Float64Array(0);
@@ -205,7 +326,6 @@ export class Simulation extends Emitter {
    */
   get springLength() { return this._springLength; }
 
-
   /** @private @type {Float64Array} */
   _springStiffness = new Float64Array(0);
   /**
@@ -215,7 +335,6 @@ export class Simulation extends Emitter {
    */
   get springStiffness() { return this._springStiffness; }
 
-  
   /** @private @type {Int32Array} */
   _edgePairs = new Int32Array(0);
   /**
@@ -226,7 +345,6 @@ export class Simulation extends Emitter {
    */
   get edgePairs() { return this._edgePairs; }
 
-
   /** @private @type {GraphEdge[]} */
   _edgeList = [];
   /**
@@ -234,7 +352,6 @@ export class Simulation extends Emitter {
    * @returns {ReadonlyArray<GraphEdge>}
    */
   get edgeList() { return this._edgeList; }
-
 
   /** @private @type {Map<GraphEdge, number>} */
   _edgeIndex = new Map();
@@ -244,7 +361,6 @@ export class Simulation extends Emitter {
    * @returns {ReadonlyMap<GraphEdge, number>}
    */
   get edgeIndex() { return this._edgeIndex; }
-
 
   /**
    * Node config: the default node config, and per-node overrides keyed by
@@ -262,7 +378,6 @@ export class Simulation extends Emitter {
    */
   get defaultNodeConfig() { return this._nodeConfig.defaults; }
 
-
   /**
    * Edge config: the default edge config, and per-edge overrides keyed by
    * edge object. An edge's own overrides take priority over the default
@@ -279,7 +394,6 @@ export class Simulation extends Emitter {
    */
   get defaultEdgeConfig() { return this._edgeConfig.defaults; }
 
-
   /** @private @type {number} */
   _temp = 0;
   /**
@@ -291,7 +405,6 @@ export class Simulation extends Emitter {
    * `wake` events report it reaching zero and leaving it.
    */
   get temp() { return this._temp; }
-
 
   /**
    * Always initialized
@@ -307,7 +420,6 @@ export class Simulation extends Emitter {
    */
   _collisionGrid = new CollisionGrid();
 
-
   /** @private @type {number} */
   _version = 1;
   /**
@@ -317,7 +429,6 @@ export class Simulation extends Emitter {
    */
   get version() { return this._version; }
 
-
   /**
    * Stores the latest synced `Graph` version. Used to gate node and edge
    * cache updates.
@@ -326,14 +437,12 @@ export class Simulation extends Emitter {
    */
   _syncedGraphVersion = -1;
 
-
   /**
    * Stores the latest synced `Graph` *data* version. Used to efficiently
    * update physical node config based on underlying graph node payloads.
    * @private
    * @type {number} */
   _syncedGraphDataVersion = -1;
-
 
   /**
    * Initializes a `Simulation` instance.
@@ -467,32 +576,32 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Updates a sim-node's config based on its corresponding graph node.
+   * Resolves a node's config from its graph node into its slot of the mass,
+   * radius, charge and fixed arrays.
    * @param {GraphNode} gNode - graph node
-   * @param {SimNode} sNode - matching sim-node
+   * @param {number} i - the node's slot
    * @returns {boolean} whether resolved physical values changed
    * @private
    */
-  _resolveNode(gNode, sNode) {
+  _resolveNode(gNode, i) {
     const acc = this._nodeConfig.accessors,
           g = this._graph,
           o = this._nodeConfig.overrides.get(gNode.id);
-    const mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
-    const radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
-    const charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
-    const prevMass = sNode.mass, prevRadius = sNode.radius,
-      prevCharge = sNode.charge, prevFixed = sNode.fixed;
+    let mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
+    let radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
+    let charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
+    mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
+    radius = Number.isFinite(radius) ? Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
+    charge = Number.isFinite(charge) ? Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
+    const fixed = (o?.fixed?.(gNode, g) ?? acc.fixed(gNode, g)) === true ? 1 : 0;
 
-    sNode.mass   = Number.isFinite(mass)   ?
-      Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
-    sNode.radius = Number.isFinite(radius) ?
-      Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
-    sNode.charge = Number.isFinite(charge) ?
-      Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
-    sNode.fixed  = (o?.fixed?.(gNode, g) ??  acc.fixed(gNode, g)) === true;
-
-    return sNode.mass !== prevMass || sNode.radius !== prevRadius ||
-      sNode.charge !== prevCharge || sNode.fixed !== prevFixed;
+    const changed = this._nodeMass[i] !== mass || this._nodeRadius[i] !== radius ||
+      this._nodeCharge[i] !== charge || this._nodeFixed[i] !== fixed;
+    this._nodeMass[i] = mass;
+    this._nodeRadius[i] = radius;
+    this._nodeCharge[i] = charge;
+    this._nodeFixed[i] = fixed;
+    return changed;
   }
 
 
@@ -516,21 +625,17 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Resolves every sim-node's config, and copies node radii, charges, and
-   * fixed flags into their typed arrays.
+   * Resolves every node's config into the mass, radius, charge and fixed
+   * arrays.
    * @returns {boolean} whether any resolved value changed
    * @private
    */
   _packNodeConfig() {
-    const list = this._nodeList, gNodes = this._graph.nodes;
+    const ids = this._nodeId, gNodes = this._graph.nodes;
     let changed = false;
-    for (let i = 0; i < list.length; i++) {
-      const sNode = list[i];
-      const gNode = /** @type {GraphNode} */ (gNodes.get(sNode.id));
-      if (this._resolveNode(gNode, sNode)) changed = true;
-      this._nodeRadius[i] = sNode.radius;
-      this._nodeCharge[i] = sNode.charge;
-      this._nodeFixed[i] = sNode.fixed ? 1 : 0;
+    for (let i = 0; i < ids.length; i++) {
+      const gNode = /** @type {GraphNode} */ (gNodes.get(ids[i]));
+      if (this._resolveNode(gNode, i)) changed = true;
     }
     this._nodeConfig.markClean();
     return changed;
@@ -579,46 +684,37 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Creates a sim-node object based on the given graph node. Its config
-   * starts at the global defaults, and is resolved by `_packNodeConfig()`.
-   * @param {GraphNode} gNode - graph node to seed sim-node from
-   * @returns {SimNode} resulting sim-node
+   * Seeds a new node's slot: config at the global defaults (resolved later by
+   * `_packNodeConfig()`), zero velocity, and a position near the average of
+   * its already-placed graph neighbors. With no placed neighbors, it gets a
+   * random position within +/-75 of the origin.
+   * @param {NodeId} id - node id
+   * @param {number} i - the node's slot
+   * @param {Uint8Array} placed - 1 for each slot that already has a position;
+   *    set for `i` on return
+   * @returns {void}
    * @private
    */
-  _seedNode(gNode) {
-    return {
-      id: gNode.id,
-      ...SIM_NODE_DEFAULTS,
-      ...this._seedPos(gNode),
-      fx: 0, fy: 0,
-    };
-  }
-
-
-  /**
-   * Seeds a sim-node's position based on the simulated positions of its graph
-   * neighbors. With no graph neighbors, it defaults to a random position
-   * within +/-75 of the origin
-   * @param {GraphNode} gNode - graph node
-   * @returns {{ x: number, y: number, vx: number, vy: number }} - initial
-   *    position and velocity of sim-node
-   * @private
-   */
-  _seedPos(gNode) {
-    const neighbors = this._graph.adjacency.get(gNode.id);
+  _seedNodeSlot(id, i, placed) {
+    const neighbors = this._graph.adjacency.get(id);
     let sx = 0, sy = 0, n = 0;
-    if (neighbors) for (const id of neighbors.keys()) {
-      const sNode = this._nodes.get(id);
-      if (sNode) { sx += sNode.x; sy += sNode.y; n++; }
+    if (neighbors) for (const nid of neighbors.keys()) {
+      const j = this._nodeIndex.get(nid);
+      if (j !== undefined && placed[j]) { sx += this._nodeX[j]; sy += this._nodeY[j]; n++; }
     }
     const jitter = () => (Math.random() - 0.5) * 30;
-    return n ? {
-      x: sx / n + jitter(), y: sy / n + jitter(),
-      vx: 0, vy: 0,
-    } : {
-      x: jitter() * 5, y: jitter() * 5,
-      vx: 0, vy: 0,
-    };
+    if (n) {
+      this._nodeX[i] = sx / n + jitter();
+      this._nodeY[i] = sy / n + jitter();
+    } else {
+      this._nodeX[i] = jitter() * 5;
+      this._nodeY[i] = jitter() * 5;
+    }
+    this._nodeMass[i] = SIM_NODE_DEFAULTS.mass;
+    this._nodeRadius[i] = SIM_NODE_DEFAULTS.radius;
+    this._nodeCharge[i] = SIM_NODE_DEFAULTS.charge;
+    this._nodeFixed[i] = SIM_NODE_DEFAULTS.fixed ? 1 : 0;
+    placed[i] = 1;
   }
 
 
@@ -651,44 +747,70 @@ export class Simulation extends Emitter {
 
   /**
    * Rebuilds node, edge, and spring tables to match the shape of `this.graph`,
-   * seeding new sim-nodes and pruning the overrides of removed nodes and edges.
-   * Marks node and edge config dirty, since new slots need resolving and
-   * accessors may depend on graph shape.
+   * seeding new nodes and pruning the overrides of removed nodes and edges.
+   * Surviving nodes keep their views and state, in new slots. Marks node and
+   * edge config dirty, since new slots need resolving and accessors may depend
+   * on graph shape.
    * @returns {void}
    * @private
    */
   _syncStructure() {
-    // Add new nodes
-    for (const [id, gNode] of this._graph.nodes) {
-      if (!this._nodes.has(id)) this._nodes.set(id, this._seedNode(gNode));
-    }
-
-    // Delete old nodes and their overrides
-    for (const id of this._nodes.keys()) {
+    // Delete old nodes and their overrides, detaching their views
+    for (const [id, sNode] of this._nodes) {
       if (!this._graph.nodes.has(id)) {
+        setNodeSlot(sNode, -1);
         this._nodes.delete(id);
         this._nodeConfig.prune(id);
       }
     }
 
-    const prevNodeCount = this._nodeList.length;
-
-    this._nodeList = [];
-    this._nodeIndex = new Map();
-    for (const [id, sNode] of this._nodes) {
-      this._nodeIndex.set(id, this._nodeList.length);
-      this._nodeList.push(sNode);
+    // Add views for new nodes, after the survivors
+    for (const id of this._graph.nodes.keys()) {
+      if (!this._nodes.has(id)) this._nodes.set(id, new SimNode(this, id, -1));
     }
 
-    const nodeCount = this._nodeList.length;
-    if (nodeCount !== prevNodeCount) {
-      this._nodeRadius = new Float64Array(nodeCount);
-      this._nodeCharge = new Float64Array(nodeCount);
-      this._nodeFixed = new Uint8Array(nodeCount);
-      this._nodeX = new Float64Array(nodeCount);
-      this._nodeY = new Float64Array(nodeCount);
-      this._nodeFx = new Float64Array(nodeCount);
-      this._nodeFy = new Float64Array(nodeCount);
+    const oldIndex = this._nodeIndex;
+    const oldX = this._nodeX, oldY = this._nodeY, oldVx = this._nodeVx, oldVy = this._nodeVy,
+      oldMass = this._nodeMass, oldRadius = this._nodeRadius,
+      oldCharge = this._nodeCharge, oldFixed = this._nodeFixed;
+
+    const nodeCount = this._nodes.size;
+    this._nodeList = [];
+    this._nodeIndex = new Map();
+    this._nodeId = [];
+    for (const [id, sNode] of this._nodes) {
+      setNodeSlot(sNode, this._nodeList.length);
+      this._nodeIndex.set(id, this._nodeList.length);
+      this._nodeList.push(sNode);
+      this._nodeId.push(id);
+    }
+
+    this._nodeX = new Float64Array(nodeCount);
+    this._nodeY = new Float64Array(nodeCount);
+    this._nodeVx = new Float64Array(nodeCount);
+    this._nodeVy = new Float64Array(nodeCount);
+    this._nodeFx = new Float64Array(nodeCount);
+    this._nodeFy = new Float64Array(nodeCount);
+    this._nodeMass = new Float64Array(nodeCount);
+    this._nodeRadius = new Float64Array(nodeCount);
+    this._nodeCharge = new Float64Array(nodeCount);
+    this._nodeFixed = new Uint8Array(nodeCount);
+
+    // Carry survivors' state into their new slots, then seed new nodes in slot
+    // order, so each can be placed near neighbors placed before it
+    const placed = new Uint8Array(nodeCount);
+    for (let i = 0; i < nodeCount; i++) {
+      const j = oldIndex.get(this._nodeId[i]);
+      if (j === undefined) continue;
+      this._nodeX[i] = oldX[j];        this._nodeY[i] = oldY[j];
+      this._nodeVx[i] = oldVx[j];      this._nodeVy[i] = oldVy[j];
+      this._nodeMass[i] = oldMass[j];  this._nodeRadius[i] = oldRadius[j];
+      this._nodeCharge[i] = oldCharge[j];
+      this._nodeFixed[i] = oldFixed[j];
+      placed[i] = 1;
+    }
+    for (let i = 0; i < nodeCount; i++) {
+      if (!placed[i]) this._seedNodeSlot(this._nodeId[i], i, placed);
     }
 
     // Delete overrides of old edges
@@ -739,18 +861,19 @@ export class Simulation extends Emitter {
 
   /**
    * Applies repulsive forces with O(n^2) pairwise force accumulation.
-   * Uses Coulomb's law, without any charge parameters.
+   * Uses Coulomb's law, scaled by each pair's charges.
    * @returns {void}
    * @private
    */
   _applyRepulsion() {
     if (this._opts.useBarnesHut) { this._repelBarnesHut(); return; }
 
-    const list = this._nodeList;
-    for (let i = 0; i < list.length - 1; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const n1 = list[i], n2 = list[j];
-        let dx = n1.x - n2.x, dy = n1.y - n2.y;
+    const xs = this._nodeX, ys = this._nodeY, qs = this._nodeCharge;
+    const fxs = this._nodeFx, fys = this._nodeFy, n = xs.length;
+    const { repulsion, minDistSq } = this._opts;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
         let dSq = dx * dx + dy * dy;
 
         // Randomize force axis for very close distances
@@ -758,11 +881,11 @@ export class Simulation extends Emitter {
           dx = Math.random() - 0.5; dy = Math.random() - 0.5;
           dSq = dx * dx + dy * dy;
         }
-        dSq = Math.max(dSq, this._opts.minDistSq); // short-range clamp
+        dSq = Math.max(dSq, minDistSq); // short-range clamp
 
-        const s = n1.charge * n2.charge * this._opts.repulsion / (dSq * Math.sqrt(dSq));
+        const s = qs[i] * qs[j] * repulsion / (dSq * Math.sqrt(dSq));
         const fx = s * dx, fy = s * dy;
-        n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
+        fxs[i] += fx; fxs[j] -= fx; fys[i] += fy; fys[j] -= fy;
       }
     }
   }
@@ -774,16 +897,16 @@ export class Simulation extends Emitter {
    * @private
    */
   _applySprings() {
-    const list = this._nodeList;
+    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
     const springs = this._springs;
     const lens = this._springLength, ks = this._springStiffness;
     for (let i = 0, k = 0; i < springs.length; i += 2, k++) {
-      const n1 = list[springs[i]], n2 = list[springs[i + 1]];
-      const dx = n1.x - n2.x, dy = n1.y - n2.y;
+      const a = springs[i], b = springs[i + 1];
+      const dx = xs[a] - xs[b], dy = ys[a] - ys[b];
       const d = Math.hypot(dx, dy) || 1e-6;
       const s = -ks[k] * (d - lens[k]) / d;
       const fx = s * dx, fy = s * dy;
-      n1.fx += fx; n2.fx -= fx; n1.fy += fy; n2.fy -= fy;
+      fxs[a] += fx; fxs[b] -= fx; fys[a] += fy; fys[b] -= fy;
     }
   }
 
@@ -794,12 +917,11 @@ export class Simulation extends Emitter {
    * @private
    */
   _applyGravity() {
-    const list = this._nodeList;
+    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
     const g = this._opts.gravity;
-    for (let i = 0; i < list.length; i++) {
-      const n = list[i];
-      n.fx -= g * n.x;
-      n.fy -= g * n.y;
+    for (let i = 0; i < xs.length; i++) {
+      fxs[i] -= g * xs[i];
+      fys[i] -= g * ys[i];
     }
   }
 
@@ -812,13 +934,13 @@ export class Simulation extends Emitter {
     if (this._opts.collision === "barnesHut") { this._collideBarnesHut(); return; }
     if (this._opts.collision !== "pairs") { this._collideGrid(); return; }
 
-    const list = this._nodeList;
-    for (let i = 0; i < list.length - 1; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const n1 = list[i], n2 = list[j];
-        let dx = n1.x - n2.x, dy = n1.y - n2.y;
+    const xs = this._nodeX, ys = this._nodeY, rs = this._nodeRadius, fixed = this._nodeFixed;
+    const n = xs.length;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
         const dSq = dx * dx + dy * dy;
-        const minD = n1.radius + n2.radius;
+        const minD = rs[i] + rs[j];
         if (dSq >= minD * minD) continue;
 
         let d = Math.sqrt(dSq);
@@ -827,13 +949,12 @@ export class Simulation extends Emitter {
           dx = Math.cos(a); dy = Math.sin(a); d = 1;
         }
 
-
         const pushCoeff = (minD - d) / d;
-        const s1 = n1.fixed ? 0 : (n2.fixed ? 1 : 0.5);
-        const s2 = n2.fixed ? 0 : (n1.fixed ? 1 : 0.5);
+        const s1 = fixed[i] ? 0 : (fixed[j] ? 1 : 0.5);
+        const s2 = fixed[j] ? 0 : (fixed[i] ? 1 : 0.5);
 
-        n1.x += dx * pushCoeff * s1;  n1.y += dy * pushCoeff * s1;
-        n2.x -= dx * pushCoeff * s2;  n2.y -= dy * pushCoeff * s2;
+        xs[i] += dx * pushCoeff * s1;  ys[i] += dy * pushCoeff * s1;
+        xs[j] -= dx * pushCoeff * s2;  ys[j] -= dy * pushCoeff * s2;
       }
     }
   }
@@ -841,48 +962,26 @@ export class Simulation extends Emitter {
 
   /** @private */
   _repelBarnesHut() {
-    this._packPositions();
-    const list = this._nodeList, fx = this._nodeFx, fy = this._nodeFy;
-    fx.fill(0); fy.fill(0);   // repel() adds to these
-    this._barnesHutCtx.repel(this._nodeX, this._nodeY, this._nodeCharge, fx, fy, {
+    // repel() adds to the force totals
+    this._barnesHutCtx.repel(this._nodeX, this._nodeY, this._nodeCharge, this._nodeFx, this._nodeFy, {
       strength: this._opts.repulsion, minDistSq: this._opts.minDistSq,
     });
-    for (let i = 0; i < list.length; i++) { list[i].fx += fx[i]; list[i].fy += fy[i]; }
   }
 
   /** @private */
   _collideBarnesHut() {
-    this._packPositions();
     this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
-    this._unpackPositions();
   }
 
   /** @private */
   _collideGrid() {
-    this._packPositions();
     this._collisionGrid.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
-    this._unpackPositions();
   }
 
 
-  /** @private */
-  _packPositions() {
-    for (let i = 0; i < this._nodeList.length; i++) {
-      this._nodeX[i] = this._nodeList[i].x;
-      this._nodeY[i] = this._nodeList[i].y;
-    }
-  }
-
-  /** @private */
-  _unpackPositions() {
-    const list = this._nodeList;
-    for (let i = 0; i < list.length; i++) { list[i].x = this._nodeX[i]; list[i].y = this._nodeY[i]; }
-  }
-
-  
   /**
    * Simulates the graph's physics for one tick, after syncing graph shape and
-   * sim-node config.
+   * node config.
    * @param {number} [dt=opts.dt] - time step, scaling both velocity and position
    *    updates. Tuned for dt=1. Friction applies once per tick.
    * @returns {this} self reference
@@ -891,8 +990,8 @@ export class Simulation extends Emitter {
     this.sync();
 
     // reset force totals
-    const list = this._nodeList;
-    for (let i = 0; i < list.length; i++) { list[i].fx = 0; list[i].fy = 0; }
+    this._nodeFx.fill(0);
+    this._nodeFy.fill(0);
 
     if (!this._temp) return this;
 
@@ -900,19 +999,21 @@ export class Simulation extends Emitter {
     this._applySprings();
     this._applyGravity();
 
-    const maxV = this._opts.maxSpeed;
-    for (let i = 0; i < list.length; i++) {
-      const r = list[i];
-      if (r.fixed) { r.vx = 0; r.vy = 0; continue; }
-      r.vx = (r.vx + (r.fx / r.mass) * dt * this._temp) * this._opts.friction;
-      r.vy = (r.vy + (r.fy / r.mass) * dt * this._temp) * this._opts.friction;
-      
-      // Limit speed
-      const v = Math.hypot(r.vx, r.vy);
-      if (v > maxV) { r.vx *= maxV / v; r.vy *= maxV / v; }
+    const xs = this._nodeX, ys = this._nodeY, vxs = this._nodeVx, vys = this._nodeVy;
+    const fxs = this._nodeFx, fys = this._nodeFy, ms = this._nodeMass, fixed = this._nodeFixed;
+    const { maxSpeed: maxV, friction } = this._opts, temp = this._temp;
+    for (let i = 0; i < xs.length; i++) {
+      if (fixed[i]) { vxs[i] = 0; vys[i] = 0; continue; }
+      let vx = (vxs[i] + (fxs[i] / ms[i]) * dt * temp) * friction;
+      let vy = (vys[i] + (fys[i] / ms[i]) * dt * temp) * friction;
 
-      r.x += r.vx * dt;
-      r.y += r.vy * dt;
+      // Limit speed
+      const v = Math.hypot(vx, vy);
+      if (v > maxV) { vx *= maxV / v; vy *= maxV / v; }
+
+      vxs[i] = vx; vys[i] = vy;
+      xs[i] += vx * dt;
+      ys[i] += vy * dt;
     }
 
     this._temp *= this._opts.cooling;
@@ -920,7 +1021,8 @@ export class Simulation extends Emitter {
     if (settled) {
       this._temp = 0;
       // Drop residual velocities
-      for (let i = 0; i < list.length; i++) { list[i].vx = 0; list[i].vy = 0; }
+      vxs.fill(0);
+      vys.fill(0);
     }
 
     // Enforce radius
@@ -938,9 +1040,9 @@ export class Simulation extends Emitter {
    *    `null` if it was not found
    */
   getPosition(id) {
-    const node = this._nodes.get(id);
-    if (node) return [node.x, node.y];
-    return null;
+    const i = this._nodeIndex.get(id);
+    if (i === undefined) return null;
+    return [this._nodeX[i], this._nodeY[i]];
   }
 
 
@@ -971,11 +1073,12 @@ export class Simulation extends Emitter {
    * @returns {boolean} whether the node was pinned (`false` if node not found)
    */
   pin(id, x, y) {
-    const node = this._nodes.get(id);
-    if (!node) return false;
+    const i = this._nodeIndex.get(id);
+    if (i === undefined) return false;
     this.setNodeConfig(id, { fixed: true });
-    if (node.x !== x || node.y !== y) this.heat();
-    [node.x, node.y] = [x, y];
+    if (this._nodeX[i] !== x || this._nodeY[i] !== y) this.heat();
+    this._nodeX[i] = x;
+    this._nodeY[i] = y;
     return true;
   }
 

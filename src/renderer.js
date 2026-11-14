@@ -1,6 +1,5 @@
 /** @import { Graph } from './graph.js' */
 /** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
-/** @import { SimNode } from './typedefs/simulation.js' */
 /**
  * @import {
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
@@ -1039,8 +1038,8 @@ export class Renderer extends Emitter {
 
     // Node styles
     this._nodeStyles = [];
-    for (const sNode of this._simulation.nodeList) {
-      const rNode = this._nodes.get(sNode.id);
+    for (const id of this._simulation.nodeId) {
+      const rNode = this._nodes.get(id);
       if (rNode) this._nodeStyles.push(rNode);
     }
 
@@ -1059,12 +1058,12 @@ export class Renderer extends Emitter {
        bow is offset along the edge's own perpendicular, which already points
        the opposite way for the reverse edge. */
     const ep = sim.edgePairs;
-    const sNodes = sim.nodeList;
+    const ids = sim.nodeId;
     this._edgeBow = new Int8Array(ep.length / 2);
     for (let k = 0, i = 0; i < ep.length; k++, i += 2) {
       const a = ep[i], b = ep[i + 1];
       if (a === b || !this._graph.directed) { this._edgeBow[k] = 0; continue; }
-      this._edgeBow[k] = this._graph.hasEdge(sNodes[b].id, sNodes[a].id) ? 1 : 0;
+      this._edgeBow[k] = this._graph.hasEdge(ids[b], ids[a]) ? 1 : 0;
     }
 
     // Highlight flags and alphas: survivors keep theirs, new elements start at target
@@ -1267,17 +1266,18 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Draws a node on the canvas, positioned and sized according to a `SimNode`
-   * object and styled according to a `NodeStyle` object.
-   * @param {SimNode} sNode - simulation's node body object
+   * Draws a node on the canvas, positioned and sized according to its
+   * simulation slot and styled according to a `NodeStyle` object.
+   * @param {number} i - the node's slot in the simulation
    * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
    * @private
    */
-  _drawNode(sNode, nodeStyle) {
+  _drawNode(i, nodeStyle) {
     if (!this._ctx) return;
-    const cx = this._canvasX(sNode.x), cy = this._canvasY(sNode.y);
-    const r = sNode.radius * this._view.zoom;
+    const sim = this._simulation;
+    const cx = this._canvasX(sim.nodeX[i]), cy = this._canvasY(sim.nodeY[i]);
+    const r = sim.nodeRadius[i] * this._view.zoom;
     this._ctx.beginPath();
     this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
     const src = nodeStyle.image;
@@ -1330,16 +1330,16 @@ export class Renderer extends Emitter {
    * alignment for `labelPosition`, both set once per frame by `render()`. The
    * label is sized and placed by transform, which is left set; `render()`
    * restores the base transform after each label pass.
-   * @param {SimNode} sNode - simulation node body object
+   * @param {number} i - the node's slot in the simulation
    * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
    * @private
    */
-  _drawNodeLabel(sNode, nodeStyle) {
+  _drawNodeLabel(i, nodeStyle) {
     if (!this._ctx) return;
-    const zoom = this._view.zoom, dpr = this._dpr;
-    let x = this._canvasX(sNode.x), y = this._canvasY(sNode.y);
-    const r = (sNode.radius + this._opts.labelMargin) * zoom;
+    const zoom = this._view.zoom, dpr = this._dpr, sim = this._simulation;
+    let x = this._canvasX(sim.nodeX[i]), y = this._canvasY(sim.nodeY[i]);
+    const r = (sim.nodeRadius[i] + this._opts.labelMargin) * zoom;
     switch (this._opts.labelPosition) {
       case "top":   y -= r; break;
       case "right": x += r; break;
@@ -1358,8 +1358,8 @@ export class Renderer extends Emitter {
   /**
    * Draws an edge between two nodes, trimmed to their radii, with an
    * arrowhead if `style.arrow` is set. Delegates self-loops to `_drawSelfLoop`.
-   * @param {SimNode} src - source node
-   * @param {SimNode} dest - destination node
+   * @param {number} src - source node's slot in the simulation
+   * @param {number} dest - destination node's slot
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
    * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
@@ -1400,8 +1400,8 @@ export class Renderer extends Emitter {
    * by `_drawEdge()` and the edge hit tests, so a hit always matches what's
    * on screen. Writes into one reused object, so the render loop doesn't
    * allocate: read it before laying out the next edge.
-   * @param {SimNode} src - source node
-   * @param {SimNode} dest - destination node
+   * @param {number} src - source node's slot in the simulation
+   * @param {number} dest - destination node's slot
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
    * @returns {EdgeLayout | null} the layout, or `null` when the edge isn't
@@ -1433,8 +1433,9 @@ export class Renderer extends Emitter {
     p.width = width;
     p.fade = fade;
 
-    const ax = this._canvasX(src.x), ay = this._canvasY(src.y);
-    const ra = src.radius * z;
+    const sim = this._simulation, xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
+    const ax = this._canvasX(xs[src]), ay = this._canvasY(ys[src]);
+    const ra = rs[src] * z;
 
     if (src === dest) {
       // A circle overlapping the node's upper right
@@ -1447,8 +1448,8 @@ export class Renderer extends Emitter {
       return p;
     }
 
-    const bx = this._canvasX(dest.x), by = this._canvasY(dest.y);
-    const rb = dest.radius * z;
+    const bx = this._canvasX(xs[dest]), by = this._canvasY(ys[dest]);
+    const rb = rs[dest] * z;
     const dx = bx - ax, dy = by - ay;
     const d = Math.hypot(dx, dy);
     if (d < 1e-6) return null;
@@ -1558,7 +1559,7 @@ export class Renderer extends Emitter {
    * @private
    */
   _renderNodeByIndex(i) {
-    this._drawNode(this.simulation.nodeList[i], this._nodeStyles[i]);
+    this._drawNode(i, this._nodeStyles[i]);
   }
 
   /**
@@ -1567,7 +1568,7 @@ export class Renderer extends Emitter {
    * @private
    */
   _renderNodeLabelByIndex(i) {
-    this._drawNodeLabel(this.simulation.nodeList[i], this._nodeStyles[i]);
+    this._drawNodeLabel(i, this._nodeStyles[i]);
   }
 
 
@@ -1579,11 +1580,10 @@ export class Renderer extends Emitter {
    * @private
    */
   _renderEdgeByIndex(i, alpha = 1) {
-    const sim = this.simulation;
-    const iDbl = 2 * i;
+    const ep = this.simulation.edgePairs;
     this._drawEdge(
-      sim.nodeList[sim.edgePairs[iDbl]],
-      sim.nodeList[sim.edgePairs[iDbl + 1]],
+      ep[2 * i],
+      ep[2 * i + 1],
       this._edgeStyles[i],
       this._edgeBow[i],
       alpha,
@@ -1635,11 +1635,11 @@ export class Renderer extends Emitter {
 
     const nodesI = [];
     const sim = this._simulation, n = sim.nodeList.length;
+    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
     if (this._onScreen.length < n) this._onScreen = new Uint8Array(n);
     const onScreen = this._onScreen;
     for (let i = 0; i < n; i++) {
-      const sNode = sim.nodeList[i];
-      if (circleRectCollision(sNode.x, sNode.y, sNode.radius, xMin, xMax, yMin, yMax)) {
+      if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) {
         nodesI.push(i);
         onScreen[i] = 1;
       }
@@ -1981,7 +1981,8 @@ export class Renderer extends Emitter {
    * @private
    */
   _graphBounds(zoom) {
-    const sim = this._simulation, nodes = sim.nodeList, opts = this._opts;
+    const sim = this._simulation, opts = this._opts;
+    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     /** @type {(xa: number, ya: number, xb: number, yb: number) => void} */
     const add = (xa, ya, xb, yb) => {
@@ -1991,31 +1992,33 @@ export class Renderer extends Emitter {
       if (yb > y1) y1 = yb;
     };
 
-    for (const n of nodes) add(n.x - n.radius, n.y - n.radius, n.x + n.radius, n.y + n.radius);
+    for (let i = 0; i < xs.length; i++) add(xs[i] - rs[i], ys[i] - rs[i], xs[i] + rs[i], ys[i] + rs[i]);
 
     if (opts.renderEdges) {
       const ep = sim.edgePairs;
       for (let i = 0; i < ep.length / 2; i++) {
-        const a = nodes[ep[2 * i]], b = nodes[ep[2 * i + 1]], style = this._edgeStyles[i];
+        const a = ep[2 * i], b = ep[2 * i + 1], style = this._edgeStyles[i];
+        const ax = xs[a], ay = ys[a];
         if (a === b) {
           // As `_layoutEdge()` sizes it, with its arrowhead at full size
           const head = opts.scaleStrokes ? 1.6 * (style.arrow ? style.arrowSize : 6) : 0;
-          const lr = Math.max(a.radius * 0.8, head);
-          const d = (a.radius + lr * 0.6) * Math.SQRT1_2;
-          add(a.x + d - lr, a.y - d - lr, a.x + d + lr, a.y - d + lr);
+          const lr = Math.max(rs[a] * 0.8, head);
+          const d = (rs[a] + lr * 0.6) * Math.SQRT1_2;
+          add(ax + d - lr, ay - d - lr, ax + d + lr, ay - d + lr);
         } else if (this._edgeBow[i] && style.bow) {
           // A bowed edge strays farthest from the straight line at its middle,
           // by half its bow
-          const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+          const bx = xs[b], by = ys[b];
+          const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
           const off = this._edgeBow[i] * style.bow / 2;
-          const mx = (a.x + b.x) / 2 - dy / len * off, my = (a.y + b.y) / 2 + dx / len * off;
+          const mx = (ax + bx) / 2 - dy / len * off, my = (ay + by) / 2 + dx / len * off;
           add(mx, my, mx, my);
         }
       }
     }
 
     if (opts.renderLabels) {
-      for (let i = 0; i < nodes.length; i++) {
+      for (let i = 0; i < xs.length; i++) {
         const style = this._nodeStyles[i];
         if (!this._labelWidthRatio[i] || !style.renderLabel) continue;
         let h = style.labelScale;
@@ -2041,13 +2044,14 @@ export class Renderer extends Emitter {
    * @private
    */
   _layoutLabel(i, h) {
-    const sNode = this._simulation.nodeList[i], box = this._labelBox;
-    const w = this._labelWidthRatio[i] * h, d = sNode.radius + this._opts.labelMargin;
+    const sim = this._simulation, box = this._labelBox;
+    const x = sim.nodeX[i], y = sim.nodeY[i];
+    const w = this._labelWidthRatio[i] * h, d = sim.nodeRadius[i] + this._opts.labelMargin;
     switch (this._opts.labelPosition) {
-      case "top":   box.x0 = sNode.x - w / 2; box.y0 = sNode.y - d - h; break;
-      case "right": box.x0 = sNode.x + d;     box.y0 = sNode.y - h / 2; break;
-      case "left":  box.x0 = sNode.x - d - w; box.y0 = sNode.y - h / 2; break;
-      default:      box.x0 = sNode.x - w / 2; box.y0 = sNode.y + d;     break;
+      case "top":   box.x0 = x - w / 2; box.y0 = y - d - h; break;
+      case "right": box.x0 = x + d;     box.y0 = y - h / 2; break;
+      case "left":  box.x0 = x - d - w; box.y0 = y - h / 2; break;
+      default:      box.x0 = x - w / 2; box.y0 = y + d;     break;
     }
     box.w = w;
     box.h = h;
@@ -2067,13 +2071,13 @@ export class Renderer extends Emitter {
   nodeAt(cx, cy, slack = 2) {
     if (!this._canvas) throw new Error("Renderer: no canvas attached");
     const [x, y] = this.canvasToSim(cx, cy);
-    const nodes = this._simulation.nodeList;
+    const sim = this._simulation, xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius, ids = sim.nodeId;
     const s = Math.max(slack, 0) / this._view.zoom; // radius slack
     const graphNodes = this._graph.nodes;
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const node = nodes[i], r = node.radius + s;
-      // The node list lags the graph until the next sync: skip removed nodes
-      if ((node.x - x) ** 2 + (node.y - y) ** 2 < r * r && graphNodes.has(node.id)) return node.id;
+    for (let i = xs.length - 1; i >= 0; i--) {
+      const r = rs[i] + s;
+      // The node slots lag the graph until the next sync: skip removed nodes
+      if ((xs[i] - x) ** 2 + (ys[i] - y) ** 2 < r * r && graphNodes.has(ids[i])) return ids[i];
     }
     return null;
   }
@@ -2149,7 +2153,7 @@ export class Renderer extends Emitter {
     this.sync();
     if (!this._opts.renderEdges) return;
 
-    const sim = this._simulation, nodes = sim.nodeList, ep = sim.edgePairs;
+    const sim = this._simulation, ep = sim.edgePairs;
     const edges = sim.edgeList, styles = this._edgeStyles, n = edges.length;
     const s = Math.max(slack, 0);
     // While highlighting, highlighted edges are drawn after the rest, and
@@ -2159,7 +2163,7 @@ export class Renderer extends Emitter {
 
     for (let i = 0; i < n; i++) {
       if (layered && edgeAlpha[i] === 0) continue;
-      const p = this._layoutEdge(nodes[ep[2 * i]], nodes[ep[2 * i + 1]], styles[i], this._edgeBow[i]);
+      const p = this._layoutEdge(ep[2 * i], ep[2 * i + 1], styles[i], this._edgeBow[i]);
       if (!p) continue;
       const gap = edgeDistance(p, cx, cy, p.width / 2 + s) - p.width / 2;
       if (gap <= s) visit(edges[i], Math.max(gap, 0), layered ? edgeState[i] * n + i : i);

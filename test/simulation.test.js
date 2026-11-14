@@ -4,7 +4,9 @@ import { Graph } from "../src/graph.js";
 import { Simulation } from "../src/simulation.js";
 import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/defaults.js";
 
-const RECORD_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
+const NODE_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
+const NODE_ARRAYS = ["_nodeId", "_nodeX", "_nodeY", "_nodeVx", "_nodeVy", "_nodeFx", "_nodeFy",
+  "_nodeMass", "_nodeRadius", "_nodeCharge", "_nodeFixed"];
 
 function chain(n, { directed = false, extra = [] } = {}) {
   const g = new Graph({ directed });
@@ -27,9 +29,92 @@ function pairSim(directed, edges) {
 }
 
 describe("Simulation: records", () => {
-  test("every record carries the full field set in a stable order", () => {
+  test("every node view exposes the full field set", () => {
     const sim = new Simulation(chain(3), {});
-    for (const rec of sim.nodeList) assert.deepEqual(Object.keys(rec), RECORD_FIELDS);
+    for (const node of sim.nodeList) {
+      for (const f of NODE_FIELDS) assert.ok(node[f] !== undefined, f);
+      assert.equal(typeof node.fixed, "boolean");
+    }
+  });
+
+  test("config fields and force totals can't be assigned on a view", () => {
+    const node = new Simulation(chain(2), {}).nodes.get("n0");
+    for (const f of ["mass", "radius", "charge", "fixed", "fx", "fy"])
+      assert.throws(() => { node[f] = 5; }, TypeError, f);
+  });
+
+  test("views read and write the node arrays", () => {
+    const sim = new Simulation(chain(3), {});
+    const i = sim.nodeIndex.get("n1"), node = sim.nodes.get("n1");
+    node.x = 12; node.y = -3; node.vx = 4; node.vy = 5;
+    assert.deepEqual([sim.nodeX[i], sim.nodeY[i], sim.nodeVx[i], sim.nodeVy[i]], [12, -3, 4, 5]);
+    sim.nodeX[i] = 99;
+    assert.equal(node.x, 99);
+    assert.equal(node.radius, sim.nodeRadius[i]);
+    assert.equal(node.mass, sim.nodeMass[i]);
+  });
+
+  test("a velocity set through a view moves the node on the next tick", () => {
+    const sim = new Simulation(chain(1), { gravity: 0, friction: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 0; node.y = 0; node.vx = 10; node.vy = 0;
+    sim.tick(1);
+    assert.equal(node.x, 10);
+  });
+
+  test("node arrays are as long as the node count, and nodeId matches the views", () => {
+    const sim = new Simulation(chain(4), {});
+    for (const name of NODE_ARRAYS) assert.equal(sim[name].length, 4, name);
+    sim.nodeList.forEach((node, i) => assert.equal(sim.nodeId[i], node.id));
+  });
+
+  test("a node keeps the same view across structural syncs", () => {
+    const g = chain(3), sim = new Simulation(g, {});
+    const view = sim.nodes.get("n2");
+    g.removeNode("n0");
+    g.addNode({ id: "x" });
+    sim.sync();
+    assert.equal(sim.nodes.get("n2"), view);
+    assert.equal(sim.nodeList[sim.nodeIndex.get("n2")], view);
+  });
+
+  test("survivors keep their state when an earlier node is removed", () => {
+    const g = chain(4), sim = new Simulation(g, {});
+    const before = ["n1", "n2", "n3"].map(id => {
+      const n = sim.nodes.get(id);
+      n.vx = id.length + Number(id[1]); n.vy = -n.vx;
+      return [n.x, n.y, n.vx, n.vy];
+    });
+    g.removeNode("n0");
+    sim.sync();
+    ["n1", "n2", "n3"].forEach((id, k) => {
+      const n = sim.nodes.get(id);
+      assert.deepEqual([n.x, n.y, n.vx, n.vy], before[k], id);
+    });
+    assert.equal(sim.nodeIndex.get("n1"), 0, "slots shift down");
+  });
+
+  test("a removed node's view reads undefined, and writes to it do nothing", () => {
+    const g = chain(3), sim = new Simulation(g, {});
+    const gone = sim.nodes.get("n0");
+    g.removeNode("n0");
+    sim.sync();
+    assert.equal(gone.x, undefined);
+    assert.equal(gone.radius, undefined);
+    assert.equal(gone.fixed, false);
+    const xs = Array.from(sim.nodeX);
+    gone.x = 123;
+    assert.deepEqual(Array.from(sim.nodeX), xs);
+  });
+
+  test("a new node is seeded near its placed neighbors", () => {
+    const g = chain(2), sim = new Simulation(g, {});
+    for (const n of sim.nodeList) { n.x = 5000; n.y = 5000; }
+    g.addNode({ id: "c" });
+    g.addEdge("n1", "c");
+    sim.sync();
+    const c = sim.nodes.get("c");
+    assert.ok(Math.abs(c.x - 5000) <= 15 && Math.abs(c.y - 5000) <= 15, `seeded at ${c.x}, ${c.y}`);
   });
 
   test("seeded positions are finite and jittered apart", () => {
@@ -301,7 +386,7 @@ describe("Simulation: springs and edge pairs", () => {
     function force(sim) {
       const A = sim.nodes.get("a"), B = sim.nodes.get("b");
       A.x = 0; A.y = 0; B.x = 200; B.y = 0;
-      A.fx = 0; A.fy = 0; B.fx = 0; B.fy = 0;
+      sim._nodeFx.fill(0); sim._nodeFy.fill(0);
       sim._applySprings();
       return A.fx;
     }
@@ -864,14 +949,13 @@ describe("Simulation: Barnes-Hut", () => {
     return sim;
   }
 
+  // Every node array has one slot per node, aligned with nodeList and nodeIndex
   function assertPacked(sim) {
     const list = sim.nodeList;
-    for (const name of ["_nodeRadius", "_nodeCharge", "_nodeFixed", "_nodeX", "_nodeY", "_nodeFx", "_nodeFy"])
-      assert.equal(sim[name].length, list.length, name);
+    for (const name of NODE_ARRAYS) assert.equal(sim[name].length, list.length, name);
     list.forEach((r, i) => {
-      assert.equal(sim._nodeRadius[i], r.radius, `radius of ${r.id}`);
-      assert.equal(sim._nodeCharge[i], r.charge, `charge of ${r.id}`);
-      assert.equal(sim._nodeFixed[i], r.fixed ? 1 : 0, `fixed flag of ${r.id}`);
+      assert.equal(sim._nodeId[i], r.id, `id in slot ${i}`);
+      assert.equal(sim.nodeIndex.get(r.id), i, `index of ${r.id}`);
     });
   }
 
@@ -986,7 +1070,7 @@ describe("Simulation: Barnes-Hut", () => {
       const sim = grid(5);
       sim._applyRepulsion();
       const once = sim.nodeList.map(r => r.fx);
-      sim.nodeList.forEach(r => { r.fx += 7; });
+      sim._nodeFx.forEach((_, i) => { sim._nodeFx[i] += 7; });
       sim._applyRepulsion();
       sim.nodeList.forEach((r, i) => assert.ok(Math.abs(r.fx - (2 * once[i] + 7)) < 1e-9));
     });
@@ -996,7 +1080,7 @@ describe("Simulation: Barnes-Hut", () => {
       const [a, b] = sim.nodeList;
       sim._applyRepulsion();
       const before = a.fx;
-      a.fx = 0; b.fx = 0;
+      sim._nodeFx.fill(0); sim._nodeFy.fill(0);
       b.x += 1000;
       sim._applyRepulsion();
       assert.ok(Math.abs(a.fx) < Math.abs(before));
@@ -1214,6 +1298,8 @@ describe("Simulation: Barnes-Hut", () => {
       sim.sync();
       assertPacked(sim);
       assert.equal(sim._nodeRadius.length, 3);
+      assert.equal(sim.nodes.get("n3").radius, 44, "a survivor keeps its resolved radius");
+      assert.equal(sim.nodes.get("n3").fixed, true);
 
       g.addNode({ id: "new1" });
       g.addNode({ id: "new2" });
@@ -1231,6 +1317,8 @@ describe("Simulation: Barnes-Hut", () => {
       g.addNode({ id: "swap" });
       sim.sync();
       assertPacked(sim);
+      assert.equal(sim._nodeRadius[sim.nodeIndex.get("n2")], 44);
+      assert.equal(sim._nodeRadius[sim.nodeIndex.get("swap")], SIM_NODE_DEFAULTS.radius);
     });
   });
 

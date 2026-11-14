@@ -43,26 +43,19 @@
  */
 
 /**
- * Full simulation node object. Position and velocity props can be set directly,
- * but `mass`, `radius`, and `fixed` must be set using `setNodeConfig()`.
- * @typedef {object} SimNode
- * @property {NodeId} id - node id (matches corresponding `GraphNode`)
- * @property {number} mass - physical mass of the node
- * @property {number} radius - physical (and rendered) radius of the node
- * @property {number} charge - charge of the node for electrostatic repulsion
- * @property {boolean} fixed - whether the node is immovable
- * @property {number} x - x coordinate
- * @property {number} y - y coordinate
- * @property {number} vx - x velocity
- * @property {number} vy - y velocity
- * @property {number} fx - [temp] x force total, reset and populated every tick
- * @property {number} fy - [temp] y force total, reset and populated every tick
+ * Live view of a simulation node, reading and writing the simulation's
+ * `node*` arrays. `x`, `y`, `vx` and `vy` can be set directly; `mass`,
+ * `radius`, `charge` and `fixed` are set with `setNodeConfig()`.
+ * @typedef {import('../simulation.js').SimNode} SimNode
  */
 
 /**
  * Partial config specifier: each field a value, or a function of the node
  * @typedef {{
- *    [K in "mass" | "radius" | "charge" | "fixed"]?: NodeOption<SimNode[K]>
+ *    mass?: NodeOption<number>,
+ *    radius?: NodeOption<number>,
+ *    charge?: NodeOption<number>,
+ *    fixed?: NodeOption<boolean>,
  * }} SimNodeConfig
  */
 

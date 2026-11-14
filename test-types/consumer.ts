@@ -283,6 +283,20 @@ const simOpts: Readonly<SimOpts> = gjs.simulation.opts;
 const rendererOpts: Readonly<RendererOpts> = r.opts;
 const view: View = r.view;
 const simNode: SimNode | undefined = gjs.simulation.nodes.get("b");
+if (simNode) {
+  simNode.vx += 1;                    // position and velocity are writable
+  const r: number = simNode.radius;
+  const pinned: boolean = simNode.fixed;
+  // @ts-expect-error -- radius is resolved from config, not assigned
+  simNode.radius = r;
+  // @ts-expect-error -- force totals are read-only
+  simNode.fx = 0;
+  void pinned;
+}
+// Node state as arrays, one slot per node
+const nodeX: Float64Array = gjs.simulation.nodeX;
+const ids: ReadonlyArray<string | number> = gjs.simulation.nodeId;
+nodeX[gjs.simulation.nodeIndex.get("b") ?? 0] = 10;
 const hookType: RendererHookType = "overlay";
 const hook: RendererHook = ring;
 const loopType: GraphJSHookType = "postTick";
