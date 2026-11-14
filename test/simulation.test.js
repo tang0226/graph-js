@@ -1524,3 +1524,65 @@ describe("Simulation: edge config", () => {
     assert.ok(Math.abs(d - 200) < 5, `settled at ${d}`);
   });
 });
+
+describe("Simulation: custom forces", () => {
+  // One free node at the origin, with no gravity, friction or cooling to blur results
+  function lone() {
+    const sim = new Simulation(chain(1), { gravity: 0, friction: 1, cooling: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 0; node.y = 0;
+    return { sim, node };
+  }
+
+  test("a force's additions move nodes", () => {
+    const { sim, node } = lone();
+    sim.addForce(s => { s.nodeFx[0] += 2; });
+    sim.tick(1);
+    assert.equal(node.fx, 2);
+    assert.equal(node.x, 2);
+    assert.equal(node.y, 0);
+  });
+
+  test("it runs once per tick, after the built-in forces, and not while frozen", () => {
+    const sim = new Simulation(chain(1), { gravity: 0.5, cooling: 1 });
+    const node = sim.nodes.get("n0");
+    node.x = 10; node.y = 0;
+    const seen = [];
+    sim.addForce(s => { seen.push(s.nodeFx[0]); });
+    sim.tick();
+    assert.deepEqual(seen, [-5], "it should see gravity already added");
+    sim.heat(0);
+    sim.tick();
+    assert.equal(seen.length, 1);
+  });
+
+  test("removeForce stops it, and reports whether it was there", () => {
+    const { sim, node } = lone();
+    const push = s => { s.nodeFx[0] += 1; };
+    sim.addForce(push);
+    assert.equal(sim.removeForce(push), true);
+    assert.equal(sim.removeForce(push), false);
+    sim.tick(1);
+    assert.equal(node.x, 0);
+  });
+
+  test("adding a force wakes a frozen simulation", () => {
+    const { sim } = lone();
+    sim.heat(0);
+    let woke = 0;
+    sim.on("wake", () => { woke++; });
+    sim.addForce(() => {});
+    assert.equal(woke, 1);
+    assert.ok(sim.temp > 0);
+  });
+
+  test("a throwing force is logged, and the others and the tick still run", (t) => {
+    const errors = t.mock.method(console, "error", () => {});
+    const { sim, node } = lone();
+    sim.addForce(() => { throw new Error("boom"); });
+    sim.addForce(s => { s.nodeFx[0] += 3; });
+    sim.tick(1);
+    assert.equal(errors.mock.callCount(), 1);
+    assert.equal(node.x, 3);
+  });
+});

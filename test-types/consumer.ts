@@ -15,7 +15,7 @@ import type {
   GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
   GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
-  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig,
+  SimOpts, SimOptsInput, CollisionMethod, SimNode, SimNodeConfig, SimEdge, SimEdgeConfig, SimForce,
   BarnesHutOpts, BarnesHutOptsInput,
   SimEventMap, SimEventType, SimEvent, SimListener,
   Canvas, CanvasContext, LabelPosition, HighlightMode,
@@ -297,6 +297,10 @@ if (simNode) {
 const nodeX: Float64Array = gjs.simulation.nodeX;
 const ids: ReadonlyArray<string | number> = gjs.simulation.nodeId;
 nodeX[gjs.simulation.nodeIndex.get("b") ?? 0] = 10;
+// Custom forces add to the force arrays
+const centre: SimForce = s => { for (let i = 0; i < s.nodeX.length; i++) s.nodeFx[i] -= 0.01 * s.nodeX[i]; };
+gjs.simulation.addForce(centre).addForce(s => { s.nodeFy[0] += 1; });
+const forceRemoved: boolean = gjs.simulation.removeForce(centre);
 const hookType: RendererHookType = "overlay";
 const hook: RendererHook = ring;
 const loopType: GraphJSHookType = "postTick";

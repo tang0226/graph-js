@@ -6,7 +6,7 @@
  * @import {
  *  SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
- *  SimEventMap, SimEventType,
+ *  SimEventMap, SimEventType, SimForce,
  * } from './typedefs/simulation.js'
  */
 /**
@@ -20,6 +20,7 @@ import { BarnesHutContext, checkBarnesHutOpts } from "./barnes-hut.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
 import { Emitter } from "./emitter.js";
+import { HookRegistry } from "./hook-registry.js";
 import { keysOf } from "./utils.js";
 import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
 import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf } from "./validate.js";
@@ -247,16 +248,18 @@ export class Simulation extends Emitter {
   /** @private @type {Float64Array} */
   _nodeFx = new Float64Array(0);
   /**
-   * [read-only] x force total of each node, reset and accumulated every tick
-   * @returns {Readonly<Float64Array>}
+   * x force total of each node, reset and accumulated every tick. Forces
+   * added with `addForce()` add to it.
+   * @returns {Float64Array}
    */
   get nodeFx() { return this._nodeFx; }
 
   /** @private @type {Float64Array} */
   _nodeFy = new Float64Array(0);
   /**
-   * [read-only] y force total of each node, reset and accumulated every tick
-   * @returns {Readonly<Float64Array>}
+   * y force total of each node, reset and accumulated every tick. Forces
+   * added with `addForce()` add to it.
+   * @returns {Float64Array}
    */
   get nodeFy() { return this._nodeFy; }
 
@@ -419,6 +422,13 @@ export class Simulation extends Emitter {
    * @private
    */
   _collisionGrid = new CollisionGrid();
+
+  /**
+   * Custom forces, run each tick after the built-in ones
+   * @type {HookRegistry<"force", SimForce>}
+   * @private
+   */
+  _forces = new HookRegistry(["force"], "Simulation");
 
   /** @private @type {number} */
   _version = 1;
@@ -998,6 +1008,7 @@ export class Simulation extends Emitter {
     this._applyRepulsion();
     this._applySprings();
     this._applyGravity();
+    this._forces.run("force", f => f(this));
 
     const xs = this._nodeX, ys = this._nodeY, vxs = this._nodeVx, vys = this._nodeVy;
     const fxs = this._nodeFx, fys = this._nodeFy, ms = this._nodeMass, fixed = this._nodeFixed;
@@ -1093,5 +1104,31 @@ export class Simulation extends Emitter {
   unpin(id) {
     if (this._graph.nodes.has(id)) this.setNodeConfig(id, { fixed: undefined });
     return this;
+  }
+
+
+  /**
+   * Adds a custom force, and wakes the layout. Each tick, after the built-in
+   * forces, it's called with the simulation and adds to `nodeFx` and
+   * `nodeFy`. Forces run in the order they were added; adding the same
+   * function again has no effect.
+   * @param {SimForce} f - force function
+   * @returns {this} self reference
+   */
+  addForce(f) {
+    this._forces.add("force", f);
+    return this.heat();
+  }
+
+
+  /**
+   * Removes a custom force, and wakes the layout if it was there.
+   * @param {SimForce} f - force function to remove
+   * @returns {boolean} whether the force was there
+   */
+  removeForce(f) {
+    const removed = this._forces.remove("force", f);
+    if (removed) this.heat();
+    return removed;
   }
 }

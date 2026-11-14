@@ -72,6 +72,14 @@
  * @typedef {{ [K in keyof SimEdge]?: EdgeOption<SimEdge[K]> }} SimEdgeConfig
  */
 
+/**
+ * Custom force, added with `addForce()`. Called each tick, after the built-in
+ * forces, with the simulation; it adds each node's force to `sim.nodeFx[i]`
+ * and `sim.nodeFy[i]`. Forces are raw: the tick then applies temperature,
+ * mass, friction, the speed limit and pinning, as for the built-in forces.
+ * @typedef {(sim: Simulation) => void} SimForce
+ */
+
 
 
 // BARNES-HUT

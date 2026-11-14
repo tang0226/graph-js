@@ -241,14 +241,14 @@ sim.nodeX; sim.nodeY;        // Float64Array positions
 sim.nodeVx; sim.nodeVy;      // velocities
 sim.nodeRadius; sim.nodeMass; sim.nodeCharge;
 sim.nodeFixed;               // Uint8Array: 1 if fixed
-sim.nodeFx; sim.nodeFy;      // force totals from the last tick
+sim.nodeFx; sim.nodeFy;      // force totals from the last tick (custom forces add to these)
 
 // Average position of every node
 let cx = 0, cy = 0;
 for (let i = 0; i < sim.nodeX.length; i++) { cx += sim.nodeX[i]; cy += sim.nodeY[i]; }
 ```
 
-Elements of `nodeX`, `nodeY`, `nodeVx` and `nodeVy` can be set, like the node fields (followed by `heat()`); the other arrays are read-only. The arrays are replaced whenever nodes or edges are added or removed, which increments `sim.version`, so read them from the simulation each time rather than keeping them.
+Elements of `nodeX`, `nodeY`, `nodeVx` and `nodeVy` can be set, like the node fields (followed by `heat()`), and [custom forces](#custom-forces) add to `nodeFx` and `nodeFy`; the other arrays are read-only. The arrays are replaced whenever nodes or edges are added or removed, which increments `sim.version`, so read them from the simulation each time rather than keeping them.
 
 The graph also answers questions about single nodes and edges:
 
@@ -1164,6 +1164,32 @@ gjs.simulation.setOpts({ collision: "pairs" });      // check every pair of node
 - **`"pairs"`** checks every pair of nodes. It's the slowest on large graphs.
 
 All three find the same overlaps, but they resolve them in a different order, so the same graph can settle slightly differently. Each tick resolves each overlapping pair once. A push can create a new overlap, which is left until the next tick, so a crowded layout can still show some overlap while it's moving.
+
+### Custom forces
+
+A custom force is a function that the simulation calls each tick, after its own repulsion, springs and gravity. It adds a force for each node to `sim.nodeFx[i]` and `sim.nodeFy[i]`, reading whatever it needs from the [node arrays](#reading-graph-and-simulation-state):
+
+```js
+// Pull each node toward a point for its group
+const centres = [[-300, 0], [300, 0]];
+function cluster(sim) {
+  for (let i = 0; i < sim.nodeId.length; i++) {
+    const [cx, cy] = centres[gjs.graph.nodes.get(sim.nodeId[i]).data.group];
+    sim.nodeFx[i] += (cx - sim.nodeX[i]) * 0.02;
+    sim.nodeFy[i] += (cy - sim.nodeY[i]) * 0.02;
+  }
+}
+
+gjs.simulation.addForce(cluster);      // wakes the layout
+gjs.simulation.removeForce(cluster);   // true if it was added; also wakes the layout
+```
+
+- **Forces are raw:** like the built-in forces, they're scaled by the temperature and divided by mass, then friction, `maxSpeed` and pinning apply. A pinned node ignores them.
+- **They only run while the layout moves.** Adding or removing a force wakes it, but a force whose own settings change (such as `centres` above) needs a `heat()` to take effect on a settled layout.
+- **Slots are only valid during the call.** Nodes can move to different slots when the graph changes, so look nodes up by `sim.nodeId[i]` rather than keeping slot numbers between ticks.
+- Forces run in the order they were added, and adding the same function again does nothing. A force that throws is logged with `console.error`, and the tick carries on.
+
+To move nodes directly instead, such as keeping them inside a box, change their positions after the tick: in a `"postTick"` [loop hook](#loop-hooks), or after calling `tick()` yourself.
 
 ## TypeScript
 
