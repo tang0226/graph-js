@@ -710,7 +710,7 @@ describe("Renderer: sprites", () => {
         await renderBuilt(s);
         assert.equal(drawnSprites(s.ctx).length, 3, "every node draws an ImageBitmap");
         assert.equal(s.bitmaps.length, 3);
-        assert.equal(s.created.filter(c => c.width === 64).length, 1,
+        assert.equal(s.created.filter(c => c.width === 64 && !c.contextOpts?.willReadFrequently).length, 1,
           "the canvas is handed off and reused, not one canvas per sprite");
       } finally { s.restore(); }
     });

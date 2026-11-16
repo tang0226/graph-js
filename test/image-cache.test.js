@@ -370,6 +370,18 @@ describe("ImageCache", () => {
     } finally { restoreCanvas(); restoreImage(); }
   });
 
+  test("average is read on its own canvas, kept in memory, not on a sprite canvas", async () => {
+    const restoreImage = installImage();
+    const restoreCanvas = installOffscreenCanvas();
+    try {
+      await loadAll(["a.png", "b.png"]);
+      const readable = restoreCanvas.created.filter(c => c.contextOpts?.willReadFrequently);
+      assert.equal(readable.length, 1, "one, reused");
+      assert.equal(readable[0].reads, 2);
+      assert.ok(restoreCanvas.created.every(c => c === readable[0] || c.reads === 0), "sprite canvases aren't read back");
+    } finally { restoreCanvas(); restoreImage(); }
+  });
+
   test("average is null when the pixels can't be read", async () => {
     const restoreImage = installImage();
     const restoreCanvas = installOffscreenCanvas({ tainted: true });

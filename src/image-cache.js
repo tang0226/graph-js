@@ -243,6 +243,15 @@ export class ImageCache {
   _spriteCanvases = new Map();
 
   /**
+   * Canvas average colours are read on, `FALLBACK_SIZE` px square and kept
+   * between reads. Its context is made with `willReadFrequently`, so its
+   * pixels stay in memory: reading them back from a GPU canvas, as the sprite
+   * canvases may be, stalls the main thread. `null` where none can be made.
+   * @private @type {{ canvas: Canvas, ctx: CanvasContext } | null | undefined}
+   */
+  _avgCanvas;
+
+  /**
    * Called when a request settles, after its entry is updated. Not called
    * for a request whose entry was collected or replaced before it settled.
    * @private @type {((src: string, entry: Readonly<ImageEntry>) => void) | undefined}
@@ -598,8 +607,7 @@ export class ImageCache {
     ctx.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
     ctx.fill();
     ctx.globalCompositeOperation = "source-over";
-    // Pixels can only be read before the hand-off below
-    if (readAverage) rec.avg = this._averageColor(out);
+    if (readAverage) rec.avg = this._averageColor(resized, size);
     return "transferToImageBitmap" in out ? out.transferToImageBitmap() : out;
   }
 
@@ -634,20 +642,51 @@ export class ImageCache {
 
 
   /**
-   * Alpha-weighted average colour of a small canvas, or `null` when its
-   * pixels can't be read (a canvas tainted by a cross-origin image throws)
-   * or it's fully transparent.
-   * @param {Canvas} canvas - canvas (at most `FALLBACK_SIZE` px)
+   * Returns the canvas average colours are read on, making it the first time.
+   * @returns {{ canvas: Canvas, ctx: CanvasContext } | null} canvas and its
+   *    context, or `null` where none can be made
+   * @private
+   */
+  _averageCanvas() {
+    if (this._avgCanvas !== undefined) return this._avgCanvas;
+    /** @type {Canvas | null} */
+    let canvas = null;
+    if (typeof OffscreenCanvas !== "undefined") canvas = new OffscreenCanvas(FALLBACK_SIZE, FALLBACK_SIZE);
+    else if (typeof globalThis.document?.createElement === "function") {
+      canvas = globalThis.document.createElement("canvas");
+      canvas.width = canvas.height = FALLBACK_SIZE;
+    }
+    // Cast: tsc resolves `getContext` on the canvas union unreliably
+    const ctx = canvas && /** @type {CanvasContext | null} */ (canvas.getContext("2d", { willReadFrequently: true }));
+    return (this._avgCanvas = canvas && ctx ? { canvas, ctx } : null);
+  }
+
+
+  /**
+   * Alpha-weighted average colour of the circle inscribed in a resized image,
+   * or `null` when its pixels can't be read (a canvas tainted by a
+   * cross-origin image throws) or that circle is fully transparent. Read on
+   * its own canvas, not the sprite's (see `_avgCanvas`).
+   * @param {ImageBitmap} resized - image, cropped and resized to `size`
+   * @param {number} size - its side in px, at most `FALLBACK_SIZE`
    * @returns {string | null} CSS colour
    * @private
    */
-  _averageColor(canvas) {
+  _averageColor(resized, size) {
     try {
-      const ctx = ctx2d(canvas);
-      if (!ctx) return null;
-      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const avg = this._averageCanvas();
+      if (!avg) return null;
+      const { ctx } = avg;
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(resized, 0, 0, size, size);
+      const { data } = ctx.getImageData(0, 0, size, size);
+      // Only pixels whose centre is inside the circle, which is what the
+      // sprite shows
+      const c = size / 2, r2 = c * c;
       let r = 0, g = 0, b = 0, a = 0;
       for (let i = 0; i < data.length; i += 4) {
+        const p = i / 4, dx = (p % size) + 0.5 - c, dy = Math.floor(p / size) + 0.5 - c;
+        if (dx * dx + dy * dy > r2) continue;
         const w = data[i + 3];
         r += data[i] * w; g += data[i + 1] * w; b += data[i + 2] * w; a += w;
       }

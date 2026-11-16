@@ -181,9 +181,11 @@ export function installImage({
 /* Installs a fake OffscreenCanvas, which Node lacks, so the renderer can build
    sprites. Each canvas gets its own recording context; writes to
    globalCompositeOperation are logged into its ops so tests can check the
-   pre-clip mask. getImageData returns one pixel of `avg` (enough for an
-   average), or throws like a cross-origin-tainted canvas when `tainted`.
-   `restore.created` lists every canvas in creation order.
+   pre-clip mask. getImageData returns the region filled with `avg`, or
+   throws like a cross-origin-tainted canvas when `tainted`; each canvas
+   counts its calls in `reads`, and keeps the options its context was asked
+   for in `contextOpts`. `restore.created` lists every canvas in creation
+   order.
 
    transferToImageBitmap() returns a fake bitmap recording the canvas it came
    from (`source`) and whether close() was called; `restore.bitmaps` lists
@@ -202,14 +204,18 @@ export function installOffscreenCanvas({ avg = [10, 20, 30, 255], tainted = fals
         set: v => { gco = v; ctx.ops.push(["globalCompositeOperation", v]); },
       });
       ctx.imageSmoothingQuality = "low";
-      ctx.getImageData = () => {
+      this.reads = 0;
+      ctx.getImageData = (x, y, w, h) => {
+        this.reads++;
         if (tainted) throw new DOMException("The canvas has been tainted", "SecurityError");
-        return { data: Uint8ClampedArray.from(avg) };
+        const data = new Uint8ClampedArray(w * h * 4);
+        for (let i = 0; i < data.length; i += 4) data.set(avg, i);
+        return { data };
       };
       this.ctx = ctx;
       created.push(this);
     }
-    getContext() { return this.ctx; }
+    getContext(type, opts) { this.contextOpts = opts; return this.ctx; }
     transferToImageBitmap() {
       const bitmap = {
         width: this.width, height: this.height, source: this, closed: false,
