@@ -380,6 +380,49 @@ describe("Renderer: viewport culling", () => {
     r.render();
     assert.equal(opsNamed(ctx, "lineTo").length, 0, "the edge should be culled");
   });
+
+  test("an edge crossing the view between two off-screen nodes is drawn", () => {
+    const { sim, r, ctx } = scene(false, [["a", "b"]]);
+    sim.nodes.get("a").x = -100000;
+    sim.nodes.get("b").x = 100000;
+    r.render();
+    assert.equal(opsNamed(ctx, "arc").length, 0, "both nodes are off screen");
+    assert.equal(opsNamed(ctx, "lineTo").length, 1, "the edge passes through the view");
+  });
+
+  test("a diagonal edge passing a corner of the view is culled", () => {
+    const { sim, r, ctx } = scene(false, [["a", "b"]]);
+    // Canvas (-100, 50) to (100, -150): its box overlaps the view, but the
+    // line misses the top-left corner by ~35px
+    Object.assign(sim.nodes.get("a"), { x: -500, y: -250 });
+    Object.assign(sim.nodes.get("b"), { x: -300, y: -450 });
+    r.render();
+    assert.equal(opsNamed(ctx, "lineTo").length, 0);
+  });
+
+  test("a bowed edge is kept by its curve, not its chord", () => {
+    const { sim, r, ctx } = scene(true, [["a", "b"], ["b", "a"]], { edgeCfg: { bow: 100 } });
+    // The chord runs 30px above the view; a->b bows 50px down into it,
+    // b->a bows up and away
+    Object.assign(sim.nodes.get("a"), { x: -200, y: -330 });
+    Object.assign(sim.nodes.get("b"), { x: 200, y: -330 });
+    r.render();
+    assert.equal(opsNamed(ctx, "quadraticCurveTo").length, 1);
+  });
+
+  test("a self-loop reaching into the view from an off-screen node is drawn", () => {
+    const { sim, r, ctx } = scene(false, [["a", "a"]]);
+    // Node a's top is 5px below the view; its loop rises ~37px above it
+    Object.assign(sim.nodes.get("a"), { x: -100, y: 325 });
+    sim.nodes.get("b").x = 100000;
+    r.render();
+    assert.equal(opsNamed(ctx, "arc").length, 1, "only the loop is drawn");
+  });
+
+  test("an edge that isn't drawn isn't kept", () => {
+    const { r } = scene(false, [["a", "b"]], { radius: 200 });
+    assert.deepEqual(r._cull().edgesI, [], "overlapping nodes draw no edge");
+  });
 });
 
 describe("Renderer: images", () => {

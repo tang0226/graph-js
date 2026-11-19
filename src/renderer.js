@@ -340,16 +340,6 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Scratch flags for `_cull()`, by node index: 1 while a node is on screen.
-   * Grown as needed and cleared before `_cull()` returns, so it can be reused
-   * every frame without allocating.
-   * @type {Uint8Array}
-   * @private
-   */
-  _onScreen = new Uint8Array(0);
-
-
-  /**
    * Box of the last label passed to `_layoutLabel()`, reused between labels
    * @type {LabelBox}
    * @private
@@ -1623,36 +1613,33 @@ export class Renderer extends Emitter {
 
   /**
    * Culls all nodes, edges, and labels fully outside the current view.
-   * Only keeps on-screen nodes, edges connected to at least one on-screen
-   * node, and on-screen labels.
+   * Edges are tested as `_layoutEdge()` lays them out, so one crossing the
+   * view between two off-screen nodes is kept, and one that isn't drawn at
+   * all is dropped.
    * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
    * @private
    */
   _cull() {
     if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
+    const { w: cw, h: ch } = this._size;
     const [xMin, yMin] = this.canvasToSim(0, 0);
-    const [xMax, yMax] = this.canvasToSim(this._size.w, this._size.h);
+    const [xMax, yMax] = this.canvasToSim(cw, ch);
 
     const nodesI = [];
     const sim = this._simulation, n = sim.nodeList.length;
     const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
-    if (this._onScreen.length < n) this._onScreen = new Uint8Array(n);
-    const onScreen = this._onScreen;
     for (let i = 0; i < n; i++) {
-      if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) {
-        nodesI.push(i);
-        onScreen[i] = 1;
-      }
+      if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) nodesI.push(i);
     }
 
     const edgesI = [];
     if (this._opts.renderEdges) {
-      const ep = sim.edgePairs;
+      const ep = sim.edgePairs, styles = this._edgeStyles, bows = this._edgeBow;
       for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
-        if (onScreen[ep[j]] || onScreen[ep[j + 1]]) edgesI.push(i);
+        const p = this._layoutEdge(ep[j], ep[j + 1], styles[i], bows[i]);
+        if (p && edgeInView(p, cw, ch)) edgesI.push(i);
       }
     }
-    for (let k = 0; k < nodesI.length; k++) onScreen[nodesI[k]] = 0;
 
     const labelsI = [];
     if (this._opts.renderLabels) {
@@ -2223,6 +2210,36 @@ function edgeDistance(p, x, y, reach) {
     px = qx; py = qy;
   }
   return Math.sqrt(best);
+}
+
+/**
+ * Whether any of an edge laid out by `_layoutEdge()` may reach into a canvas
+ * of the given size: its stroke, arrowhead, or self-loop. Errs towards
+ * keeping an edge that only comes within an arrowhead's length of the view.
+ * @param {EdgeLayout} p - edge layout, in canvas px
+ * @param {number} w - canvas width, in canvas px
+ * @param {number} h - canvas height, in canvas px
+ * @returns {boolean} `false` only when the edge is entirely off the canvas
+ */
+function edgeInView(p, w, h) {
+  // Half the stroke, plus an arrowhead, which reaches at most its length
+  // off the stroke's centre line or a self-loop's circle
+  const pad = p.width / 2 + p.head;
+  if (p.loop) return circleRectCollision(p.cx, p.cy, p.lr + pad, 0, w, 0, h);
+
+  // The stroke stays inside the hull of its ends and, when bowed, its
+  // control point. Test that hull's box first...
+  const qx = p.bowed ? p.cx : p.sx, qy = p.bowed ? p.cy : p.sy;
+  if (Math.max(p.sx, p.ex, qx) + pad < 0 || Math.min(p.sx, p.ex, qx) - pad > w ||
+      Math.max(p.sy, p.ey, qy) + pad < 0 || Math.min(p.sy, p.ey, qy) - pad > h) return false;
+
+  // ...then the axis across the chord, which separates a long diagonal edge
+  // that passes by a corner of the view without entering it
+  const nx = p.sy - p.ey, ny = p.ex - p.sx, l = Math.hypot(nx, ny);
+  const c0 = nx * p.sx + ny * p.sy, cq = nx * qx + ny * qy;
+  const lo = Math.min(c0, cq) - pad * l, hi = Math.max(c0, cq) + pad * l;
+  return lo <= Math.max(0, nx * w) + Math.max(0, ny * h) &&
+         hi >= Math.min(0, nx * w) + Math.min(0, ny * h);
 }
 
 /**
