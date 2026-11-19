@@ -110,6 +110,12 @@
  * @property {boolean} renderLabel - whether to render the label, if it exists
  * @property {number} labelScale - label font size, in world px
  * @property {string} labelTextColor - label text color
+ * @property {string} labelStrokeColor - color of the stroke around the
+ *    label's letters, drawn beneath the text
+ * @property {number} labelStrokeWidth - width of the stroke around the
+ *    label's letters, in world px at the label's `labelScale`, so it keeps
+ *    its size relative to the text; centred on the letters' edges, so half
+ *    of it shows. 0 for none.
  */
 
 /**

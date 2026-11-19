@@ -15,14 +15,16 @@
    label's width is `text.length * size / 2`. fillText logs where the text
    lands and how big it is after the current transform (device px), plus the
    text state it was drawn with: [ "fillText", text, x, y, { font, size,
-   fillStyle, textAlign, textBaseline } ]. measureText logs the text and font,
-   so tests can count measurements. */
+   fillStyle, textAlign, textBaseline } ]. strokeText logs the same, with
+   { strokeStyle, width, lineJoin } as its state, `width` being the line
+   width after the transform. measureText logs the text and font, so tests
+   can count measurements. */
 export function makeCtx() {
   const ops = [];
   const log = name => (...args) => { ops.push([name, ...args]); };
   return {
     ops,
-    fillStyle: "", strokeStyle: "", lineWidth: 0,
+    fillStyle: "", strokeStyle: "", lineWidth: 0, lineJoin: "miter",
     font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
     transform: [1, 0, 0, 1, 0, 0],
     setTransform(...m) {
@@ -34,6 +36,12 @@ export function makeCtx() {
       ops.push(["fillText", text, a * x + c * y + e, b * x + d * y + f, {
         font: this.font, size: parseFloat(this.font) * Math.hypot(a, b),
         fillStyle: this.fillStyle, textAlign: this.textAlign, textBaseline: this.textBaseline,
+      }]);
+    },
+    strokeText(text, x, y) {
+      const [a, b, c, d, e, f] = this.transform;
+      ops.push(["strokeText", text, a * x + c * y + e, b * x + d * y + f, {
+        strokeStyle: this.strokeStyle, width: this.lineWidth * Math.hypot(a, b), lineJoin: this.lineJoin,
       }]);
     },
     measureText(text) {

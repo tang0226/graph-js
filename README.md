@@ -163,6 +163,8 @@ const gjs = new GraphJS({
       renderLabel: true,            // false hides this node's label
       labelScale: 15,               // label font size, in simulation units
       labelTextColor: "#000000",
+      labelStrokeColor: "#ffffff",  // color of the stroke around the label's letters
+      labelStrokeWidth: 0,          // stroke width, in simulation units; 0 for none (see "Node labels")
     },
     edgeConfig: {                   // default style for edges
       color: "#000000",             // also used for the arrowhead
@@ -350,6 +352,8 @@ All the available settings:
 | | `renderLabel` | `true` | `false` hides this node's label |
 | | `labelScale` | `15` | label font size, in simulation units |
 | | `labelTextColor` | `"#000000"` | |
+| | `labelStrokeColor` | `"#ffffff"` | color of the stroke around the label's letters |
+| | `labelStrokeWidth` | `0` | stroke width, in simulation units; `0` for none (see [Node labels](#node-labels)) |
 | Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
 | | `width` | `1` | in simulation units (see [Edge and outline widths](#edge-and-outline-widths)) |
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
@@ -459,6 +463,14 @@ Labels scale with the view like the nodes do: `labelScale` is the font size in s
 
 - `minLabelSize`: the renderer skips drawing labels at any font size below this threshold.
 - `maxLabelSize`: for large labels or high zoom levels, the renderer limits a label's canvas font size to this cap.
+
+To keep labels readable over edges and other nodes, give them a stroke in the background color:
+
+```js
+gjs.renderer.setDefaultNodeConfig({ labelStrokeColor: "#ffffff", labelStrokeWidth: 3 });
+```
+
+The stroke is drawn beneath the text, centred on the edges of the letters, so half of `labelStrokeWidth` shows around them. Like `labelScale`, the width is in simulation units, and it grows and shrinks with the text, including when `maxLabelSize` caps the label; `scaleStrokes` doesn't affect it.
 
 To label only some nodes, set `renderLabel` per node. Setting `renderLabels: false` in renderer options hides all nodes, ignoring the `renderLabel` config of individual nodes.
 

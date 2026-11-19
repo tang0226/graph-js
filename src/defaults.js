@@ -87,6 +87,8 @@ export const NODE_STYLE_DEFAULTS = Object.freeze({
   renderLabel: true,
   labelScale: 15,
   labelTextColor: "#000000",
+  labelStrokeColor: "#ffffff",
+  labelStrokeWidth: 0,
 });
 
 /**

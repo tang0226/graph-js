@@ -1278,6 +1278,41 @@ describe("Renderer: labels", () => {
       assert.deepEqual(texts(ctx), [["0", 300, 322]]);
     });
 
+    test("labels have no stroke by default", () => {
+      const { r, ctx } = lscene();
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "strokeText"), []);
+      assert.equal(r.nodeStyles[0].labelStrokeColor, "#ffffff");
+      assert.equal(r.nodeStyles[0].labelStrokeWidth, 0);
+    });
+
+    test("a label's stroke is drawn beneath its text, with round joins", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelStrokeColor: "white", labelStrokeWidth: 4 } });
+      r.render();
+      const strokes = opsNamed(ctx, "strokeText").map(([, t, x, y, s]) => [t, r2(x), r2(y), { ...s, width: r2(s.width) }]);
+      assert.deepEqual(strokes, [
+        ["a", 300, 322, { strokeStyle: "white", width: 4, lineJoin: "round" }],
+        ["b", 500, 322, { strokeStyle: "white", width: 4, lineJoin: "round" }],
+      ]);
+      const names = ctx.ops.map(op => op[0]);
+      assert.ok(names.indexOf("strokeText") < names.indexOf("fillText"), "stroked, then filled over");
+      assert.equal(ctx.lineJoin, "miter", "the join is restored for overlay hooks");
+    });
+
+    test("a label's stroke scales with its text, cap included", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelStrokeWidth: 3 }, opts: { maxLabelSize: 20 } });
+      const widths = () => opsNamed(ctx, "strokeText").map(([, , , , s]) => r2(s.width));
+      r.view.zoom = 0.5;
+      r.render();
+      assert.deepEqual(widths(), [1.5, 1.5]);
+
+      ctx.ops.length = 0;
+      r.view.x = -100;
+      r.view.zoom = 4;                                // 60px labels capped at 20px
+      r.render();
+      assert.deepEqual(widths(), [r2(3 * 20 / 15)]);
+    });
+
     test("labels follow changes to graph data", () => {
       const { g, r, ctx } = lscene({ nodeCfg: { label: n => n.data.name ?? null } });
       r.render();
@@ -1367,6 +1402,13 @@ describe("Renderer: labels", () => {
       sim.nodes.get("a").y = -345;                    // label -323..-308
       r.render();
       assert.deepEqual(texts(ctx).map(([t]) => t), ["b"]);
+    });
+
+    test("a label stays drawn while only its stroke is on screen", () => {
+      const { sim, r, ctx } = lscene({ nodeCfg: { labelStrokeWidth: 20 } });
+      sim.nodes.get("a").y = -345;                    // text -323..-308; stroke reaches -298
+      r.render();
+      assert.deepEqual(texts(ctx).map(([t]) => t), ["a", "b"]);
     });
 
     test("culling uses the label's measured width", () => {
@@ -2562,6 +2604,11 @@ describe("Renderer: export", () => {
       assert.equal(r.toCanvas({ canvas: out(), fit: true }).height, 89, "37 + 20 + 32");
       r.setView({ zoom: 0.2 });   // 3px labels, under minLabelSize
       assert.equal(r.toCanvas({ canvas: out(), fit: true, padding: 0 }).height, 8, "40 * 0.2");
+    });
+
+    test("label strokes are included", () => {
+      const { r } = scene(false, [], { nodeCfg: { label: n => n.id, labelStrokeWidth: 4 } });
+      assert.equal(r.toCanvas({ canvas: out(), fit: true }).height, 91, "half the stroke past 37: 39 + 20 + 32");
     });
 
     test("labels capped by maxLabelSize are fitted at their capped size", () => {

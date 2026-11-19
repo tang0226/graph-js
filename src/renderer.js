@@ -674,6 +674,8 @@ export class Renderer extends Emitter {
     rNode.renderLabel = o?.renderLabel?.(gNode, g) ?? acc.renderLabel(gNode, g);
     rNode.labelScale = o?.labelScale?.(gNode, g) ?? acc.labelScale(gNode, g);
     rNode.labelTextColor = o?.labelTextColor?.(gNode, g) ?? acc.labelTextColor(gNode, g);
+    rNode.labelStrokeColor = o?.labelStrokeColor?.(gNode, g) ?? acc.labelStrokeColor(gNode, g);
+    rNode.labelStrokeWidth = o?.labelStrokeWidth?.(gNode, g) ?? acc.labelStrokeWidth(gNode, g);
   }
 
 
@@ -1316,10 +1318,10 @@ export class Renderer extends Emitter {
    * Draws a node's label. Whether it should be drawn (has a label, is
    * enabled, large enough, on screen) is decided by `_cull()`.
    *
-   * Expects the context to hold the label font at `LABEL_REF_SIZE` and the
-   * alignment for `labelPosition`, both set once per frame by `render()`. The
-   * label is sized and placed by transform, which is left set; `render()`
-   * restores the base transform after each label pass.
+   * Expects the context to hold the label font at `LABEL_REF_SIZE`, the
+   * alignment for `labelPosition` and a round line join, all set once per
+   * frame by `render()`. The label is sized and placed by transform, which is
+   * left set; `render()` restores the base transform after each label pass.
    * @param {number} i - the node's slot in the simulation
    * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
@@ -1340,6 +1342,13 @@ export class Renderer extends Emitter {
     const size = Math.min(nodeStyle.labelScale * zoom, this._opts.maxLabelSize);
     const s = dpr * size / LABEL_REF_SIZE;
     this._ctx.setTransform(s, 0, 0, s, dpr * x, dpr * y);
+    const { labelStrokeWidth: sw, labelScale } = nodeStyle;
+    if (sw > 0 && labelScale > 0) {
+      // In font units, so the stroke scales with the text, cap included
+      this._ctx.lineWidth = sw * LABEL_REF_SIZE / labelScale;
+      this._ctx.strokeStyle = nodeStyle.labelStrokeColor;
+      this._ctx.strokeText(String(nodeStyle.label), 0, 0);
+    }
     this._ctx.fillStyle = nodeStyle.labelTextColor;
     this._ctx.fillText(String(nodeStyle.label), 0, 0);
   }
@@ -1731,6 +1740,9 @@ export class Renderer extends Emitter {
     const hasLabels = inFrame.labelsI.length > 0;
     if (hasLabels) {
       this._ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`;
+      // Mitred corners would spike out of label strokes. Edges and outlines
+      // have no corners to join, so they're unaffected.
+      this._ctx.lineJoin = "round";
       switch (this._opts.labelPosition) {
         case "top":
           this._ctx.textAlign = "center";
@@ -1779,6 +1791,8 @@ export class Renderer extends Emitter {
       for (const i of inFrame.labelsI) this._renderNodeLabelByIndex(i);
       if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+    // Back to the canvas default, for hooks
+    if (hasLabels) this._ctx.lineJoin = "miter";
 
     if (hooks) this._runHooks("overlay", time);
   }
@@ -1959,8 +1973,9 @@ export class Renderer extends Emitter {
 
   /**
    * Bounds of the graph in simulation units: its nodes, self-loops, bowed
-   * edges and labels. Stroke widths and arrowheads that stick out aren't
-   * included. Expects at least one node, and labels to be measured.
+   * edges and labels, with their strokes. Edge and outline widths and
+   * arrowheads that stick out aren't included. Expects at least one node,
+   * and labels to be measured.
    * @param {number | null} zoom - zoom to size labels at, which also hides
    *    those too small to read; `null` for every label at full size, which
    *    is as big as they get at any zoom
@@ -2023,8 +2038,9 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Places a node's label box, in simulation units, by `labelPosition`.
-   * Writes into one reused object, so culling doesn't allocate per label.
+   * Places a node's label box, in simulation units, by `labelPosition`,
+   * including the part of its stroke outside the text. Writes into one
+   * reused object, so culling doesn't allocate per label.
    * @param {number} i - cache index of the node
    * @param {number} h - label height (font size) in simulation units
    * @returns {{ x0: number, y0: number, w: number, h: number }} the box
@@ -2040,8 +2056,13 @@ export class Renderer extends Emitter {
       case "left":  box.x0 = x - d - w; box.y0 = y - h / 2; break;
       default:      box.x0 = x - w / 2; box.y0 = y + d;     break;
     }
-    box.w = w;
-    box.h = h;
+    // Half the stroke shows, scaled with the text as it's drawn
+    const { labelStrokeWidth: sw, labelScale } = this._nodeStyles[i];
+    const pad = sw > 0 && labelScale > 0 ? sw / 2 * h / labelScale : 0;
+    box.x0 -= pad;
+    box.y0 -= pad;
+    box.w = w + 2 * pad;
+    box.h = h + 2 * pad;
     return box;
   }
 
