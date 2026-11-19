@@ -22,6 +22,15 @@
  */
 
 /**
+ * Some of a graph's nodes: one node's id, their ids in an array, `Set` or
+ * other iterable, or a function that picks a node by returning `true`. A
+ * string is one id. At runtime, any value that isn't a function or an
+ * iterable is one id too, such as an object id; it's typed as a string or
+ * number so that picking functions keep their type.
+ * @typedef {string | number | Iterable<NodeId> | ((node: GraphNode) => boolean)} NodeSelection
+ */
+
+/**
  * @typedef {object} GraphEdge
  * @property {GraphNode} src - source node (order does not matter in an undirected graph)
  * @property {GraphNode} dest - destination node (order does not matter in an undirected graph)

@@ -602,7 +602,7 @@ describe("GraphJS: fitView and focusNode", () => {
     try {
       // Nodes span x -20..220 and y -20..20; the width limits the zoom
       assertView(gjs.viewFitted(), { x: 100, y: 0, zoom: (800 - 32) / 240 });
-      assertView(gjs.viewFitted(0), { x: 100, y: 0, zoom: 800 / 240 });
+      assertView(gjs.viewFitted({ padding: 0 }), { x: 100, y: 0, zoom: 800 / 240 });
       assert.deepEqual(gjs.view, { x: 0, y: 0, zoom: 1 }, "nothing is applied");
     } finally { done(); }
   });
@@ -644,6 +644,159 @@ describe("GraphJS: fitView and focusNode", () => {
       assert.equal(gjs.fitView(), null);
       assert.equal(gjs.isTweening(), false);
     } finally { done(); }
+  });
+
+  describe("fitView options", () => {
+    // Fitting only b (x 180..220, y -20..20), the height limits the zoom
+    const ONLY_B = { x: 200, y: 0, zoom: (600 - 32) / 40 };
+
+    test("nodes fits only the nodes picked, by id, ids or function", () => {
+      for (const nodes of ["b", ["b"], new Set(["b"]), node => node.id === "b"]) {
+        const { gjs, done } = moves();
+        try {
+          gjs.fitView({ nodes, duration: 0 });
+          assertView(gjs.view, ONLY_B);
+        } finally { done(); }
+      }
+    });
+
+    test("any value that isn't a function or iterable is one id", () => {
+      const { gjs, done } = moves();
+      try {
+        const key = { name: "c" };
+        gjs.addNode({ id: 7 });
+        gjs.addNode({ id: key });
+        gjs.simulation.sync();
+        put(gjs, 7, 400, 0);
+        put(gjs, key, -400, 0);
+        gjs.fitView({ nodes: 7, centerNodes: key, duration: 0 });
+        assertNear(gjs.view.x, -400);
+      } finally { done(); }
+    });
+
+    test("the labels of the nodes picked are fitted, and no others", () => {
+      const { gjs, done } = moves();
+      try {
+        gjs.renderer.setDefaultNodeConfig({ label: n => n.id });
+        gjs.fitView({ nodes: ["b"], duration: 0 });
+        // b's label runs 22 to 37 below it: y -20..37
+        assertView(gjs.view, { x: 200, y: 8.5, zoom: (600 - 32) / 57 });
+      } finally { done(); }
+    });
+
+    test("centerNodes centres the view on them, fitting every node around it", () => {
+      const { gjs, done } = moves();
+      try {
+        // Centred on a, the far side reaches 220: 440 wide
+        const onA = { x: 0, y: 0, zoom: (800 - 32) / 440 };
+        gjs.fitView({ centerNodes: ["a"], duration: 0 });
+        assertView(gjs.view, onA);
+        gjs.setView({ x: 0, y: 0, zoom: 1 });
+        gjs.fitView({ nodes: ["b"], centerNodes: ["a"], duration: 0 });
+        assertView(gjs.view, onA, "the centre nodes are fitted too");
+        gjs.setView({ x: 0, y: 0, zoom: 1 });
+        gjs.fitView({ nodes: "b", centerNodes: "a", duration: 0 });
+        assertView(gjs.view, onA, "as single ids");
+      } finally { done(); }
+    });
+
+    test("centring on no nodes centres on the nodes fitted", () => {
+      const { gjs, done } = moves();
+      try {
+        gjs.fitView({ nodes: ["b"], centerNodes: [], duration: 0 });
+        assertView(gjs.view, ONLY_B);
+      } finally { done(); }
+    });
+
+    test("picking no nodes returns null, without starting a move", () => {
+      const { gjs, done } = moves();
+      try {
+        assert.equal(gjs.fitView({ nodes: [] }), null);
+        assert.equal(gjs.fitView({ nodes: () => false }), null);
+        assert.equal(gjs.isTweening(), false);
+      } finally { done(); }
+    });
+
+    test("minZoom and maxZoom limit the zoom, keeping the centre", () => {
+      const { gjs, done } = moves();
+      try {
+        gjs.fitView({ nodes: ["b"], maxZoom: 2, duration: 0 });
+        assert.deepEqual(gjs.view, { x: 200, y: 0, zoom: 2 });
+        gjs.fitView({ minZoom: 5, duration: 0 });
+        assert.deepEqual(gjs.view, { x: 100, y: 0, zoom: 5 });
+        gjs.fitView({ maxZoom: Infinity, duration: 0 });
+        assertView(gjs.view, gjs.viewFitted());
+      } finally { done(); }
+    });
+
+    test("ids are read once; nodes removed mid-move drop out", () => {
+      const { gjs, advance, done } = moves();
+      try {
+        const ids = ["a", "b"];
+        gjs.fitView({ nodes: ids });
+        ids.pop();                                  // changing the array changes nothing
+        advance();
+        advance(300);
+        assert.ok(gjs.view.x > 0, "still heading for both");
+        gjs.removeNode("b");
+        advance(300);
+        assertView(gjs.view, { x: 0, y: 0, zoom: (600 - 32) / 40 });
+      } finally { done(); }
+    });
+
+    test("a function is run again on every frame", () => {
+      const { gjs, advance, done } = moves();
+      try {
+        gjs.fitView({ nodes: node => node.id !== "a" });
+        advance();
+        advance(300);
+        gjs.addNode({ id: "c" });                   // picked once it's added
+        gjs.simulation.sync();
+        put(gjs, "c", 400, 0);
+        advance(300);
+        assertNear(gjs.view.x, 300);
+      } finally { done(); }
+    });
+
+    test("viewFitted takes the same fit options, and only an object", () => {
+      const { gjs, done } = moves();
+      try {
+        assertView(gjs.viewFitted({ nodes: "b" }), ONLY_B);
+        assert.deepEqual(gjs.viewFitted({ nodes: "b", maxZoom: 2 }), { x: 200, y: 0, zoom: 2 });
+        assert.equal(gjs.viewFitted({ nodes: [] }), null);
+        assert.throws(() => gjs.viewFitted(24),
+          /^TypeError: Renderer: `viewFitted\(\)` takes an options object, such as `\{ padding: 24 \}`$/);
+        assert.throws(() => gjs.viewFitted({ duration: 0 }), /^TypeError: Renderer: unknown option `duration`$/,
+          "move options are fitView's");
+        assert.throws(() => gjs.renderer.viewFitted({ nodes: "zzz" }), ReferenceError);
+      } finally { done(); }
+    });
+
+    test("an iterator is read once, so it isn't used up", () => {
+      const { gjs, advance, done } = moves();
+      try {
+        gjs.fitView({ nodes: ["b"].values() });
+        advance();
+        advance(600);
+        assertView(gjs.view, ONLY_B);
+      } finally { done(); }
+    });
+
+    test("unknown ids and invalid zoom limits throw, starting nothing", () => {
+      const { gjs, done } = moves();
+      try {
+        assert.throws(() => gjs.fitView({ nodes: ["a", "zzz"] }), /^ReferenceError: Renderer: no node with id "zzz"$/);
+        assert.throws(() => gjs.fitView({ nodes: "ab" }), /no node with id "ab"/, "a string is one id");
+        assert.throws(() => gjs.fitView({ centerNodes: 5 }), /no node with id "5"/);
+        assert.throws(() => gjs.fitView({ centerNodes: ["zzz"] }), ReferenceError);
+        assert.throws(() => gjs.fitView({ minZoom: 0 }), RangeError);
+        assert.throws(() => gjs.fitView({ maxZoom: -1 }), RangeError);
+        assert.throws(() => gjs.fitView({ minZoom: Infinity }), RangeError);
+        assert.throws(() => gjs.fitView({ minZoom: 2, maxZoom: 1 }),
+          /^RangeError: Renderer: `maxZoom` must be at least `minZoom`$/);
+        assert.equal(gjs.isTweening(), false);
+      } finally { done(); }
+    });
   });
 
   test("focusNode centres a node at the given zoom, or the current one", () => {
@@ -778,7 +931,7 @@ describe("GraphJS: fitView and focusNode", () => {
       assert.throws(() => gjs.fitView({ ease: "wobble" }), TypeError);
       assert.throws(() => gjs.focusNode("a", { zoom: 0 }), RangeError);
       assert.throws(() => gjs.focusNode("a", { zoomOut: -1 }), RangeError);
-      assert.throws(() => gjs.viewFitted(-5), RangeError);
+      assert.throws(() => gjs.viewFitted({ padding: -5 }), RangeError);
       assert.equal(gjs.isTweening(), false, "nothing started");
     } finally { done(); }
   });

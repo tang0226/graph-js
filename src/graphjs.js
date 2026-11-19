@@ -1,5 +1,5 @@
-/** @import { NodeData, NodeId, GraphEdge } from './typedefs/graph.js' */
-/** @import { Canvas, View, ExportOpts, ExportBlobOpts } from './typedefs/renderer.js' */
+/** @import { NodeData, NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
+/** @import { Canvas, View, ViewFittedOpts, ExportOpts, ExportBlobOpts } from './typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
 /** @import { ViewMoveOpts, FitViewOpts, FocusNodeOpts } from './typedefs/graphjs.js' */
@@ -16,7 +16,7 @@ import { Emitter } from "./emitter.js";
 import { HookRegistry } from "./hook-registry.js";
 import { viewPath } from "./view-path.js";
 import { checkKnownKeys, checkEach, checkNumber, checkOneOf } from "./validate.js";
-import { keysOf, now } from "./utils.js";
+import { keysOf, now, readNodeSelection } from "./utils.js";
 
 
 /**
@@ -48,12 +48,6 @@ const VIEW_MOVE_RULES = {
   ease: () => {},
   unit: (/** @type {unknown} */ v) => checkOneOf("GraphJS", "unit", v, ["ms", "frames"]),
 };
-
-const FIT_VIEW_RULES = {
-  ...VIEW_MOVE_RULES,
-  padding: (/** @type {unknown} */ v) => checkNumber("GraphJS", "padding", v, { min: 0 }),
-};
-const FIT_VIEW_OPTION_NAMES = new Set(Object.keys(FIT_VIEW_RULES));
 
 const FOCUS_NODE_RULES = {
   ...VIEW_MOVE_RULES,
@@ -834,49 +828,68 @@ export class GraphJS extends Emitter {
 
 
   /**
-   * Returns the view that frames the whole graph, without applying it.
+   * Returns the view that frames the graph, or some of its nodes, without
+   * applying it: the view `fitView()` aims for with the same options.
    * Delegates to `Renderer.viewFitted()`.
-   * @param {number} [padding=16] - canvas px to leave around the graph
-   * @returns {View | null} the fitted view, or `null` if the graph has no
-   *    nodes
-   * @throws {RangeError} throws if `padding` is invalid or leaves no room
-   *    for the graph
+   * @param {ViewFittedOpts} [opts={}] - `padding` around the nodes, in canvas
+   *    px (16 by default); the `nodes` to fit (every node by default) and
+   *    `centerNodes` to centre on (`nodes` by default); and `minZoom` and
+   *    `maxZoom` (no limit by default)
+   * @returns {View | null} the fitted view, or `null` if there are no nodes
+   *    to fit
+   * @throws {TypeError | RangeError | ReferenceError} throws as
+   *    `Renderer.viewFitted()` does
    * @throws {Error} throws if no canvas is attached
    */
-  viewFitted(padding = undefined) {
+  viewFitted(opts = {}) {
     this._requireCanvas();
-    return this._renderer.viewFitted(padding);
+    return this._renderer.viewFitted(opts);
   }
 
 
   /**
-   * Moves the view to frame the whole graph, as `viewFitted()` works it out.
-   * The move zooms at a steady exponential rate and pans at a steady speed on
-   * screen. It aims for the graph's current frame on every frame, so it ends
-   * framing a layout that's still settling.
+   * Moves the view to frame the graph, or some of its nodes, as
+   * `viewFitted()` works it out. The move zooms at a steady exponential rate
+   * and pans at a steady speed on screen. It aims for the nodes' current
+   * frame on every frame, so it ends framing a layout that's still settling.
+   *
+   * `nodes` and `centerNodes` pick nodes as for `viewFitted()`, so the view
+   * can frame a node's neighbourhood with the node in the middle. Ids are
+   * read once, and nodes removed during the move drop out; a function
+   * picking nodes is run again on every frame.
    *
    * The move is a tween with the key `"view"`: it replaces another
    * `fitView()` or `focusNode()` move, `cancelTween("view")` stops it, and
    * built-in panning and wheel zooming cancel it. Frames are requested while
    * the loop is stopped, as `requestRender()` does.
-   * @param {FitViewOpts} [opts={}] - `padding` around the graph, in canvas
-   *    px (16 by default), and the move's `duration`, `ease` and `unit`
-   * @returns {Tween<number> | null} the move's tween, or `null` if the graph
-   *    has no nodes
-   * @throws {TypeError | RangeError} throws if an option is invalid or
-   *    unknown, or `padding` leaves no room for the graph
+   * @param {FitViewOpts} [opts={}] - the options `viewFitted()` takes, and
+   *    the move's `duration`, `ease` and `unit`
+   * @returns {Tween<number> | null} the move's tween, or `null` if there are
+   *    no nodes to fit
+   * @throws {TypeError | RangeError | ReferenceError} throws if a move
+   *    option is invalid, or as `Renderer.viewFitted()` does for the others
    * @throws {Error} throws if no canvas is attached
    */
   fitView(opts = {}) {
-    checkKnownKeys("GraphJS", opts, FIT_VIEW_OPTION_NAMES);
-    checkEach(opts, FIT_VIEW_RULES);
+    if (typeof opts !== "object" || opts === null) throw new TypeError("GraphJS: options must be an object");
+    const { duration, ease, unit, ...fit } = opts;
+    const move = { duration, ease, unit };
+    checkEach(move, VIEW_MOVE_RULES);
     this._requireCanvas();
-    const { padding, ...move } = opts;
-    const first = this._renderer.viewFitted(padding);
+    // Read once, so an iterator isn't used up and later changes don't count
+    const nodes = readNodeSelection(fit.nodes), centerNodes = readNodeSelection(fit.centerNodes);
+    const first = this._renderer.viewFitted({ ...fit, nodes: nodes ?? undefined, centerNodes: centerNodes ?? undefined });
     if (!first) return null;
+
+    // During the move, nodes removed since are left out, as `viewFitted()`
+    // rejects unknown ids. If none are left, the last frame is the target.
+    /** @param {Set<NodeId> | ((node: GraphNode) => boolean) | null} picked */
+    const live = picked => picked instanceof Set ?
+      [...picked].filter(id => this._graph.hasNode(id)) : picked ?? undefined;
     let last = first;
-    // Nodes removed mid-move leave the last frame as the target
-    return this._moveView(() => (last = this._renderer.viewFitted(padding) ?? last), 0, move);
+    return this._moveView(() => (last = this._renderer.viewFitted({
+      ...fit, nodes: live(nodes), centerNodes: live(centerNodes),
+    }) ?? last), 0, move);
   }
 
 

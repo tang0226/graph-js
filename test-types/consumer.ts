@@ -23,7 +23,7 @@ import type {
   NodeStyle, EdgeStyle, NodeStyleConfig, EdgeStyleConfig,
   RendererHookType, RendererHook,
   RendererEventMap, RendererEventType, RendererEvent, RendererListener,
-  GraphJSOpts, GraphJSHookType, GraphJSHook, ViewMoveOpts, FitViewOpts, FocusNodeOpts,
+  GraphJSOpts, GraphJSHookType, GraphJSHook, ViewMoveOpts, FitViewOpts, FocusNodeOpts, NodeSelection, ViewFittedOpts,
   GraphJSPointerEventData, GraphJSNodeEventData, GraphJSEdgeEventData, GraphJSMoveEventData, GraphJSViewEventData, GraphJSEventMap, GraphJSEventType, GraphJSEvent, GraphJSListener,
   InteractionOptsInput, InteractionOpts,
   TweenValue, TweenUnit, Easing, EasingName, TweenOpts,
@@ -379,8 +379,14 @@ new Tween(tweenOpts).step(16);
 // View moves
 const fitMove: Tween<number> | null = gjs.fitView({ padding: 24, duration: 400, ease: "outCubic" });
 const focusMove: Tween<number> = gjs.focusNode("a", { zoom: 2, zoomOut: 0.5, unit: "frames", ease: t => t });
-const fitted: View | null = gjs.viewFitted(8);
+const fitted: View | null = gjs.viewFitted({ padding: 8 });
 const rendererFitted: View | null = r.viewFitted();
+const fittedOpts: ViewFittedOpts = { nodes: "a", centerNodes: ["a"], maxZoom: 2 };
+r.viewFitted(fittedOpts);
+// @ts-expect-error -- padding goes in the options object
+gjs.viewFitted(8);
+// @ts-expect-error -- move options are for fitView only
+gjs.viewFitted({ duration: 0 });
 const moveOpts: ViewMoveOpts = { duration: 0 };
 const fitOpts: FitViewOpts = { ...moveOpts, padding: 0 };
 const focusOpts: FocusNodeOpts = { ...moveOpts, zoom: 1, zoomOut: 2 };
@@ -392,6 +398,12 @@ gjs.focusNode("a", { padding: 4 });
 gjs.fitView({ zoomOut: 1 });
 // @ts-expect-error -- not a built-in easing
 gjs.fitView({ ease: "springy" });
+const picked: NodeSelection = ["a", 1];
+gjs.fitView({ nodes: picked, centerNodes: new Set(["a"]), minZoom: 0.5, maxZoom: 4 });
+gjs.fitView({ nodes: node => node.data.group === 1 });
+gjs.fitView({ nodes: 3, centerNodes: "a" });
+// @ts-expect-error -- a selection function picks with a boolean
+gjs.fitView({ nodes: node => node.data.group.length as number });
 
 // Image request options use the DOM's own types, so invalid values are rejected
 new GraphJS({ renderer: { crossOrigin: null, imageReferrerPolicy: "origin" } });

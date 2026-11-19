@@ -2,7 +2,7 @@
 /** @import { GraphJS } from '../graphjs.js' */
 /** @import { GraphOpts, NodeId, GraphEdge } from './graph.js' */
 /** @import { SimOptsInput } from './simulation.js' */
-/** @import { RendererOptsInput, Canvas, View } from './renderer.js' */
+/** @import { RendererOptsInput, Canvas, View, ViewFittedOpts } from './renderer.js' */
 /** @import { TweenUnit, Easing, EasingName } from './tween.js' */
 /** @import { InteractionOptsInput } from './interaction.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
@@ -32,12 +32,9 @@
  */
 
 /**
- * Options for `fitView()`
- * @typedef {ViewMoveOpts & {
- *   padding?: number,
- * }} FitViewOpts
- * `padding` is the space to leave around the graph, in canvas px: 16 by
- * default.
+ * Options for `fitView()`: which nodes to fit and how, as for
+ * `viewFitted()`, and how to move the view there
+ * @typedef {ViewMoveOpts & ViewFittedOpts} FitViewOpts
  */
 
 /**

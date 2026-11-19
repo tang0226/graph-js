@@ -10,7 +10,7 @@
  * @import {
  *  NodeStyle, EdgeStyle,
  *  NodeStyleConfig, EdgeStyleConfig,
- *  RendererOpts, RendererOptsInput, HighlightMode, ExportOpts, ExportBlobOpts,
+ *  RendererOpts, RendererOptsInput, HighlightMode, ViewFittedOpts, ExportOpts, ExportBlobOpts,
  *  RendererHookType, RendererHook,
  *  RendererEventMap, RendererEventType,
  *  Canvas, CanvasContext, Size, View, ImageEntry, ImageCrossOrigin,
@@ -19,7 +19,7 @@
 
 
 import { Simulation } from "./simulation.js";
-import { circleRectCollision, keysOf, now, segmentDistance2 } from "./utils.js";
+import { circleRectCollision, keysOf, now, readNodeSelection, segmentDistance2 } from "./utils.js";
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
@@ -154,6 +154,16 @@ const OPTION_RULES = {
  * linearly with it.
  */
 const LABEL_REF_SIZE = 100;
+
+/** Checks for `viewFitted()` options. Any value is a node selection. */
+const VIEW_FITTED_RULES = {
+  padding: (/** @type {unknown} */ v) => checkNumber("Renderer", "padding", v, { min: 0 }),
+  nodes: () => {},
+  centerNodes: () => {},
+  minZoom: (/** @type {unknown} */ v) => checkNumber("Renderer", "minZoom", v, { min: 0, aboveMin: true }),
+  maxZoom: (/** @type {unknown} */ v) => checkNumber("Renderer", "maxZoom", v, { min: 0, aboveMin: true, allowInfinity: true }),
+};
+const VIEW_FITTED_OPTION_NAMES = new Set(Object.keys(VIEW_FITTED_RULES));
 
 /** Faintest an edge is drawn when it fades below `minEdgeWidth`, as a
     fraction of its normal alpha. Fainter edges are skipped. */
@@ -1216,28 +1226,103 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Returns the view that frames the whole graph on the canvas, without
-   * applying it: centred on the graph, at the largest zoom that fits it with
+   * Returns the view that frames the graph, or some of its nodes, on the
+   * canvas, without applying it: at the largest zoom that fits them with
    * `padding` to spare on each side. The graph includes self-loops, bowed
    * edges and the labels shown at that zoom, as `toCanvas({ fit: true })`
    * frames it.
-   * @param {number} [padding=16] - canvas px to leave around the graph
-   * @returns {View | null} the fitted view, or `null` if the graph has no
-   *    nodes
-   * @throws {RangeError} throws if `padding` isn't a finite number, 0 or
-   *    more, or leaves no room for the graph
+   *
+   * `nodes` picks the nodes to fit, with their labels, self-loops and the
+   * bowed edges between them. The view is centred on the middle of the nodes
+   * `centerNodes` picks, which are fitted too, at the largest zoom that fits
+   * every node picked around that point. Each takes one id, an iterable of
+   * ids, or a function picking nodes. `minZoom` and `maxZoom` limit the zoom,
+   * keeping the centre.
+   * @param {ViewFittedOpts} [opts={}] - `padding` around the nodes, in
+   *    canvas px (16 by default); the `nodes` to fit (every node by default)
+   *    and `centerNodes` to centre on (`nodes` by default, or if it picks
+   *    none); and `minZoom` and `maxZoom` (no limit by default)
+   * @returns {View | null} the fitted view, or `null` if there are no nodes
+   *    to fit
+   * @throws {TypeError} throws if `opts` isn't an object, such as a padding
+   *    passed on its own, or has an unknown option
+   * @throws {RangeError} throws if an option is out of range, `maxZoom` is
+   *    below `minZoom`, or `padding` leaves no room for the nodes
+   * @throws {ReferenceError} throws if `nodes` or `centerNodes` has an id
+   *    with no node
    * @throws {Error} throws if no canvas is attached
    */
-  viewFitted(padding = 16) {
-    checkNumber("Renderer", "padding", padding, { min: 0 });
+  viewFitted(opts = {}) {
+    if (typeof opts === "number") {
+      throw new TypeError("Renderer: `viewFitted()` takes an options object, such as `{ padding: 24 }`");
+    }
+    checkKnownKeys("Renderer", opts, VIEW_FITTED_OPTION_NAMES);
+    checkEach(opts, VIEW_FITTED_RULES);
+    const { padding = 16, minZoom = 0, maxZoom = Infinity } = opts;
+    if (maxZoom < minZoom) throw new RangeError("Renderer: `maxZoom` must be at least `minZoom`");
+    const fitIds = this._checkSelection(readNodeSelection(opts.nodes));
+    const centerIds = this._checkSelection(readNodeSelection(opts.centerNodes));
     if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+
     this.sync();
-    if (this._simulation.nodeList.length === 0) return null;
+    // After syncing, as it can move nodes to new slots
+    const fit = this._pickSlots(fitIds), center = this._pickSlots(centerIds);
+    if (fit && center) for (let i = 0; i < fit.length; i++) fit[i] |= center[i];
+    if (this._simulation.nodeList.length === 0 || (fit && !fit.includes(1))) return null;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
+
+    // Centring nodes that aren't picked centres on the nodes fitted instead
+    const middle = center?.includes(1) ? center : null;
     const { w, h } = this._size;
-    const zoom = this._fitZoom(w, h, padding);
-    const b = this._graphBounds(zoom);
+    const zoom = Math.min(Math.max(this._fitZoom(w, h, padding, fit, middle), minZoom), maxZoom);
+    const b = this._graphBounds(zoom, middle ?? fit);
     return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom };
+  }
+
+
+  /**
+   * Throws unless every id a selection names is a node in the graph.
+   * @template {Set<NodeId> | ((node: GraphNode) => boolean) | null} S
+   * @param {S} picked - a selection, as `readNodeSelection()` gives it
+   * @returns {S} the selection
+   * @throws {ReferenceError} throws if an id has no node
+   * @private
+   */
+  _checkSelection(picked) {
+    if (picked instanceof Set) {
+      for (const id of picked) {
+        if (!this._graph.hasNode(id)) throw new ReferenceError(`Renderer: no node with id "${id}"`);
+      }
+    }
+    return picked;
+  }
+
+
+  /**
+   * Flags the nodes a selection picks, by slot. Expects the simulation to be
+   * synced.
+   * @param {ReadonlySet<NodeId> | ((node: GraphNode) => boolean) | null} picked -
+   *    ids or a function of each node; `null` for every node
+   * @returns {Uint8Array | null} 1 for each node picked, or `null` for every
+   *    node
+   * @private
+   */
+  _pickSlots(picked) {
+    if (!picked) return null;
+    const sim = this._simulation, flags = new Uint8Array(sim.nodeList.length);
+    if (typeof picked === "function") {
+      const ids = sim.nodeId, nodes = this._graph.nodes;
+      for (let i = 0; i < flags.length; i++) {
+        const node = nodes.get(ids[i]);
+        if (node && picked(node)) flags[i] = 1;
+      }
+    } else {
+      for (const id of picked) {
+        const i = sim.nodeIndex.get(id);
+        if (i !== undefined) flags[i] = 1;
+      }
+    }
+    return flags;
   }
 
 
@@ -1908,31 +1993,46 @@ export class Renderer extends Emitter {
 
 
   /**
-   * The largest zoom at which the whole graph fits in a width and height,
-   * leaving `padding` around it. Expects at least one node, and labels to be
-   * measured.
+   * The largest zoom at which the whole graph, or some of its nodes, fits in
+   * a width and height, leaving `padding` around it. Expects at least one
+   * node picked, and labels to be measured.
    * @param {number | undefined} width - width to fit, in canvas px;
    *    `undefined` to fit the height only
    * @param {number | undefined} height - height to fit, in canvas px;
    *    `undefined` to fit the width only
    * @param {number} padding - canvas px to leave on each side
-   * @returns {number} the zoom; the current zoom for a graph with no extent
-   * @throws {RangeError} throws if `padding` leaves no room for the graph
+   * @param {Uint8Array | null} [fit=null] - flags of the nodes to fit, by
+   *    slot; `null` for every node
+   * @param {Uint8Array | null} [center=null] - flags of the nodes to centre
+   *    on, all of them among those fitted; `null` to centre on those fitted
+   * @returns {number} the zoom; the current zoom for nodes with no extent
+   * @throws {RangeError} throws if `padding` leaves no room for the nodes
    * @private
    */
-  _fitZoom(width, height, padding) {
-    /** @param {Bounds} b @returns {number} the largest zoom that fits `b` */
-    const fitZoom = b => Math.min(
-      width === undefined ? Infinity : (width - 2 * padding) / (b.x1 - b.x0),
-      height === undefined ? Infinity : (height - 2 * padding) / (b.y1 - b.y0),
-    );
+  _fitZoom(width, height, padding, fit = null, center = null) {
+    /** @param {number | null} at @returns {number} the largest zoom that fits the nodes sized at `at` */
+    const fitZoom = at => {
+      const b = this._graphBounds(at, fit);
+      let bw = b.x1 - b.x0, bh = b.y1 - b.y0;
+      if (center) {
+        // Centred off their middle, the nodes need twice their far side
+        const c = this._graphBounds(at, center);
+        const cx = (c.x0 + c.x1) / 2, cy = (c.y0 + c.y1) / 2;
+        bw = 2 * Math.max(cx - b.x0, b.x1 - cx);
+        bh = 2 * Math.max(cy - b.y0, b.y1 - cy);
+      }
+      return Math.min(
+        width === undefined ? Infinity : (width - 2 * padding) / bw,
+        height === undefined ? Infinity : (height - 2 * padding) / bh,
+      );
+    };
     // Label sizes depend on the zoom: fit them at full size, then at the
     // size they are at that zoom. The second fit is closer, but labels
     // that only show once zoomed in could make it overflow, so it's only
     // kept if it still fits.
-    const first = fitZoom(this._graphBounds(null));
-    const second = fitZoom(this._graphBounds(first));
-    let zoom = fitZoom(this._graphBounds(second)) >= second ? second : first;
+    const first = fitZoom(null);
+    const second = fitZoom(first);
+    let zoom = fitZoom(second) >= second ? second : first;
     if (zoom === Infinity) zoom = this._view.zoom;    // a graph with no extent
     if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
     return zoom;
@@ -1974,15 +2074,18 @@ export class Renderer extends Emitter {
   /**
    * Bounds of the graph in simulation units: its nodes, self-loops, bowed
    * edges and labels, with their strokes. Edge and outline widths and
-   * arrowheads that stick out aren't included. Expects at least one node,
-   * and labels to be measured.
+   * arrowheads that stick out aren't included. With `picked`, only the
+   * nodes picked, their labels and self-loops, and the bowed edges between
+   * them count. Expects at least one node picked, and labels to be measured.
    * @param {number | null} zoom - zoom to size labels at, which also hides
    *    those too small to read; `null` for every label at full size, which
    *    is as big as they get at any zoom
+   * @param {Uint8Array | null} [picked=null] - flags of the nodes to bound,
+   *    by slot; `null` for every node
    * @returns {Bounds} bounds
    * @private
    */
-  _graphBounds(zoom) {
+  _graphBounds(zoom, picked = null) {
     const sim = this._simulation, opts = this._opts;
     const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -1994,12 +2097,15 @@ export class Renderer extends Emitter {
       if (yb > y1) y1 = yb;
     };
 
-    for (let i = 0; i < xs.length; i++) add(xs[i] - rs[i], ys[i] - rs[i], xs[i] + rs[i], ys[i] + rs[i]);
+    for (let i = 0; i < xs.length; i++) {
+      if (!picked || picked[i]) add(xs[i] - rs[i], ys[i] - rs[i], xs[i] + rs[i], ys[i] + rs[i]);
+    }
 
     if (opts.renderEdges) {
       const ep = sim.edgePairs;
       for (let i = 0; i < ep.length / 2; i++) {
         const a = ep[2 * i], b = ep[2 * i + 1], style = this._edgeStyles[i];
+        if (picked && !(picked[a] && picked[b])) continue;
         const ax = xs[a], ay = ys[a];
         if (a === b) {
           // As `_layoutEdge()` sizes it, with its arrowhead at full size
@@ -2022,7 +2128,7 @@ export class Renderer extends Emitter {
     if (opts.renderLabels) {
       for (let i = 0; i < xs.length; i++) {
         const style = this._nodeStyles[i];
-        if (!this._labelWidthRatio[i] || !style.renderLabel) continue;
+        if ((picked && !picked[i]) || !this._labelWidthRatio[i] || !style.renderLabel) continue;
         let h = style.labelScale;
         if (zoom !== null) {
           if (h * zoom < opts.minLabelSize) continue;

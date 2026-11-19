@@ -13,6 +13,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/graph.js").NodeId} NodeId */
 /** @typedef {import("./typedefs/graph.js").NodeData} NodeData */
 /** @typedef {import("./typedefs/graph.js").GraphNode} GraphNode */
+/** @typedef {import("./typedefs/graph.js").NodeSelection} NodeSelection */
 /** @typedef {import("./typedefs/graph.js").GraphEdge} GraphEdge */
 /** @typedef {import("./typedefs/graph.js").EdgeDirection} EdgeDirection */
 /** @typedef {import("./typedefs/graph.js").GraphOpts} GraphOpts */
@@ -56,6 +57,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/renderer.js").RendererOpts} RendererOpts */
 /** @typedef {import("./typedefs/renderer.js").Size} Size */
 /** @typedef {import("./typedefs/renderer.js").View} View */
+/** @typedef {import("./typedefs/renderer.js").ViewFittedOpts} ViewFittedOpts */
 /** @typedef {import("./typedefs/renderer.js").ExportOpts} ExportOpts */
 /** @typedef {import("./typedefs/renderer.js").ExportBlobOpts} ExportBlobOpts */
 /** @typedef {import("./typedefs/renderer.js").ImageEntry} ImageEntry */

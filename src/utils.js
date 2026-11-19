@@ -1,3 +1,5 @@
+/** @import { NodeId, GraphNode, NodeSelection } from './typedefs/graph.js' */
+
 /**
  * Normalizes a value into a function: a function passes through, anything
  * else becomes a function that returns it.
@@ -10,6 +12,24 @@ export const asFn = v =>
   typeof v === "function" ?
     /** @type {(...args: A) => T} */ (v) :
     () => v;
+
+
+/**
+ * Reads a `NodeSelection`. A function passes through; ids are copied into a
+ * new `Set`, so later changes to the caller's iterable don't count. A string,
+ * or any value that isn't a function or an iterable, is one id. Doesn't check
+ * that the ids exist.
+ * @param {NodeSelection | undefined} picked - an id, ids or a function of
+ *    each node; `undefined` for every node
+ * @returns {Set<NodeId> | ((node: GraphNode) => boolean) | null} the
+ *    selection; `null` for every node
+ */
+export function readNodeSelection(picked) {
+  if (picked === undefined) return null;
+  if (typeof picked === "function") return picked;
+  const one = typeof picked === "string" || typeof (/** @type {any} */ (picked))?.[Symbol.iterator] !== "function";
+  return new Set(one ? [picked] : /** @type {Iterable<NodeId>} */ (picked));
+}
 
 
 /**

@@ -1,6 +1,6 @@
 // RENDERER LAYER
 /** @import { Renderer } from '../renderer.js' */
-/** @import { NodeOption, EdgeOption } from './graph.js' */
+/** @import { NodeOption, EdgeOption, NodeSelection } from './graph.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 
 /** @typedef {HTMLCanvasElement | OffscreenCanvas} Canvas */
@@ -62,6 +62,21 @@
  * @property {number} x - x coordinate of view center
  * @property {number} y - y coordinate of view center
  * @property {number} zoom - zoom amount (canvas px / simulation px)
+ */
+
+/**
+ * Options for `viewFitted()`: which nodes to fit, and how
+ * @typedef {object} ViewFittedOpts
+ * @property {number} [padding=16] - space to leave around the nodes, in
+ *    canvas px
+ * @property {NodeSelection} [nodes] - the nodes to fit, with their labels,
+ *    self-loops and the bowed edges between them: every node by default
+ * @property {NodeSelection} [centerNodes] - the nodes to centre the view on,
+ *    which are fitted too: `nodes` by default, or if this picks none
+ * @property {number} [minZoom] - smallest zoom to fit at: no limit by
+ *    default. Nodes that don't fit at it are left partly out of view.
+ * @property {number} [maxZoom] - largest zoom to fit at, so the view doesn't
+ *    zoom far in on a few close nodes: no limit by default
  */
 
 /**

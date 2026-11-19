@@ -712,15 +712,33 @@ gjs.tween({
 ```js
 gjs.fitView();                          // frame the whole graph
 gjs.fitView({ padding: 40 });           // ... with 40 px around it (16 by default)
+gjs.fitView({ nodes: ["alice", "bob"] });   // frame only some nodes
+gjs.fitView({ maxZoom: 2 });            // ... without zooming in past 2x
 
 gjs.focusNode("alice");                 // centre a node, at the current zoom
 gjs.focusNode("alice", { zoom: 3 });    // ... zooming to 3x on the way
 gjs.focusNode("alice", { zoomOut: 0 }); // ... without zooming out (see below)
 
 gjs.viewFitted();                       // the view fitView() aims for: { x, y, zoom }, or null
+gjs.viewFitted({ nodes: "alice" });     // ... for the same options, without the move ones
 ```
 
 Both glide the view there, by default over 600 ms with `"inOutCubic"` easing. They aim for where the graph or node is on every frame, so they land on a layout that's still settling, or a node that's still moving. `fitView()` frames the graph as `toCanvas({ fit: true })` does, including self-loops, bowed edges and the labels shown at the fitted zoom. `fitView()` returns `null` for an empty graph, `focusNode()` throws a `ReferenceError` for an unknown node, and both need an attached canvas.
+
+**Fitting some nodes.** `fitView()` frames every node unless you pick some with `nodes`, and centres them unless you pick others with `centerNodes`. Either takes one node id, an array (or `Set`, or other iterable) of ids, or a function that returns `true` for each node to pick. A node's label and self-loop are fitted with it, and so are the bowed edges between nodes picked. Nodes in `centerNodes` are always fitted too, so to frame a node's neighbourhood with the node in the middle:
+
+```js
+gjs.fitView({ nodes: gjs.graph.neighbors("alice"), centerNodes: "alice" });
+gjs.fitView({ nodes: node => node.data.group === 2 });   // a whole group
+```
+
+A string is always one id. So is any other value that isn't a function or iterable, such as a number or an object id. To pick a node whose id is itself an array or other iterable, wrap it in an array: `centerNodes: [id]`.
+
+The view is centred on the middle of the nodes in `centerNodes`, at the largest zoom that fits every node picked around that point. Ids are read when `fitView()` is called: an unknown id throws a `ReferenceError`, and nodes removed during the move drop out. A function is run again on every frame, so it also picks nodes added during the move. If no nodes are picked, `fitView()` returns `null`; if `centerNodes` picks none, the view is centred on `nodes`.
+
+`minZoom` and `maxZoom` limit the zoom the move ends at, keeping the same centre. They're unlimited by default, so fitting one node, or a few close ones, can zoom in a long way; `maxZoom` stops that. With `minZoom`, nodes that don't fit at that zoom are left partly out of view.
+
+`viewFitted()` takes the same `padding`, `nodes`, `centerNodes`, `minZoom` and `maxZoom` options and returns the view `fitView()` would end at, without moving. It rejects the move options (`duration`, `ease` and `unit`), as it has no move to apply them to.
 
 **How the view moves.** The zoom changes at a steady exponential rate, so zooming from 0.1x to 1x takes as long as zooming from 1x to 10x. The pan keeps a steady speed on screen rather than in the graph: it covers less of the graph while zoomed in, and more while zoomed out, so the picture never crawls or races.
 
@@ -1300,6 +1318,10 @@ import { Simulation } from "@tang0226/graph-js/simulation";
 Members whose names start with `_` are internal and declared `private`, so TypeScript rejects them. Types that aren't exported from the package root are internal too, and may change between versions.
 
 ## Upgrading
+
+### From 0.8
+
+- **`viewFitted()` takes an options object.** Pass the padding as `viewFitted({ padding: 24 })` instead of `viewFitted(24)`, on both `gjs` and `gjs.renderer`. A number now throws a `TypeError` that names the new form. `viewFitted()` with no argument is unchanged. The object also takes the new `nodes`, `centerNodes`, `minZoom` and `maxZoom` options (see [Fitting and focusing the view](#fitting-and-focusing-the-view)).
 
 ### From 0.7
 
