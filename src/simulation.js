@@ -455,6 +455,7 @@ export class Simulation extends Emitter {
    * @type {number} */
   _syncedGraphDataVersion = -1;
 
+
   /**
    * Initializes a `Simulation` instance.
    * @param {Graph} graph - `Graph` instance to simulate on top of
@@ -493,20 +494,8 @@ export class Simulation extends Emitter {
   }
 
 
-  /**
-   * Sets the simulation's temp value. Emits `wake` if that starts a frozen
-   * layout moving, or `settle` if setting 0 stops a moving one.
-   * @param {number} [t=1] - temperature to set; values below 0 set 0
-   * @returns {this} self reference
-   */
-  heat(t = 1) {
-    const wasFrozen = this._temp === 0;
-    this._temp = t >= 0 ? t : 0;
-    if (wasFrozen && this._temp > 0) this._emit("wake", {});
-    else if (!wasFrozen && this._temp === 0) this._emit("settle", {});
-    return this;
-  }
 
+  // CONFIG
 
   /**
    * Sets the default physical attributes for all nodes.
@@ -586,150 +575,9 @@ export class Simulation extends Emitter {
   }
 
 
-  /**
-   * Resolves a node's config from its graph node into its slot of the mass,
-   * radius, charge and fixed arrays.
-   * @param {GraphNode} gNode - graph node
-   * @param {number} i - the node's slot
-   * @returns {boolean} whether resolved physical values changed
-   * @private
-   */
-  _resolveNode(gNode, i) {
-    const acc = this._nodeConfig.accessors,
-          g = this._graph,
-          o = this._nodeConfig.overrides.get(gNode.id);
-    let mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
-    let radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
-    let charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
-    mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
-    radius = Number.isFinite(radius) ? Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
-    charge = Number.isFinite(charge) ? Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
-    const fixed = (o?.fixed?.(gNode, g) ?? acc.fixed(gNode, g)) === true ? 1 : 0;
 
-    const changed = this._nodeMass[i] !== mass || this._nodeRadius[i] !== radius ||
-      this._nodeCharge[i] !== charge || this._nodeFixed[i] !== fixed;
-    this._nodeMass[i] = mass;
-    this._nodeRadius[i] = radius;
-    this._nodeCharge[i] = charge;
-    this._nodeFixed[i] = fixed;
-    return changed;
-  }
+  // SYNC
 
-
-  /**
-   * Resolves an edge's spring settings from its overrides and the defaults.
-   * @param {GraphEdge} gEdge - graph edge
-   * @returns {[number, number]} resolved `[length, stiffness]`
-   * @private
-   */
-  _resolveEdge(gEdge) {
-    const acc = this._edgeConfig.accessors,
-          g = this._graph,
-          o = this._edgeConfig.overrides.get(gEdge);
-    const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
-    const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
-    return [
-      Number.isFinite(length)    ? Math.max(length, 0)    : SIM_EDGE_DEFAULTS.length,
-      Number.isFinite(stiffness) ? Math.max(stiffness, 0) : SIM_EDGE_DEFAULTS.stiffness,
-    ];
-  }
-
-
-  /**
-   * Resolves every node's config into the mass, radius, charge and fixed
-   * arrays.
-   * @returns {boolean} whether any resolved value changed
-   * @private
-   */
-  _packNodeConfig() {
-    const ids = this._nodeId, gNodes = this._graph.nodes;
-    let changed = false;
-    for (let i = 0; i < ids.length; i++) {
-      const gNode = /** @type {GraphNode} */ (gNodes.get(ids[i]));
-      if (this._resolveNode(gNode, i)) changed = true;
-    }
-    this._nodeConfig.markClean();
-    return changed;
-  }
-
-
-  /**
-   * Resolves the settings of the spring behind an edge. A spring shared by a
-   * directed edge and its reverse twin acts as both edges' springs at half
-   * strength: their stiffnesses are averaged, and their lengths averaged
-   * weighted by stiffness.
-   * @param {GraphEdge} gEdge - graph edge
-   * @param {GraphEdge} [twin] - the edge's reverse twin, if it has one
-   * @returns {[number, number]} resolved `[length, stiffness]`
-   * @private
-   */
-  _resolveSpring(gEdge, twin) {
-    const [len, k] = this._resolveEdge(gEdge);
-    if (!twin) return [len, k];
-    const [len2, k2] = this._resolveEdge(twin);
-    const kSum = k + k2;
-    return [kSum > 0 ? (k * len + k2 * len2) / kSum : (len + len2) / 2, kSum / 2];
-  }
-
-
-  /**
-   * Resolves every spring's length and stiffness into `_springLength` and
-   * `_springStiffness`.
-   * @returns {boolean} whether any resolved value changed
-   * @private
-   */
-  _packEdgeConfig() {
-    const edges = this._edgeList, se = this._springEdges;
-    const lens = this._springLength, ks = this._springStiffness;
-    let changed = false;
-    for (let s = 0; s < lens.length; s++) {
-      const twin = se[2 * s + 1];
-      const [len, k] = this._resolveSpring(
-        edges[se[2 * s]], twin >= 0 ? edges[twin] : undefined);
-      if (lens[s] !== len || ks[s] !== k) changed = true;
-      lens[s] = len; ks[s] = k;
-    }
-    this._edgeConfig.markClean();
-    return changed;
-  }
-
-
-  /**
-   * Seeds a new node's slot: config at the global defaults (resolved later by
-   * `_packNodeConfig()`), zero velocity, and a position near the average of
-   * its already-placed graph neighbors. With no placed neighbors, it gets a
-   * random position within +/-75 of the origin.
-   * @param {NodeId} id - node id
-   * @param {number} i - the node's slot
-   * @param {Uint8Array} placed - 1 for each slot that already has a position;
-   *    set for `i` on return
-   * @returns {void}
-   * @private
-   */
-  _seedNodeSlot(id, i, placed) {
-    const neighbors = this._graph.adjacency.get(id);
-    let sx = 0, sy = 0, n = 0;
-    if (neighbors) for (const nid of neighbors.keys()) {
-      const j = this._nodeIndex.get(nid);
-      if (j !== undefined && placed[j]) { sx += this._nodeX[j]; sy += this._nodeY[j]; n++; }
-    }
-    const jitter = () => (Math.random() - 0.5) * 30;
-    if (n) {
-      this._nodeX[i] = sx / n + jitter();
-      this._nodeY[i] = sy / n + jitter();
-    } else {
-      this._nodeX[i] = jitter() * 5;
-      this._nodeY[i] = jitter() * 5;
-    }
-    this._nodeMass[i] = SIM_NODE_DEFAULTS.mass;
-    this._nodeRadius[i] = SIM_NODE_DEFAULTS.radius;
-    this._nodeCharge[i] = SIM_NODE_DEFAULTS.charge;
-    this._nodeFixed[i] = SIM_NODE_DEFAULTS.fixed ? 1 : 0;
-    placed[i] = 1;
-  }
-
-
-  // Update physics tables to match graph
   /**
    * Updates internal node and edge storage to match the shape of `this.graph`.
    * Also resolves node and edge configs to apply new overrides or defaults.
@@ -871,122 +719,163 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Applies repulsive forces with O(n^2) pairwise force accumulation.
-   * Uses Coulomb's law, scaled by each pair's charges.
+   * Seeds a new node's slot: config at the global defaults (resolved later by
+   * `_packNodeConfig()`), zero velocity, and a position near the average of
+   * its already-placed graph neighbors. With no placed neighbors, it gets a
+   * random position within +/-75 of the origin.
+   * @param {NodeId} id - node id
+   * @param {number} i - the node's slot
+   * @param {Uint8Array} placed - 1 for each slot that already has a position;
+   *    set for `i` on return
    * @returns {void}
    * @private
    */
-  _applyRepulsion() {
-    if (this._opts.useBarnesHut) { this._repelBarnesHut(); return; }
-
-    const xs = this._nodeX, ys = this._nodeY, qs = this._nodeCharge;
-    const fxs = this._nodeFx, fys = this._nodeFy, n = xs.length;
-    const { repulsion, minDistSq } = this._opts;
-    for (let i = 0; i < n - 1; i++) {
-      for (let j = i + 1; j < n; j++) {
-        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
-        let dSq = dx * dx + dy * dy;
-
-        // Randomize force axis for very close distances
-        if (dSq < 1e-12) {
-          dx = Math.random() - 0.5; dy = Math.random() - 0.5;
-          dSq = dx * dx + dy * dy;
-        }
-        dSq = Math.max(dSq, minDistSq); // short-range clamp
-
-        const s = qs[i] * qs[j] * repulsion / (dSq * Math.sqrt(dSq));
-        const fx = s * dx, fy = s * dy;
-        fxs[i] += fx; fxs[j] -= fx; fys[i] += fy; fys[j] -= fy;
-      }
+  _seedNodeSlot(id, i, placed) {
+    const neighbors = this._graph.adjacency.get(id);
+    let sx = 0, sy = 0, n = 0;
+    if (neighbors) for (const nid of neighbors.keys()) {
+      const j = this._nodeIndex.get(nid);
+      if (j !== undefined && placed[j]) { sx += this._nodeX[j]; sy += this._nodeY[j]; n++; }
     }
+    const jitter = () => (Math.random() - 0.5) * 30;
+    if (n) {
+      this._nodeX[i] = sx / n + jitter();
+      this._nodeY[i] = sy / n + jitter();
+    } else {
+      this._nodeX[i] = jitter() * 5;
+      this._nodeY[i] = jitter() * 5;
+    }
+    this._nodeMass[i] = SIM_NODE_DEFAULTS.mass;
+    this._nodeRadius[i] = SIM_NODE_DEFAULTS.radius;
+    this._nodeCharge[i] = SIM_NODE_DEFAULTS.charge;
+    this._nodeFixed[i] = SIM_NODE_DEFAULTS.fixed ? 1 : 0;
+    placed[i] = 1;
   }
 
 
   /**
-   * Applies spring forces between nodes connected by edges.
-   * @returns {void}
+   * Resolves every node's config into the mass, radius, charge and fixed
+   * arrays.
+   * @returns {boolean} whether any resolved value changed
    * @private
    */
-  _applySprings() {
-    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
-    const springs = this._springs;
+  _packNodeConfig() {
+    const ids = this._nodeId, gNodes = this._graph.nodes;
+    let changed = false;
+    for (let i = 0; i < ids.length; i++) {
+      const gNode = /** @type {GraphNode} */ (gNodes.get(ids[i]));
+      if (this._resolveNode(gNode, i)) changed = true;
+    }
+    this._nodeConfig.markClean();
+    return changed;
+  }
+
+
+  /**
+   * Resolves a node's config from its graph node into its slot of the mass,
+   * radius, charge and fixed arrays.
+   * @param {GraphNode} gNode - graph node
+   * @param {number} i - the node's slot
+   * @returns {boolean} whether resolved physical values changed
+   * @private
+   */
+  _resolveNode(gNode, i) {
+    const acc = this._nodeConfig.accessors,
+          g = this._graph,
+          o = this._nodeConfig.overrides.get(gNode.id);
+    let mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
+    let radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
+    let charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
+    mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
+    radius = Number.isFinite(radius) ? Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
+    charge = Number.isFinite(charge) ? Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
+    const fixed = (o?.fixed?.(gNode, g) ?? acc.fixed(gNode, g)) === true ? 1 : 0;
+
+    const changed = this._nodeMass[i] !== mass || this._nodeRadius[i] !== radius ||
+      this._nodeCharge[i] !== charge || this._nodeFixed[i] !== fixed;
+    this._nodeMass[i] = mass;
+    this._nodeRadius[i] = radius;
+    this._nodeCharge[i] = charge;
+    this._nodeFixed[i] = fixed;
+    return changed;
+  }
+
+
+  /**
+   * Resolves every spring's length and stiffness into `_springLength` and
+   * `_springStiffness`.
+   * @returns {boolean} whether any resolved value changed
+   * @private
+   */
+  _packEdgeConfig() {
+    const edges = this._edgeList, se = this._springEdges;
     const lens = this._springLength, ks = this._springStiffness;
-    for (let i = 0, k = 0; i < springs.length; i += 2, k++) {
-      const a = springs[i], b = springs[i + 1];
-      const dx = xs[a] - xs[b], dy = ys[a] - ys[b];
-      const d = Math.hypot(dx, dy) || 1e-6;
-      const s = -ks[k] * (d - lens[k]) / d;
-      const fx = s * dx, fy = s * dy;
-      fxs[a] += fx; fxs[b] -= fx; fys[a] += fy; fys[b] -= fy;
+    let changed = false;
+    for (let s = 0; s < lens.length; s++) {
+      const twin = se[2 * s + 1];
+      const [len, k] = this._resolveSpring(
+        edges[se[2 * s]], twin >= 0 ? edges[twin] : undefined);
+      if (lens[s] !== len || ks[s] !== k) changed = true;
+      lens[s] = len; ks[s] = k;
     }
+    this._edgeConfig.markClean();
+    return changed;
   }
 
 
   /**
-   * Applies graviational acceleration towards the origin
-   * @returns {void}
+   * Resolves an edge's spring settings from its overrides and the defaults.
+   * @param {GraphEdge} gEdge - graph edge
+   * @returns {[number, number]} resolved `[length, stiffness]`
    * @private
    */
-  _applyGravity() {
-    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
-    const g = this._opts.gravity;
-    for (let i = 0; i < xs.length; i++) {
-      fxs[i] -= g * xs[i];
-      fys[i] -= g * ys[i];
-    }
+  _resolveEdge(gEdge) {
+    const acc = this._edgeConfig.accessors,
+          g = this._graph,
+          o = this._edgeConfig.overrides.get(gEdge);
+    const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
+    const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
+    return [
+      Number.isFinite(length)    ? Math.max(length, 0)    : SIM_EDGE_DEFAULTS.length,
+      Number.isFinite(stiffness) ? Math.max(stiffness, 0) : SIM_EDGE_DEFAULTS.stiffness,
+    ];
   }
+
 
   /**
-   * Pushes intersecting nodes apart.
-   * @returns {void}
+   * Resolves the settings of the spring behind an edge. A spring shared by a
+   * directed edge and its reverse twin acts as both edges' springs at half
+   * strength: their stiffnesses are averaged, and their lengths averaged
+   * weighted by stiffness.
+   * @param {GraphEdge} gEdge - graph edge
+   * @param {GraphEdge} [twin] - the edge's reverse twin, if it has one
+   * @returns {[number, number]} resolved `[length, stiffness]`
    * @private
    */
-  _enforceRadius() {
-    if (this._opts.collision === "barnesHut") { this._collideBarnesHut(); return; }
-    if (this._opts.collision !== "pairs") { this._collideGrid(); return; }
-
-    const xs = this._nodeX, ys = this._nodeY, rs = this._nodeRadius, fixed = this._nodeFixed;
-    const n = xs.length;
-    for (let i = 0; i < n - 1; i++) {
-      for (let j = i + 1; j < n; j++) {
-        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
-        const dSq = dx * dx + dy * dy;
-        const minD = rs[i] + rs[j];
-        if (dSq >= minD * minD) continue;
-
-        let d = Math.sqrt(dSq);
-        if (d < 1e-7) {
-          const a = Math.random() * Math.PI * 2;
-          dx = Math.cos(a); dy = Math.sin(a); d = 1;
-        }
-
-        const pushCoeff = (minD - d) / d;
-        const s1 = fixed[i] ? 0 : (fixed[j] ? 1 : 0.5);
-        const s2 = fixed[j] ? 0 : (fixed[i] ? 1 : 0.5);
-
-        xs[i] += dx * pushCoeff * s1;  ys[i] += dy * pushCoeff * s1;
-        xs[j] -= dx * pushCoeff * s2;  ys[j] -= dy * pushCoeff * s2;
-      }
-    }
+  _resolveSpring(gEdge, twin) {
+    const [len, k] = this._resolveEdge(gEdge);
+    if (!twin) return [len, k];
+    const [len2, k2] = this._resolveEdge(twin);
+    const kSum = k + k2;
+    return [kSum > 0 ? (k * len + k2 * len2) / kSum : (len + len2) / 2, kSum / 2];
   }
 
 
-  /** @private */
-  _repelBarnesHut() {
-    // repel() adds to the force totals
-    this._barnesHutCtx.repel(this._nodeX, this._nodeY, this._nodeCharge, this._nodeFx, this._nodeFy, {
-      strength: this._opts.repulsion, minDistSq: this._opts.minDistSq,
-    });
-  }
 
-  /** @private */
-  _collideBarnesHut() {
-    this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
-  }
+  // RUNNING
 
-  /** @private */
-  _collideGrid() {
-    this._collisionGrid.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
+  /**
+   * Sets the simulation's temp value. Emits `wake` if that starts a frozen
+   * layout moving, or `settle` if setting 0 stops a moving one.
+   * @param {number} [t=1] - temperature to set; values below 0 set 0
+   * @returns {this} self reference
+   */
+  heat(t = 1) {
+    const wasFrozen = this._temp === 0;
+    this._temp = t >= 0 ? t : 0;
+    if (wasFrozen && this._temp > 0) this._emit("wake", {});
+    else if (!wasFrozen && this._temp === 0) this._emit("settle", {});
+    return this;
   }
 
 
@@ -1047,36 +936,130 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Gets the simulation coordinates of a node by id.
-   * @param {NodeId} id - node id
-   * @returns {[number, number] | null} the node's simulation coordinates, or
-   *    `null` if it was not found
+   * Applies repulsive forces with O(n^2) pairwise force accumulation.
+   * Uses Coulomb's law, scaled by each pair's charges.
+   * @returns {void}
+   * @private
    */
-  getPosition(id) {
-    const i = this._nodeIndex.get(id);
-    if (i === undefined) return null;
-    return [this._nodeX[i], this._nodeY[i]];
+  _applyRepulsion() {
+    if (this._opts.useBarnesHut) { this._repelBarnesHut(); return; }
+
+    const xs = this._nodeX, ys = this._nodeY, qs = this._nodeCharge;
+    const fxs = this._nodeFx, fys = this._nodeFy, n = xs.length;
+    const { repulsion, minDistSq } = this._opts;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
+        let dSq = dx * dx + dy * dy;
+
+        // Randomize force axis for very close distances
+        if (dSq < 1e-12) {
+          dx = Math.random() - 0.5; dy = Math.random() - 0.5;
+          dSq = dx * dx + dy * dy;
+        }
+        dSq = Math.max(dSq, minDistSq); // short-range clamp
+
+        const s = qs[i] * qs[j] * repulsion / (dSq * Math.sqrt(dSq));
+        const fx = s * dx, fy = s * dy;
+        fxs[i] += fx; fxs[j] -= fx; fys[i] += fy; fys[j] -= fy;
+      }
+    }
+  }
+
+
+  /** @private */
+  _repelBarnesHut() {
+    // repel() adds to the force totals
+    this._barnesHutCtx.repel(this._nodeX, this._nodeY, this._nodeCharge, this._nodeFx, this._nodeFy, {
+      strength: this._opts.repulsion, minDistSq: this._opts.minDistSq,
+    });
   }
 
 
   /**
-   * Gets the settings of the spring acting along an edge, resolved from the
-   * current config (even before the next `sync()`). In a directed graph, an
-   * edge and its reverse share one spring, so both return the same combined
-   * settings. Self-loops have no spring.
-   * @param {NodeId} srcId - source node id
-   * @param {NodeId} destId - destination node id
-   * @returns {SimEdge | null} the spring's length and stiffness, or `null` if
-   *    the edge was not found or is a self-loop
+   * Applies spring forces between nodes connected by edges.
+   * @returns {void}
+   * @private
    */
-  getEdgeSpring(srcId, destId) {
-    const g = this._graph, gEdge = g.getEdge(srcId, destId);
-    if (!gEdge || gEdge.src === gEdge.dest) return null;
-    const twin = g.directed ? g.getEdge(destId, srcId) : undefined;
-    const [length, stiffness] = this._resolveSpring(gEdge, twin);
-    return { length, stiffness };
+  _applySprings() {
+    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
+    const springs = this._springs;
+    const lens = this._springLength, ks = this._springStiffness;
+    for (let i = 0, k = 0; i < springs.length; i += 2, k++) {
+      const a = springs[i], b = springs[i + 1];
+      const dx = xs[a] - xs[b], dy = ys[a] - ys[b];
+      const d = Math.hypot(dx, dy) || 1e-6;
+      const s = -ks[k] * (d - lens[k]) / d;
+      const fx = s * dx, fy = s * dy;
+      fxs[a] += fx; fxs[b] -= fx; fys[a] += fy; fys[b] -= fy;
+    }
   }
 
+
+  /**
+   * Applies graviational acceleration towards the origin
+   * @returns {void}
+   * @private
+   */
+  _applyGravity() {
+    const xs = this._nodeX, ys = this._nodeY, fxs = this._nodeFx, fys = this._nodeFy;
+    const g = this._opts.gravity;
+    for (let i = 0; i < xs.length; i++) {
+      fxs[i] -= g * xs[i];
+      fys[i] -= g * ys[i];
+    }
+  }
+
+
+  /**
+   * Pushes intersecting nodes apart.
+   * @returns {void}
+   * @private
+   */
+  _enforceRadius() {
+    if (this._opts.collision === "barnesHut") { this._collideBarnesHut(); return; }
+    if (this._opts.collision !== "pairs") { this._collideGrid(); return; }
+
+    const xs = this._nodeX, ys = this._nodeY, rs = this._nodeRadius, fixed = this._nodeFixed;
+    const n = xs.length;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = xs[i] - xs[j], dy = ys[i] - ys[j];
+        const dSq = dx * dx + dy * dy;
+        const minD = rs[i] + rs[j];
+        if (dSq >= minD * minD) continue;
+
+        let d = Math.sqrt(dSq);
+        if (d < 1e-7) {
+          const a = Math.random() * Math.PI * 2;
+          dx = Math.cos(a); dy = Math.sin(a); d = 1;
+        }
+
+        const pushCoeff = (minD - d) / d;
+        const s1 = fixed[i] ? 0 : (fixed[j] ? 1 : 0.5);
+        const s2 = fixed[j] ? 0 : (fixed[i] ? 1 : 0.5);
+
+        xs[i] += dx * pushCoeff * s1;  ys[i] += dy * pushCoeff * s1;
+        xs[j] -= dx * pushCoeff * s2;  ys[j] -= dy * pushCoeff * s2;
+      }
+    }
+  }
+
+
+  /** @private */
+  _collideBarnesHut() {
+    this._barnesHutCtx.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
+  }
+
+
+  /** @private */
+  _collideGrid() {
+    this._collisionGrid.collide(this._nodeX, this._nodeY, this._nodeRadius, this._nodeFixed);
+  }
+
+
+
+  // PINNING
 
   /**
    * Finds a node by id and pins it to specified coordinates in simulation space.
@@ -1108,6 +1091,44 @@ export class Simulation extends Emitter {
     return this;
   }
 
+
+
+  // READING STATE
+
+  /**
+   * Gets the simulation coordinates of a node by id.
+   * @param {NodeId} id - node id
+   * @returns {[number, number] | null} the node's simulation coordinates, or
+   *    `null` if it was not found
+   */
+  getPosition(id) {
+    const i = this._nodeIndex.get(id);
+    if (i === undefined) return null;
+    return [this._nodeX[i], this._nodeY[i]];
+  }
+
+
+  /**
+   * Gets the settings of the spring acting along an edge, resolved from the
+   * current config (even before the next `sync()`). In a directed graph, an
+   * edge and its reverse share one spring, so both return the same combined
+   * settings. Self-loops have no spring.
+   * @param {NodeId} srcId - source node id
+   * @param {NodeId} destId - destination node id
+   * @returns {SimEdge | null} the spring's length and stiffness, or `null` if
+   *    the edge was not found or is a self-loop
+   */
+  getEdgeSpring(srcId, destId) {
+    const g = this._graph, gEdge = g.getEdge(srcId, destId);
+    if (!gEdge || gEdge.src === gEdge.dest) return null;
+    const twin = g.directed ? g.getEdge(destId, srcId) : undefined;
+    const [length, stiffness] = this._resolveSpring(gEdge, twin);
+    return { length, stiffness };
+  }
+
+
+
+  // CUSTOM PHYSICS
 
   /**
    * Adds a custom force, and wakes the layout. Each tick, after the built-in

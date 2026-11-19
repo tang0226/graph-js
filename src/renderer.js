@@ -490,6 +490,7 @@ export class Renderer extends Emitter {
    */
   get version() { return this._version; }
 
+
   /**
    * Initializes a Renderer instance
    * @param {Simulation} simulation - simulation instance to render
@@ -534,6 +535,9 @@ export class Renderer extends Emitter {
     return this;
   }
 
+
+
+  // CANVAS
 
   /**
    * Sets the `Renderer`'s canvas, overwriting previous element, context, and size data.
@@ -593,6 +597,9 @@ export class Renderer extends Emitter {
     return this;
   }
 
+
+
+  // STYLES
 
   /**
    * Modifies fields of the `Renderer`'s default node style config
@@ -668,294 +675,8 @@ export class Renderer extends Emitter {
   }
 
 
-  /**
-   * Updates a node's style config based on graph node.
-   * @param {GraphNode} gNode - graph node
-   * @param {NodeStyle} rNode - node style
-   * @private
-   */
-  _resolveNode(gNode, rNode) {
-    const acc = this._nodeConfig.accessors, g = this._graph, o = this._nodeConfig.overrides.get(gNode.id);
-    rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
-    rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
-    rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
-    rNode.image = o?.image?.(gNode, g) ?? acc.image(gNode, g);
-    rNode.label = o?.label?.(gNode, g) ?? acc.label(gNode, g);
-    rNode.renderLabel = o?.renderLabel?.(gNode, g) ?? acc.renderLabel(gNode, g);
-    rNode.labelScale = o?.labelScale?.(gNode, g) ?? acc.labelScale(gNode, g);
-    rNode.labelTextColor = o?.labelTextColor?.(gNode, g) ?? acc.labelTextColor(gNode, g);
-    rNode.labelStrokeColor = o?.labelStrokeColor?.(gNode, g) ?? acc.labelStrokeColor(gNode, g);
-    rNode.labelStrokeWidth = o?.labelStrokeWidth?.(gNode, g) ?? acc.labelStrokeWidth(gNode, g);
-  }
 
-
-  /**
-   * Updates an edge's style config based on graph node.
-   * @param {GraphEdge} gEdge - graph edge
-   * @param {EdgeStyle} rEdge - edge style
-   * @private
-   */
-  _resolveEdge(gEdge, rEdge) {
-    const acc = this._edgeConfig.accessors, g = this._graph, o = this._edgeConfig.overrides.get(gEdge);
-    rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
-    rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
-    rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
-    rEdge.bow = o?.bow?.(gEdge, g) ?? acc.bow(gEdge, g);
-
-    // unset (null/undefined) means "whatever the graph is"
-    const arrow = o?.arrow?.(gEdge, g) ?? acc.arrow(gEdge, g);
-    rEdge.arrow = arrow === null || arrow === undefined ? g.directed : arrow === true;
-  }
-
-
-  /**
-   * Overwrites highlighted elements and highlight options.
-   * @param {object} params
-   * @param {NodeId[]} [params.nodes=[]] - ids of nodes
-   * @param {[NodeId, NodeId][]} [params.edges=[]] - list of edges as node id pairs
-   * @param {HighlightMode} [params.mode] - highlight mode
-   * @param {number} [params.alpha] - dim alpha
-   * @returns {this} self reference
-   */
-  setHighlight({ nodes = [], edges = [], mode, alpha} = { nodes: [], edges: [] }) {
-    const optsToSet = {};
-    if (mode !== undefined) optsToSet.highlightMode = mode;
-    if (alpha !== undefined) optsToSet.highlightAlpha = alpha;
-    this.setOpts(optsToSet);
-    this.clearHighlight();
-    this.addHighlight({ nodes, edges });
-    return this;
-  }
-
-
-  /**
-   * Highlights selected elements.
-   * @param {object} params
-   * @param {NodeId[]} [params.nodes] - ids of nodes
-   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
-   * @returns {this} self reference
-   */
-  addHighlight({ nodes = [], edges = [] } = {}) {
-    // Sync graph structure first
-    this.sync();
-
-    const hl = this._highlighter;
-    for (const id of nodes) {
-      const i = this.simulation.nodeIndex.get(id);
-      if (i !== undefined) hl.addNode(id, i);
-    }
-    for (const idPair of edges) {
-      const edge = this.graph.getEdge(...idPair);
-      if (!edge) continue;
-      const i = this.simulation.edgeIndex.get(edge);
-      if (i !== undefined) hl.addEdge(edge, i);
-    }
-    hl.startFade();
-    return this;
-  }
-
-
-  /**
-   * Clears highlights from selected elements, or all highlights if no inputs
-   * are defined.
-   * @param {object} params
-   * @param {NodeId[]} [params.nodes] - ids of nodes
-   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
-   * @returns {this} self reference
-   */
-  clearHighlight({ nodes, edges } = {}) {
-    // Sync graph structure first
-    this.sync();
-
-    const hl = this._highlighter;
-    hl.startFade();
-
-    // Clear all if no elements are defined
-    if (!nodes && !edges) {
-      hl.clear();
-      return this;
-    }
-    if (nodes) {
-      for (const id of nodes) hl.removeNode(id, this.simulation.nodeIndex.get(id));
-    }
-    if (edges) {
-      for (const idPair of edges) {
-        const edge = this.graph.getEdge(...idPair);
-        if (edge) hl.removeEdge(edge, this.simulation.edgeIndex.get(edge));
-      }
-    }
-    return this;
-  }
-
-
-  /**
-   * @returns {boolean} whether the renderer has any highlighted elements
-   */
-  hasHighlight() { return this._highlighter.has(); }
-
-
-  /**
-   * Whether highlight opacities are still changing. Loops that only render on
-   * demand should keep calling `render()` while this is `true`.
-   * @returns {boolean} whether a highlight fade is in progress
-   */
-  isFading() { return this._highlighter.isFading(); }
-
-
-  /**
-   * Whether node image sizes are being prepared. Until they're ready, nodes
-   * draw a nearby size or the original image. Loops that only render on
-   * demand should keep calling `render()` while this is `true`.
-   * @returns {boolean} whether node image sizes are being prepared
-   */
-  isPreparingImages() { return this._imageCache.busy; }
-
-
-  /**
-   * Seeds a node's style config based on its underlying `Graph` node.
-   * @param {GraphNode} gNode - graph node to seed the node style from
-   * @returns {NodeStyle} seeded node style
-   * @private
-   */
-  _seedNode(gNode) {
-    const rNode = {
-      id: gNode.id,
-      ...NODE_STYLE_DEFAULTS
-    };
-    this._resolveNode(gNode, rNode);
-    return rNode;
-  }
-
-
-  /**
-   * Seeds an edge's style config based on its underlying `Graph` edge.
-   * @param {GraphEdge} gEdge - graph edge to seed the edge style from
-   * @returns {EdgeStyle} seeded edge style
-   * @private
-   */
-  _seedEdge(gEdge) {
-    const rEdge = {...EDGE_STYLE_DEFAULTS};
-    this._resolveEdge(gEdge, rEdge);
-    return rEdge;
-  }
-
-
-  /**
-   * Starts loading an image into the cache, keyed by its source. Its entry in
-   * `images` has the status "loading" until the request settles, then
-   * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
-   * `imageReferrerPolicy` for `src`. A source that is loading or loaded with
-   * those options is not requested again; one that failed is. Failed images
-   * are only retried by calling this: the renderer itself never requests them
-   * again. When the request settles, an `imageload` or `imageerror` event is
-   * emitted.
-   * @param {string} src - image source; also the cache key
-   * @returns {boolean} `true` if a request was started, `false` if `src` is
-   *    already loading or loaded with the current options
-   */
-  loadImage(src) {
-    return this._imageCache.load(src, ...this._imageRequestOpts(src), true);
-  }
-
-
-  /**
-   * Resolves the `crossOrigin` and `imageReferrerPolicy` options for an image
-   * source. A function option that returns an invalid value falls back to the
-   * option's default, as config functions do.
-   * @param {string} src - image source
-   * @returns {[ImageCrossOrigin, ReferrerPolicy]} the request's options
-   * @private
-   */
-  _imageRequestOpts(src) {
-    const { crossOrigin, imageReferrerPolicy } = this._opts;
-    let co = typeof crossOrigin === "function" ? crossOrigin(src) : crossOrigin;
-    let rp = typeof imageReferrerPolicy === "function" ? imageReferrerPolicy(src) : imageReferrerPolicy;
-    // The defaults are plain values, not functions
-    if (!CROSS_ORIGINS.includes(co)) co = /** @type {ImageCrossOrigin} */ (RENDERER_DEFAULTS.crossOrigin);
-    if (!REFERRER_POLICIES.includes(rp)) rp = /** @type {ReferrerPolicy} */ (RENDERER_DEFAULTS.imageReferrerPolicy);
-    return [co, rp];
-  }
-
-
-  /**
-   * Requests every cached image again whose options no longer match the
-   * renderer's, failed ones included. The rest are left as they are.
-   * @returns {void}
-   * @private
-   */
-  _refetchStaleImages() {
-    for (const src of [...this._imageCache.images.keys()]) {
-      const [co, rp] = this._imageRequestOpts(src);
-      this._imageCache.load(src, co, rp);
-    }
-  }
-
-
-  /**
-   * Find and delete images that are no longer used by any nodes, once
-   * `_imageDebt` exceeds 16.
-   * @returns {void}
-   * @private
-   */
-  _garbageCollectImages() {
-    if (this._imageDebt <= 16) return;
-    this._imageDebt = 0;
-    /** @type {Set<string>} */
-    const live = new Set();
-    for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
-    this._imageCache.collect(live);
-  }
-
-
-  /**
-   * Adds a function for `render()` to call each frame. "background" hooks run
-   * after the background fill, beneath edges, nodes and labels; "overlay"
-   * hooks run after everything else, on top. Hooks of a type run in the order
-   * they were added, and adding the same function again has no effect.
-   *
-   * Hooks draw in canvas coordinates (CSS pixels) between `ctx.save()` and
-   * `ctx.restore()` calls. An error thrown by a hook is logged, and the
-   * render continues.
-   * @param {RendererHookType} type - hook type
-   * @param {RendererHook} f - hook function, called with the renderer and the
-   *    frame's timestamp
-   * @returns {this} self reference
-   */
-  addHook(type, f) {
-    this._hooks.add(type, f);
-    return this;
-  }
-
-
-  /**
-   * Removes a hook. Returns whether the hook existed in its corresponding
-   * type `Set`.
-   * @param {RendererHookType} type - hook type
-   * @param {RendererHook} f - hook function to remove
-   * @returns {boolean} - whether the hook existed
-   */
-  removeHook(type, f) {
-    return this._hooks.remove(type, f);
-  }
-
-
-  /**
-   * Runs all hooks of a specific type, with a timestamp passed.
-   * @param {RendererHookType} type - hook type
-   * @param {number} time - timestamp from `render()`
-   * @returns {void}
-   * @private
-   */
-  _runHooks(type, time) {
-    const ctx = this._ctx;
-    if (!ctx) return;
-    this._hooks.run(type, f => {
-      ctx.save();
-      try { f(this, time); }
-      finally { ctx.restore(); }
-    });
-  }
-
+  // SYNC
 
   /**
    * Syncs internal nodes and edges to match the shape of underlying `Graph`.
@@ -1077,365 +798,562 @@ export class Renderer extends Emitter {
     return true;
   }
 
-  
-  /**
-   * Converts simulation space coordinates to canvas coordinates based on the
-   * current view.
-   * @param {number} x - simulation x coordinate
-   * @param {number} y - simulation y coordinate
-   * @returns {[number, number]} - canvas coordinates
-   * @throws {Error} throws when no canvas is attached
-   */
-  simToCanvas(x, y) {
-    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
-    return [this._canvasX(x), this._canvasY(y)];
-  }
-
 
   /**
-   * Canvas x coordinate of a simulation x coordinate, as `simToCanvas()`
-   * gives it, for drawing loops: it doesn't check for a canvas or allocate an
-   * array. Expects a size, which drawing and hit tests already require.
-   * @param {number} x - simulation x coordinate
-   * @returns {number} canvas x coordinate
+   * Seeds a node's style config based on its underlying `Graph` node.
+   * @param {GraphNode} gNode - graph node to seed the node style from
+   * @returns {NodeStyle} seeded node style
    * @private
    */
-  _canvasX(x) {
-    return /** @type {Size} */ (this._size).w / 2 + (x - this._view.x) * this._view.zoom;
+  _seedNode(gNode) {
+    const rNode = {
+      id: gNode.id,
+      ...NODE_STYLE_DEFAULTS
+    };
+    this._resolveNode(gNode, rNode);
+    return rNode;
   }
 
 
   /**
-   * Canvas y coordinate of a simulation y coordinate; see `_canvasX()`.
-   * @param {number} y - simulation y coordinate
-   * @returns {number} canvas y coordinate
+   * Updates a node's style config based on graph node.
+   * @param {GraphNode} gNode - graph node
+   * @param {NodeStyle} rNode - node style
    * @private
    */
-  _canvasY(y) {
-    return /** @type {Size} */ (this._size).h / 2 + (y - this._view.y) * this._view.zoom;
+  _resolveNode(gNode, rNode) {
+    const acc = this._nodeConfig.accessors, g = this._graph, o = this._nodeConfig.overrides.get(gNode.id);
+    rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
+    rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
+    rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
+    rNode.image = o?.image?.(gNode, g) ?? acc.image(gNode, g);
+    rNode.label = o?.label?.(gNode, g) ?? acc.label(gNode, g);
+    rNode.renderLabel = o?.renderLabel?.(gNode, g) ?? acc.renderLabel(gNode, g);
+    rNode.labelScale = o?.labelScale?.(gNode, g) ?? acc.labelScale(gNode, g);
+    rNode.labelTextColor = o?.labelTextColor?.(gNode, g) ?? acc.labelTextColor(gNode, g);
+    rNode.labelStrokeColor = o?.labelStrokeColor?.(gNode, g) ?? acc.labelStrokeColor(gNode, g);
+    rNode.labelStrokeWidth = o?.labelStrokeWidth?.(gNode, g) ?? acc.labelStrokeWidth(gNode, g);
   }
 
 
   /**
-   * Converts canvas coordinates to simulation space coordinates based on the
-   * current view.
-   * @param {number} x - canvas x coordinate
-   * @param {number} y - canvas y coordinate
-   * @returns {[number, number]} - simulation coordinates
-   * @throws {Error} throws when no canvas is attached
+   * Seeds an edge's style config based on its underlying `Graph` edge.
+   * @param {GraphEdge} gEdge - graph edge to seed the edge style from
+   * @returns {EdgeStyle} seeded edge style
+   * @private
    */
-  canvasToSim(x, y) {
-    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
-    const v = this._view;
-    return [(x - this._size.w / 2) / v.zoom + v.x, (y - this._size.h / 2) / v.zoom + v.y];
+  _seedEdge(gEdge) {
+    const rEdge = {...EDGE_STYLE_DEFAULTS};
+    this._resolveEdge(gEdge, rEdge);
+    return rEdge;
   }
 
 
   /**
-   * Sets some or all of the view. Nothing changes if any value is invalid.
-   * Like other changes, it shows on the next render.
-   * @param {Partial<View>} view - view values to set; `undefined` values are
-   *    left alone
+   * Updates an edge's style config based on graph node.
+   * @param {GraphEdge} gEdge - graph edge
+   * @param {EdgeStyle} rEdge - edge style
+   * @private
+   */
+  _resolveEdge(gEdge, rEdge) {
+    const acc = this._edgeConfig.accessors, g = this._graph, o = this._edgeConfig.overrides.get(gEdge);
+    rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
+    rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
+    rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
+    rEdge.bow = o?.bow?.(gEdge, g) ?? acc.bow(gEdge, g);
+
+    // unset (null/undefined) means "whatever the graph is"
+    const arrow = o?.arrow?.(gEdge, g) ?? acc.arrow(gEdge, g);
+    rEdge.arrow = arrow === null || arrow === undefined ? g.directed : arrow === true;
+  }
+
+
+
+  // IMAGES
+
+  /**
+   * Starts loading an image into the cache, keyed by its source. Its entry in
+   * `images` has the status "loading" until the request settles, then
+   * "loaded" or "failed". Uses the renderer's current `crossOrigin` and
+   * `imageReferrerPolicy` for `src`. A source that is loading or loaded with
+   * those options is not requested again; one that failed is. Failed images
+   * are only retried by calling this: the renderer itself never requests them
+   * again. When the request settles, an `imageload` or `imageerror` event is
+   * emitted.
+   * @param {string} src - image source; also the cache key
+   * @returns {boolean} `true` if a request was started, `false` if `src` is
+   *    already loading or loaded with the current options
+   */
+  loadImage(src) {
+    return this._imageCache.load(src, ...this._imageRequestOpts(src), true);
+  }
+
+
+  /**
+   * Whether node image sizes are being prepared. Until they're ready, nodes
+   * draw a nearby size or the original image. Loops that only render on
+   * demand should keep calling `render()` while this is `true`.
+   * @returns {boolean} whether node image sizes are being prepared
+   */
+  isPreparingImages() { return this._imageCache.busy; }
+
+
+  /**
+   * Resolves the `crossOrigin` and `imageReferrerPolicy` options for an image
+   * source. A function option that returns an invalid value falls back to the
+   * option's default, as config functions do.
+   * @param {string} src - image source
+   * @returns {[ImageCrossOrigin, ReferrerPolicy]} the request's options
+   * @private
+   */
+  _imageRequestOpts(src) {
+    const { crossOrigin, imageReferrerPolicy } = this._opts;
+    let co = typeof crossOrigin === "function" ? crossOrigin(src) : crossOrigin;
+    let rp = typeof imageReferrerPolicy === "function" ? imageReferrerPolicy(src) : imageReferrerPolicy;
+    // The defaults are plain values, not functions
+    if (!CROSS_ORIGINS.includes(co)) co = /** @type {ImageCrossOrigin} */ (RENDERER_DEFAULTS.crossOrigin);
+    if (!REFERRER_POLICIES.includes(rp)) rp = /** @type {ReferrerPolicy} */ (RENDERER_DEFAULTS.imageReferrerPolicy);
+    return [co, rp];
+  }
+
+
+  /**
+   * Requests every cached image again whose options no longer match the
+   * renderer's, failed ones included. The rest are left as they are.
+   * @returns {void}
+   * @private
+   */
+  _refetchStaleImages() {
+    for (const src of [...this._imageCache.images.keys()]) {
+      const [co, rp] = this._imageRequestOpts(src);
+      this._imageCache.load(src, co, rp);
+    }
+  }
+
+
+  /**
+   * Find and delete images that are no longer used by any nodes, once
+   * `_imageDebt` exceeds 16.
+   * @returns {void}
+   * @private
+   */
+  _garbageCollectImages() {
+    if (this._imageDebt <= 16) return;
+    this._imageDebt = 0;
+    /** @type {Set<string>} */
+    const live = new Set();
+    for (const rNode of this._nodes.values()) if (rNode.image) live.add(rNode.image);
+    this._imageCache.collect(live);
+  }
+
+
+
+  // HIGHLIGHTING
+
+  /**
+   * Overwrites highlighted elements and highlight options.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes=[]] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges=[]] - list of edges as node id pairs
+   * @param {HighlightMode} [params.mode] - highlight mode
+   * @param {number} [params.alpha] - dim alpha
    * @returns {this} self reference
-   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
-   *    isn't a finite number above 0
    */
-  setView(view) {
-    const { x, y, zoom } = view;
-    if (x !== undefined && !Number.isFinite(x)) throw new RangeError("Renderer: view `x` must be finite");
-    if (y !== undefined && !Number.isFinite(y)) throw new RangeError("Renderer: view `y` must be finite");
-    if (zoom !== undefined) checkZoom(zoom, "view `zoom`");
-    const v = this._view;
-    if (x !== undefined) v.x = x;
-    if (y !== undefined) v.y = y;
-    if (zoom !== undefined) v.zoom = zoom;
+  setHighlight({ nodes = [], edges = [], mode, alpha} = { nodes: [], edges: [] }) {
+    const optsToSet = {};
+    if (mode !== undefined) optsToSet.highlightMode = mode;
+    if (alpha !== undefined) optsToSet.highlightAlpha = alpha;
+    this.setOpts(optsToSet);
+    this.clearHighlight();
+    this.addHighlight({ nodes, edges });
     return this;
   }
 
 
   /**
-   * Returns the view moved so the graph shifts by a distance on the canvas,
-   * as dragging the background does, without applying it.
-   * @param {number} dx - canvas px to shift the graph right
-   * @param {number} dy - canvas px to shift the graph down
-   * @returns {View} the panned view
-   * @throws {RangeError} throws if `dx` or `dy` isn't finite
-   */
-  viewPannedBy(dx, dy) {
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-      throw new RangeError("Renderer: pan distances must be finite");
-    }
-    const v = this._view;
-    return { x: v.x - dx / v.zoom, y: v.y - dy / v.zoom, zoom: v.zoom };
-  }
-
-
-  /**
-   * Shifts the graph by a distance on the canvas, as dragging the background
-   * does.
-   * @param {number} dx - canvas px to shift the graph right
-   * @param {number} dy - canvas px to shift the graph down
+   * Highlights selected elements.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
    * @returns {this} self reference
-   * @throws {RangeError} throws if `dx` or `dy` isn't finite
    */
-  panBy(dx, dy) { return this.setView(this.viewPannedBy(dx, dy)); }
-
-
-  /**
-   * Returns the view at a zoom, without applying it. With an anchor point,
-   * the graph under that point stays where it is, as zooming with the wheel
-   * does; without one, the canvas centre stays.
-   * @param {number} zoom - zoom (canvas px per simulation px)
-   * @param {number} [cx] - canvas x coordinate of the anchor
-   * @param {number} [cy] - canvas y coordinate of the anchor
-   * @returns {View} the zoomed view
-   * @throws {RangeError} throws if the zoom isn't a finite number above 0,
-   *    or the anchor isn't finite
-   * @throws {TypeError} throws if only one anchor coordinate is given
-   * @throws {Error} throws if an anchor is given and no canvas is attached
-   */
-  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
-    checkZoom(zoom, "zoom");
-    const v = this._view;
-    if (cx === undefined && cy === undefined) return { x: v.x, y: v.y, zoom };
-    if (cx === undefined || cy === undefined) {
-      throw new TypeError("Renderer: a zoom anchor needs both coordinates");
-    }
-    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
-      throw new RangeError("Renderer: zoom anchor must be finite");
-    }
-    const [sx, sy] = this.canvasToSim(cx, cy);
-    const size = /** @type {Size} */ (this._size);
-    return { x: sx - (cx - size.w / 2) / zoom, y: sy - (cy - size.h / 2) / zoom, zoom };
-  }
-
-
-  /**
-   * Sets the zoom. With an anchor point, the graph under that point stays
-   * where it is, as zooming with the wheel does; without one, the canvas
-   * centre stays.
-   * @param {number} zoom - zoom (canvas px per simulation px)
-   * @param {number} [cx] - canvas x coordinate of the anchor
-   * @param {number} [cy] - canvas y coordinate of the anchor
-   * @returns {this} self reference
-   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does
-   */
-  zoomTo(zoom, cx = undefined, cy = undefined) {
-    return this.setView(this.viewZoomedTo(zoom, cx, cy));
-  }
-
-
-  /**
-   * Returns the view that frames the graph, or some of its nodes, on the
-   * canvas, without applying it: at the largest zoom that fits them with
-   * `padding` to spare on each side. The graph includes self-loops, bowed
-   * edges and the labels shown at that zoom, as `toCanvas({ fit: true })`
-   * frames it.
-   *
-   * `nodes` picks the nodes to fit, with their labels, self-loops and the
-   * bowed edges between them. The view is centred on the middle of the nodes
-   * `centerNodes` picks, which are fitted too, at the largest zoom that fits
-   * every node picked around that point. Each takes one id, an iterable of
-   * ids, or a function picking nodes. `minZoom` and `maxZoom` limit the zoom,
-   * keeping the centre.
-   * @param {ViewFittedOpts} [opts={}] - `padding` around the nodes, in
-   *    canvas px (16 by default); the `nodes` to fit (every node by default)
-   *    and `centerNodes` to centre on (`nodes` by default, or if it picks
-   *    none); and `minZoom` and `maxZoom` (no limit by default)
-   * @returns {View | null} the fitted view, or `null` if there are no nodes
-   *    to fit
-   * @throws {TypeError} throws if `opts` isn't an object, such as a padding
-   *    passed on its own, or has an unknown option
-   * @throws {RangeError} throws if an option is out of range, `maxZoom` is
-   *    below `minZoom`, or `padding` leaves no room for the nodes
-   * @throws {ReferenceError} throws if `nodes` or `centerNodes` has an id
-   *    with no node
-   * @throws {Error} throws if no canvas is attached
-   */
-  viewFitted(opts = {}) {
-    if (typeof opts === "number") {
-      throw new TypeError("Renderer: `viewFitted()` takes an options object, such as `{ padding: 24 }`");
-    }
-    checkKnownKeys("Renderer", opts, VIEW_FITTED_OPTION_NAMES);
-    checkEach(opts, VIEW_FITTED_RULES);
-    const { padding = 16, minZoom = 0, maxZoom = Infinity } = opts;
-    if (maxZoom < minZoom) throw new RangeError("Renderer: `maxZoom` must be at least `minZoom`");
-    const fitIds = this._checkSelection(readNodeSelection(opts.nodes));
-    const centerIds = this._checkSelection(readNodeSelection(opts.centerNodes));
-    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
-
+  addHighlight({ nodes = [], edges = [] } = {}) {
+    // Sync graph structure first
     this.sync();
-    // After syncing, as it can move nodes to new slots
-    const fit = this._pickSlots(fitIds), center = this._pickSlots(centerIds);
-    if (fit && center) for (let i = 0; i < fit.length; i++) fit[i] |= center[i];
-    if (this._simulation.nodeList.length === 0 || (fit && !fit.includes(1))) return null;
+
+    const hl = this._highlighter;
+    for (const id of nodes) {
+      const i = this.simulation.nodeIndex.get(id);
+      if (i !== undefined) hl.addNode(id, i);
+    }
+    for (const idPair of edges) {
+      const edge = this.graph.getEdge(...idPair);
+      if (!edge) continue;
+      const i = this.simulation.edgeIndex.get(edge);
+      if (i !== undefined) hl.addEdge(edge, i);
+    }
+    hl.startFade();
+    return this;
+  }
+
+
+  /**
+   * Clears highlights from selected elements, or all highlights if no inputs
+   * are defined.
+   * @param {object} params
+   * @param {NodeId[]} [params.nodes] - ids of nodes
+   * @param {[NodeId, NodeId][]} [params.edges] - list of edges as node id pairs
+   * @returns {this} self reference
+   */
+  clearHighlight({ nodes, edges } = {}) {
+    // Sync graph structure first
+    this.sync();
+
+    const hl = this._highlighter;
+    hl.startFade();
+
+    // Clear all if no elements are defined
+    if (!nodes && !edges) {
+      hl.clear();
+      return this;
+    }
+    if (nodes) {
+      for (const id of nodes) hl.removeNode(id, this.simulation.nodeIndex.get(id));
+    }
+    if (edges) {
+      for (const idPair of edges) {
+        const edge = this.graph.getEdge(...idPair);
+        if (edge) hl.removeEdge(edge, this.simulation.edgeIndex.get(edge));
+      }
+    }
+    return this;
+  }
+
+
+  /**
+   * @returns {boolean} whether the renderer has any highlighted elements
+   */
+  hasHighlight() { return this._highlighter.has(); }
+
+
+  /**
+   * Whether highlight opacities are still changing. Loops that only render on
+   * demand should keep calling `render()` while this is `true`.
+   * @returns {boolean} whether a highlight fade is in progress
+   */
+  isFading() { return this._highlighter.isFading(); }
+
+
+
+  // HOOKS
+
+  /**
+   * Adds a function for `render()` to call each frame. "background" hooks run
+   * after the background fill, beneath edges, nodes and labels; "overlay"
+   * hooks run after everything else, on top. Hooks of a type run in the order
+   * they were added, and adding the same function again has no effect.
+   *
+   * Hooks draw in canvas coordinates (CSS pixels) between `ctx.save()` and
+   * `ctx.restore()` calls. An error thrown by a hook is logged, and the
+   * render continues.
+   * @param {RendererHookType} type - hook type
+   * @param {RendererHook} f - hook function, called with the renderer and the
+   *    frame's timestamp
+   * @returns {this} self reference
+   */
+  addHook(type, f) {
+    this._hooks.add(type, f);
+    return this;
+  }
+
+
+  /**
+   * Removes a hook. Returns whether the hook existed in its corresponding
+   * type `Set`.
+   * @param {RendererHookType} type - hook type
+   * @param {RendererHook} f - hook function to remove
+   * @returns {boolean} - whether the hook existed
+   */
+  removeHook(type, f) {
+    return this._hooks.remove(type, f);
+  }
+
+
+  /**
+   * Runs all hooks of a specific type, with a timestamp passed.
+   * @param {RendererHookType} type - hook type
+   * @param {number} time - timestamp from `render()`
+   * @returns {void}
+   * @private
+   */
+  _runHooks(type, time) {
+    const ctx = this._ctx;
+    if (!ctx) return;
+    this._hooks.run(type, f => {
+      ctx.save();
+      try { f(this, time); }
+      finally { ctx.restore(); }
+    });
+  }
+
+
+
+  // RENDERING
+
+  /**
+   * Renders the current view of the graph according to current styles and
+   * highlight state.
+   * @param {number} [time] - frame timestamp in milliseconds, used to advance
+   *    highlight fades. Defaults to `performance.now()`; pass the
+   *    `requestAnimationFrame` timestamp when rendering from a loop.
+   * @returns {boolean} whether the `sync()` and render took place
+   */
+  render(time = now()) {
+    if (!this._ctx || !this._size) return false;
+    this.sync();
+    // Eases every alpha toward its target, off-screen elements included, so
+    // they don't come back into view mid-fade
+    const opts = this._opts, hl = this._highlighter;
+    hl.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
+    this._imageCache.beginFrame();
+    this._drawFrame(time, opts.background, hl.nodeAlpha, hl.edgeAlpha, true);
+    this._imageCache.endFrame(opts.imageCacheMB * 1024 * 1024);
+    return true;
+  }
+
+
+  /**
+   * Draws a frame onto the current context, which holds the base transform,
+   * at the current view and size.
+   * @param {number} time - frame timestamp, passed to hooks
+   * @param {string | null} background - background color, or `null` for none
+   * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
+   * @param {Float64Array} edgeAlpha - highlight alpha of each edge slot
+   * @param {boolean} hooks - whether to run the drawing hooks
+   * @returns {void}
+   * @private
+   */
+  _drawFrame(time, background, nodeAlpha, edgeAlpha, hooks) {
+    if (!this._ctx || !this._size) return;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
-    // Centring nodes that aren't picked centres on the nodes fitted instead
-    const middle = center?.includes(1) ? center : null;
-    const { w, h } = this._size;
-    const zoom = Math.min(Math.max(this._fitZoom(w, h, padding, fit, middle), minZoom), maxZoom);
-    const b = this._graphBounds(zoom, middle ?? fit);
-    return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom };
-  }
+    const inFrame = this._cull();
 
+    // Cleared first so a transparent or translucent background doesn't build
+    // up over earlier frames
+    this._ctx.clearRect(0, 0, this._size.w, this._size.h);
+    if (background !== null) {
+      this._ctx.fillStyle = background;
+      this._ctx.fillRect(0, 0, this._size.w, this._size.h);
+    }
 
-  /**
-   * Throws unless every id a selection names is a node in the graph.
-   * @template {Set<NodeId> | ((node: GraphNode) => boolean) | null} S
-   * @param {S} picked - a selection, as `readNodeSelection()` gives it
-   * @returns {S} the selection
-   * @throws {ReferenceError} throws if an id has no node
-   * @private
-   */
-  _checkSelection(picked) {
-    if (picked instanceof Set) {
-      for (const id of picked) {
-        if (!this._graph.hasNode(id)) throw new ReferenceError(`Renderer: no node with id "${id}"`);
+    if (hooks) this._runHooks("background", time);
+
+    // Text state shared by every label this frame; each label scales the font
+    // to its own size by transform
+    const hasLabels = inFrame.labelsI.length > 0;
+    if (hasLabels) {
+      this._ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`;
+      // Mitred corners would spike out of label strokes. Edges and outlines
+      // have no corners to join, so they're unaffected.
+      this._ctx.lineJoin = "round";
+      switch (this._opts.labelPosition) {
+        case "top":
+          this._ctx.textAlign = "center";
+          this._ctx.textBaseline = "bottom";
+          break;
+        case "right":
+          this._ctx.textAlign = "left";
+          this._ctx.textBaseline = "middle";
+          break;
+        case "left":
+          this._ctx.textAlign = "right";
+          this._ctx.textBaseline = "middle";
+          break;
+        default: // "bottom"
+          this._ctx.textAlign = "center";
+          this._ctx.textBaseline = "top";
+          break;
       }
     }
-    return picked;
-  }
+    const dpr = this._dpr;
 
-
-  /**
-   * Flags the nodes a selection picks, by slot. Expects the simulation to be
-   * synced.
-   * @param {ReadonlySet<NodeId> | ((node: GraphNode) => boolean) | null} picked -
-   *    ids or a function of each node; `null` for every node
-   * @returns {Uint8Array | null} 1 for each node picked, or `null` for every
-   *    node
-   * @private
-   */
-  _pickSlots(picked) {
-    if (!picked) return null;
-    const sim = this._simulation, flags = new Uint8Array(sim.nodeList.length);
-    if (typeof picked === "function") {
-      const ids = sim.nodeId, nodes = this._graph.nodes;
-      for (let i = 0; i < flags.length; i++) {
-        const node = nodes.get(ids[i]);
-        if (node && picked(node)) flags[i] = 1;
-      }
-    } else {
-      for (const id of picked) {
-        const i = sim.nodeIndex.get(id);
-        if (i !== undefined) flags[i] = 1;
-      }
-    }
-    return flags;
-  }
-
-
-  /**
-   * Multiplies the zoom by a factor: above 1 zooms in, below 1 zooms out.
-   * Anchored as `zoomTo()` is.
-   * @param {number} factor - factor to multiply the zoom by
-   * @param {number} [cx] - canvas x coordinate of the anchor
-   * @param {number} [cy] - canvas y coordinate of the anchor
-   * @returns {this} self reference
-   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does,
-   *    or if the factor isn't a finite number above 0
-   */
-  zoomBy(factor, cx = undefined, cy = undefined) {
-    checkZoom(factor, "zoom factor");
-    return this.zoomTo(this._view.zoom * factor, cx, cy);
-  }
-
-
-  /**
-   * Draws a node on the canvas, positioned and sized according to its
-   * simulation slot and styled according to a `NodeStyle` object.
-   * @param {number} i - the node's slot in the simulation
-   * @param {NodeStyle} nodeStyle - node style
-   * @returns {void}
-   * @private
-   */
-  _drawNode(i, nodeStyle) {
-    if (!this._ctx) return;
-    const sim = this._simulation;
-    const cx = this._canvasX(sim.nodeX[i]), cy = this._canvasY(sim.nodeY[i]);
-    const r = sim.nodeRadius[i] * this._view.zoom;
-    this._ctx.beginPath();
-    this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-    const src = nodeStyle.image;
-    const img = src ? this._imageCache.loaded(src) : null;
-    const side = img ? Math.min(img.naturalWidth, img.naturalHeight) : 0;
-    if (src && img && side) {
-      const needed = 2 * r * this._dpr;     // on-screen diameter, device px
-      if (needed < IMAGE_DOT_THRESHOLD) {
-        // Too small to show detail: a dot in the image's average colour
-        this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
-        this._ctx.fill();
-      } else {
-        // Exports draw the image itself: sprites the size an export needs
-        // aren't ready in time, and asking would build them for nothing
-        const sprite = this._exporting ? null : this._imageCache.sprite(src, needed);
-        if (sprite) {
-          this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
-        } else {
-          // No sprite yet (the first is being prepared, or sprites can't be
-          // made here): the image itself, clipped to the node
-          const scale = r * 2 / side;
-          const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-          this._ctx.save();
-          this._ctx.clip();
-          this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
-          this._ctx.restore();
+    const hl = this._highlighter;
+    if (hl.has() || hl.isFading()) {
+      const { nodeState, edgeState } = hl;
+      this._frameAlpha = 1;
+      for (const flag of [0, 1]) {
+        for (const i of inFrame.edgesI) {
+          if (edgeState[i] === flag && this._useAlpha(edgeAlpha[i]))
+            this._renderEdgeByIndex(i, edgeAlpha[i]);
         }
+        for (const i of inFrame.nodesI) {
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
+            this._renderNodeByIndex(i);
+        }
+        for (const i of inFrame.labelsI) {
+          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
+            this._renderNodeLabelByIndex(i);
+        }
+        // Highlighted nodes are drawn next, in canvas space
+        if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
+      if (this._frameAlpha !== 1) this._ctx.globalAlpha = 1;
     } else {
-      this._ctx.fillStyle = nodeStyle.color;
-      this._ctx.fill();
+      for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
+      for (const i of inFrame.nodesI) this._renderNodeByIndex(i);
+      for (const i of inFrame.labelsI) this._renderNodeLabelByIndex(i);
+      if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    if (nodeStyle.outlineWidth) {
-      // Scaled outlines too thin to see are skipped
-      const scale = this._opts.scaleStrokes;
-      const width = scale ? nodeStyle.outlineWidth * this._view.zoom : nodeStyle.outlineWidth;
-      if (scale && width < MIN_OUTLINE_WIDTH) return;
-      this._ctx.strokeStyle = nodeStyle.outlineColor;
-      this._ctx.lineWidth = width;
-      this._ctx.stroke();
-    }
+    // Back to the canvas default, for hooks
+    if (hasLabels) this._ctx.lineJoin = "miter";
+
+    if (hooks) this._runHooks("overlay", time);
   }
 
-  
+
   /**
-   * Draws a node's label. Whether it should be drawn (has a label, is
-   * enabled, large enough, on screen) is decided by `_cull()`.
-   *
-   * Expects the context to hold the label font at `LABEL_REF_SIZE`, the
-   * alignment for `labelPosition` and a round line join, all set once per
-   * frame by `render()`. The label is sized and placed by transform, which is
-   * left set; `render()` restores the base transform after each label pass.
-   * @param {number} i - the node's slot in the simulation
-   * @param {NodeStyle} nodeStyle - node style
+   * Culls all nodes, edges, and labels fully outside the current view.
+   * Edges are tested as `_layoutEdge()` lays them out, so one crossing the
+   * view between two off-screen nodes is kept, and one that isn't drawn at
+   * all is dropped.
+   * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
+   * @private
+   */
+  _cull() {
+    if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
+    const { w: cw, h: ch } = this._size;
+    const [xMin, yMin] = this.canvasToSim(0, 0);
+    const [xMax, yMax] = this.canvasToSim(cw, ch);
+
+    const nodesI = [];
+    const sim = this._simulation, n = sim.nodeList.length;
+    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
+    for (let i = 0; i < n; i++) {
+      if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) nodesI.push(i);
+    }
+
+    const edgesI = [];
+    if (this._opts.renderEdges) {
+      const ep = sim.edgePairs, styles = this._edgeStyles, bows = this._edgeBow;
+      for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
+        const p = this._layoutEdge(ep[j], ep[j + 1], styles[i], bows[i]);
+        if (p && edgeInView(p, cw, ch)) edgesI.push(i);
+      }
+    }
+
+    const labelsI = [];
+    if (this._opts.renderLabels) {
+      const { minLabelSize, maxLabelSize } = this._opts;
+      const zoom = this._view.zoom, ratios = this._labelWidthRatio;
+      for (let i = 0; i < sim.nodeList.length; i++) {
+        const style = this._nodeStyles[i];
+        if (!ratios[i] || !style.renderLabel) continue;     // no label, or disabled
+        const px = style.labelScale * zoom;
+        if (px < minLabelSize) continue;                     // too small to read
+        // Label bounds in world units
+        const { x0, y0, w, h } = this._layoutLabel(i, Math.min(px, maxLabelSize) / zoom);
+        if (x0 < xMax && x0 + w > xMin && y0 < yMax && y0 + h > yMin) labelsI.push(i);
+      }
+    }
+
+    return { nodesI, edgesI, labelsI };
+  }
+
+
+  /**
+   * Sets the context alpha for the next element, writing it only when it
+   * changes.
+   * @param {number} alpha - element alpha
+   * @returns {boolean} `false` when the element is invisible and can be skipped
+   * @private
+   */
+  _useAlpha(alpha) {
+    if (alpha === 0) return false;
+    if (alpha !== this._frameAlpha) {
+      /** @type {CanvasContext} */ (this._ctx).globalAlpha = alpha;
+      this._frameAlpha = alpha;
+    }
+    return true;
+  }
+
+
+  /**
+   * Measures each node's label width per px of font size into
+   * `_labelWidthRatio`, reusing cached widths of unchanged label text.
    * @returns {void}
    * @private
    */
-  _drawNodeLabel(i, nodeStyle) {
+  _measureLabels() {
     if (!this._ctx) return;
-    const zoom = this._view.zoom, dpr = this._dpr, sim = this._simulation;
-    let x = this._canvasX(sim.nodeX[i]), y = this._canvasY(sim.nodeY[i]);
-    const r = (sim.nodeRadius[i] + this._opts.labelMargin) * zoom;
+    const ctx = this._ctx;
+    const styles = this._nodeStyles;
+    const prev = this._labelWidthCache, next = new Map();
+    this._labelWidthRatio = new Float64Array(styles.length);
+    let fontSet = false;     // only set the font once something needs measuring
+    for (let i = 0; i < styles.length; i++) {
+      const label = styles[i].label;
+      if (label == null || label === "") continue;
+      const text = String(label);
+      let ratio = next.get(text) ?? prev.get(text);
+      if (ratio === undefined) {
+        if (!fontSet) { ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`; fontSet = true; }
+        ratio = ctx.measureText(text).width / LABEL_REF_SIZE;
+      }
+      next.set(text, ratio);
+      this._labelWidthRatio[i] = ratio;
+    }
+    this._labelWidthCache = next;
+    this._labelsDirty = false;
+  }
+
+
+  /**
+   * Places a node's label box, in simulation units, by `labelPosition`,
+   * including the part of its stroke outside the text. Writes into one
+   * reused object, so culling doesn't allocate per label.
+   * @param {number} i - cache index of the node
+   * @param {number} h - label height (font size) in simulation units
+   * @returns {{ x0: number, y0: number, w: number, h: number }} the box
+   * @private
+   */
+  _layoutLabel(i, h) {
+    const sim = this._simulation, box = this._labelBox;
+    const x = sim.nodeX[i], y = sim.nodeY[i];
+    const w = this._labelWidthRatio[i] * h, d = sim.nodeRadius[i] + this._opts.labelMargin;
     switch (this._opts.labelPosition) {
-      case "top":   y -= r; break;
-      case "right": x += r; break;
-      case "left":  x -= r; break;
-      default:      y += r; break;   // "bottom"
+      case "top":   box.x0 = x - w / 2; box.y0 = y - d - h; break;
+      case "right": box.x0 = x + d;     box.y0 = y - h / 2; break;
+      case "left":  box.x0 = x - d - w; box.y0 = y - h / 2; break;
+      default:      box.x0 = x - w / 2; box.y0 = y + d;     break;
     }
-    // Scale the reference-size font to this label's size, anchored at (x, y)
-    const size = Math.min(nodeStyle.labelScale * zoom, this._opts.maxLabelSize);
-    const s = dpr * size / LABEL_REF_SIZE;
-    this._ctx.setTransform(s, 0, 0, s, dpr * x, dpr * y);
-    const { labelStrokeWidth: sw, labelScale } = nodeStyle;
-    if (sw > 0 && labelScale > 0) {
-      // In font units, so the stroke scales with the text, cap included
-      this._ctx.lineWidth = sw * LABEL_REF_SIZE / labelScale;
-      this._ctx.strokeStyle = nodeStyle.labelStrokeColor;
-      this._ctx.strokeText(String(nodeStyle.label), 0, 0);
-    }
-    this._ctx.fillStyle = nodeStyle.labelTextColor;
-    this._ctx.fillText(String(nodeStyle.label), 0, 0);
+    // Half the stroke shows, scaled with the text as it's drawn
+    const { labelStrokeWidth: sw, labelScale } = this._nodeStyles[i];
+    const pad = sw > 0 && labelScale > 0 ? sw / 2 * h / labelScale : 0;
+    box.x0 -= pad;
+    box.y0 -= pad;
+    box.w = w + 2 * pad;
+    box.h = h + 2 * pad;
+    return box;
+  }
+
+
+  /**
+   * Draws an edge identified by cache index.
+   * @param {number} i - cache index of edge
+   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
+   *    has already set on the context
+   * @private
+   */
+  _renderEdgeByIndex(i, alpha = 1) {
+    const ep = this.simulation.edgePairs;
+    this._drawEdge(
+      ep[2 * i],
+      ep[2 * i + 1],
+      this._edgeStyles[i],
+      this._edgeBow[i],
+      alpha,
+    );
   }
 
 
@@ -1636,7 +1554,7 @@ export class Renderer extends Emitter {
     }
   }
 
-  
+
   /**
    * Draws a node identified by cache index.
    * @param {number} i - cache index of node
@@ -1645,6 +1563,64 @@ export class Renderer extends Emitter {
   _renderNodeByIndex(i) {
     this._drawNode(i, this._nodeStyles[i]);
   }
+
+
+  /**
+   * Draws a node on the canvas, positioned and sized according to its
+   * simulation slot and styled according to a `NodeStyle` object.
+   * @param {number} i - the node's slot in the simulation
+   * @param {NodeStyle} nodeStyle - node style
+   * @returns {void}
+   * @private
+   */
+  _drawNode(i, nodeStyle) {
+    if (!this._ctx) return;
+    const sim = this._simulation;
+    const cx = this._canvasX(sim.nodeX[i]), cy = this._canvasY(sim.nodeY[i]);
+    const r = sim.nodeRadius[i] * this._view.zoom;
+    this._ctx.beginPath();
+    this._ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+    const src = nodeStyle.image;
+    const img = src ? this._imageCache.loaded(src) : null;
+    const side = img ? Math.min(img.naturalWidth, img.naturalHeight) : 0;
+    if (src && img && side) {
+      const needed = 2 * r * this._dpr;     // on-screen diameter, device px
+      if (needed < IMAGE_DOT_THRESHOLD) {
+        // Too small to show detail: a dot in the image's average colour
+        this._ctx.fillStyle = this._imageCache.average(src) ?? nodeStyle.color;
+        this._ctx.fill();
+      } else {
+        // Exports draw the image itself: sprites the size an export needs
+        // aren't ready in time, and asking would build them for nothing
+        const sprite = this._exporting ? null : this._imageCache.sprite(src, needed);
+        if (sprite) {
+          this._ctx.drawImage(sprite, cx - r, cy - r, 2 * r, 2 * r);
+        } else {
+          // No sprite yet (the first is being prepared, or sprites can't be
+          // made here): the image itself, clipped to the node
+          const scale = r * 2 / side;
+          const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+          this._ctx.save();
+          this._ctx.clip();
+          this._ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+          this._ctx.restore();
+        }
+      }
+    } else {
+      this._ctx.fillStyle = nodeStyle.color;
+      this._ctx.fill();
+    }
+    if (nodeStyle.outlineWidth) {
+      // Scaled outlines too thin to see are skipped
+      const scale = this._opts.scaleStrokes;
+      const width = scale ? nodeStyle.outlineWidth * this._view.zoom : nodeStyle.outlineWidth;
+      if (scale && width < MIN_OUTLINE_WIDTH) return;
+      this._ctx.strokeStyle = nodeStyle.outlineColor;
+      this._ctx.lineWidth = width;
+      this._ctx.stroke();
+    }
+  }
+
 
   /**
    * Draws a node's label, identified by cache index.
@@ -1657,338 +1633,256 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Draws an edge identified by cache index.
-   * @param {number} i - cache index of edge
-   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
-   *    has already set on the context
-   * @private
-   */
-  _renderEdgeByIndex(i, alpha = 1) {
-    const ep = this.simulation.edgePairs;
-    this._drawEdge(
-      ep[2 * i],
-      ep[2 * i + 1],
-      this._edgeStyles[i],
-      this._edgeBow[i],
-      alpha,
-    );
-  }
-
-
-  /**
-   * Measures each node's label width per px of font size into
-   * `_labelWidthRatio`, reusing cached widths of unchanged label text.
+   * Draws a node's label. Whether it should be drawn (has a label, is
+   * enabled, large enough, on screen) is decided by `_cull()`.
+   *
+   * Expects the context to hold the label font at `LABEL_REF_SIZE`, the
+   * alignment for `labelPosition` and a round line join, all set once per
+   * frame by `render()`. The label is sized and placed by transform, which is
+   * left set; `render()` restores the base transform after each label pass.
+   * @param {number} i - the node's slot in the simulation
+   * @param {NodeStyle} nodeStyle - node style
    * @returns {void}
    * @private
    */
-  _measureLabels() {
+  _drawNodeLabel(i, nodeStyle) {
     if (!this._ctx) return;
-    const ctx = this._ctx;
-    const styles = this._nodeStyles;
-    const prev = this._labelWidthCache, next = new Map();
-    this._labelWidthRatio = new Float64Array(styles.length);
-    let fontSet = false;     // only set the font once something needs measuring
-    for (let i = 0; i < styles.length; i++) {
-      const label = styles[i].label;
-      if (label == null || label === "") continue;
-      const text = String(label);
-      let ratio = next.get(text) ?? prev.get(text);
-      if (ratio === undefined) {
-        if (!fontSet) { ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`; fontSet = true; }
-        ratio = ctx.measureText(text).width / LABEL_REF_SIZE;
-      }
-      next.set(text, ratio);
-      this._labelWidthRatio[i] = ratio;
+    const zoom = this._view.zoom, dpr = this._dpr, sim = this._simulation;
+    let x = this._canvasX(sim.nodeX[i]), y = this._canvasY(sim.nodeY[i]);
+    const r = (sim.nodeRadius[i] + this._opts.labelMargin) * zoom;
+    switch (this._opts.labelPosition) {
+      case "top":   y -= r; break;
+      case "right": x += r; break;
+      case "left":  x -= r; break;
+      default:      y += r; break;   // "bottom"
     }
-    this._labelWidthCache = next;
-    this._labelsDirty = false;
+    // Scale the reference-size font to this label's size, anchored at (x, y)
+    const size = Math.min(nodeStyle.labelScale * zoom, this._opts.maxLabelSize);
+    const s = dpr * size / LABEL_REF_SIZE;
+    this._ctx.setTransform(s, 0, 0, s, dpr * x, dpr * y);
+    const { labelStrokeWidth: sw, labelScale } = nodeStyle;
+    if (sw > 0 && labelScale > 0) {
+      // In font units, so the stroke scales with the text, cap included
+      this._ctx.lineWidth = sw * LABEL_REF_SIZE / labelScale;
+      this._ctx.strokeStyle = nodeStyle.labelStrokeColor;
+      this._ctx.strokeText(String(nodeStyle.label), 0, 0);
+    }
+    this._ctx.fillStyle = nodeStyle.labelTextColor;
+    this._ctx.fillText(String(nodeStyle.label), 0, 0);
+  }
+
+
+
+  // VIEW
+
+  /**
+   * Sets some or all of the view. Nothing changes if any value is invalid.
+   * Like other changes, it shows on the next render.
+   * @param {Partial<View>} view - view values to set; `undefined` values are
+   *    left alone
+   * @returns {this} self reference
+   * @throws {RangeError} throws if a coordinate isn't finite, or the zoom
+   *    isn't a finite number above 0
+   */
+  setView(view) {
+    const { x, y, zoom } = view;
+    if (x !== undefined && !Number.isFinite(x)) throw new RangeError("Renderer: view `x` must be finite");
+    if (y !== undefined && !Number.isFinite(y)) throw new RangeError("Renderer: view `y` must be finite");
+    if (zoom !== undefined) checkZoom(zoom, "view `zoom`");
+    const v = this._view;
+    if (x !== undefined) v.x = x;
+    if (y !== undefined) v.y = y;
+    if (zoom !== undefined) v.zoom = zoom;
+    return this;
   }
 
 
   /**
-   * Culls all nodes, edges, and labels fully outside the current view.
-   * Edges are tested as `_layoutEdge()` lays them out, so one crossing the
-   * view between two off-screen nodes is kept, and one that isn't drawn at
-   * all is dropped.
-   * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
-   * @private
+   * Returns the view moved so the graph shifts by a distance on the canvas,
+   * as dragging the background does, without applying it.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {View} the panned view
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
    */
-  _cull() {
-    if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
-    const { w: cw, h: ch } = this._size;
-    const [xMin, yMin] = this.canvasToSim(0, 0);
-    const [xMax, yMax] = this.canvasToSim(cw, ch);
-
-    const nodesI = [];
-    const sim = this._simulation, n = sim.nodeList.length;
-    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
-    for (let i = 0; i < n; i++) {
-      if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) nodesI.push(i);
+  viewPannedBy(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      throw new RangeError("Renderer: pan distances must be finite");
     }
-
-    const edgesI = [];
-    if (this._opts.renderEdges) {
-      const ep = sim.edgePairs, styles = this._edgeStyles, bows = this._edgeBow;
-      for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
-        const p = this._layoutEdge(ep[j], ep[j + 1], styles[i], bows[i]);
-        if (p && edgeInView(p, cw, ch)) edgesI.push(i);
-      }
-    }
-
-    const labelsI = [];
-    if (this._opts.renderLabels) {
-      const { minLabelSize, maxLabelSize } = this._opts;
-      const zoom = this._view.zoom, ratios = this._labelWidthRatio;
-      for (let i = 0; i < sim.nodeList.length; i++) {
-        const style = this._nodeStyles[i];
-        if (!ratios[i] || !style.renderLabel) continue;     // no label, or disabled
-        const px = style.labelScale * zoom;
-        if (px < minLabelSize) continue;                     // too small to read
-        // Label bounds in world units
-        const { x0, y0, w, h } = this._layoutLabel(i, Math.min(px, maxLabelSize) / zoom);
-        if (x0 < xMax && x0 + w > xMin && y0 < yMax && y0 + h > yMin) labelsI.push(i);
-      }
-    }
-
-    return { nodesI, edgesI, labelsI };
+    const v = this._view;
+    return { x: v.x - dx / v.zoom, y: v.y - dy / v.zoom, zoom: v.zoom };
   }
 
 
   /**
-   * Sets the context alpha for the next element, writing it only when it
-   * changes.
-   * @param {number} alpha - element alpha
-   * @returns {boolean} `false` when the element is invisible and can be skipped
-   * @private
+   * Shifts the graph by a distance on the canvas, as dragging the background
+   * does.
+   * @param {number} dx - canvas px to shift the graph right
+   * @param {number} dy - canvas px to shift the graph down
+   * @returns {this} self reference
+   * @throws {RangeError} throws if `dx` or `dy` isn't finite
    */
-  _useAlpha(alpha) {
-    if (alpha === 0) return false;
-    if (alpha !== this._frameAlpha) {
-      /** @type {CanvasContext} */ (this._ctx).globalAlpha = alpha;
-      this._frameAlpha = alpha;
+  panBy(dx, dy) { return this.setView(this.viewPannedBy(dx, dy)); }
+
+
+  /**
+   * Returns the view at a zoom, without applying it. With an anchor point,
+   * the graph under that point stays where it is, as zooming with the wheel
+   * does; without one, the canvas centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {View} the zoomed view
+   * @throws {RangeError} throws if the zoom isn't a finite number above 0,
+   *    or the anchor isn't finite
+   * @throws {TypeError} throws if only one anchor coordinate is given
+   * @throws {Error} throws if an anchor is given and no canvas is attached
+   */
+  viewZoomedTo(zoom, cx = undefined, cy = undefined) {
+    checkZoom(zoom, "zoom");
+    const v = this._view;
+    if (cx === undefined && cy === undefined) return { x: v.x, y: v.y, zoom };
+    if (cx === undefined || cy === undefined) {
+      throw new TypeError("Renderer: a zoom anchor needs both coordinates");
     }
-    return true;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+      throw new RangeError("Renderer: zoom anchor must be finite");
+    }
+    const [sx, sy] = this.canvasToSim(cx, cy);
+    const size = /** @type {Size} */ (this._size);
+    return { x: sx - (cx - size.w / 2) / zoom, y: sy - (cy - size.h / 2) / zoom, zoom };
   }
 
 
   /**
-   * Renders the current view of the graph according to current styles and
-   * highlight state.
-   * @param {number} [time] - frame timestamp in milliseconds, used to advance
-   *    highlight fades. Defaults to `performance.now()`; pass the
-   *    `requestAnimationFrame` timestamp when rendering from a loop.
-   * @returns {boolean} whether the `sync()` and render took place
+   * Sets the zoom. With an anchor point, the graph under that point stays
+   * where it is, as zooming with the wheel does; without one, the canvas
+   * centre stays.
+   * @param {number} zoom - zoom (canvas px per simulation px)
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does
    */
-  render(time = now()) {
-    if (!this._ctx || !this._size) return false;
+  zoomTo(zoom, cx = undefined, cy = undefined) {
+    return this.setView(this.viewZoomedTo(zoom, cx, cy));
+  }
+
+
+  /**
+   * Multiplies the zoom by a factor: above 1 zooms in, below 1 zooms out.
+   * Anchored as `zoomTo()` is.
+   * @param {number} factor - factor to multiply the zoom by
+   * @param {number} [cx] - canvas x coordinate of the anchor
+   * @param {number} [cy] - canvas y coordinate of the anchor
+   * @returns {this} self reference
+   * @throws {RangeError | TypeError | Error} throws as `viewZoomedTo()` does,
+   *    or if the factor isn't a finite number above 0
+   */
+  zoomBy(factor, cx = undefined, cy = undefined) {
+    checkZoom(factor, "zoom factor");
+    return this.zoomTo(this._view.zoom * factor, cx, cy);
+  }
+
+
+  /**
+   * Returns the view that frames the graph, or some of its nodes, on the
+   * canvas, without applying it: at the largest zoom that fits them with
+   * `padding` to spare on each side. The graph includes self-loops, bowed
+   * edges and the labels shown at that zoom, as `toCanvas({ fit: true })`
+   * frames it.
+   *
+   * `nodes` picks the nodes to fit, with their labels, self-loops and the
+   * bowed edges between them. The view is centred on the middle of the nodes
+   * `centerNodes` picks, which are fitted too, at the largest zoom that fits
+   * every node picked around that point. Each takes one id, an iterable of
+   * ids, or a function picking nodes. `minZoom` and `maxZoom` limit the zoom,
+   * keeping the centre.
+   * @param {ViewFittedOpts} [opts={}] - `padding` around the nodes, in
+   *    canvas px (16 by default); the `nodes` to fit (every node by default)
+   *    and `centerNodes` to centre on (`nodes` by default, or if it picks
+   *    none); and `minZoom` and `maxZoom` (no limit by default)
+   * @returns {View | null} the fitted view, or `null` if there are no nodes
+   *    to fit
+   * @throws {TypeError} throws if `opts` isn't an object, such as a padding
+   *    passed on its own, or has an unknown option
+   * @throws {RangeError} throws if an option is out of range, `maxZoom` is
+   *    below `minZoom`, or `padding` leaves no room for the nodes
+   * @throws {ReferenceError} throws if `nodes` or `centerNodes` has an id
+   *    with no node
+   * @throws {Error} throws if no canvas is attached
+   */
+  viewFitted(opts = {}) {
+    if (typeof opts === "number") {
+      throw new TypeError("Renderer: `viewFitted()` takes an options object, such as `{ padding: 24 }`");
+    }
+    checkKnownKeys("Renderer", opts, VIEW_FITTED_OPTION_NAMES);
+    checkEach(opts, VIEW_FITTED_RULES);
+    const { padding = 16, minZoom = 0, maxZoom = Infinity } = opts;
+    if (maxZoom < minZoom) throw new RangeError("Renderer: `maxZoom` must be at least `minZoom`");
+    const fitIds = this._checkSelection(readNodeSelection(opts.nodes));
+    const centerIds = this._checkSelection(readNodeSelection(opts.centerNodes));
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+
     this.sync();
-    // Eases every alpha toward its target, off-screen elements included, so
-    // they don't come back into view mid-fade
-    const opts = this._opts, hl = this._highlighter;
-    hl.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
-    this._imageCache.beginFrame();
-    this._drawFrame(time, opts.background, hl.nodeAlpha, hl.edgeAlpha, true);
-    this._imageCache.endFrame(opts.imageCacheMB * 1024 * 1024);
-    return true;
-  }
-
-
-  /**
-   * Draws a frame onto the current context, which holds the base transform,
-   * at the current view and size.
-   * @param {number} time - frame timestamp, passed to hooks
-   * @param {string | null} background - background color, or `null` for none
-   * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
-   * @param {Float64Array} edgeAlpha - highlight alpha of each edge slot
-   * @param {boolean} hooks - whether to run the drawing hooks
-   * @returns {void}
-   * @private
-   */
-  _drawFrame(time, background, nodeAlpha, edgeAlpha, hooks) {
-    if (!this._ctx || !this._size) return;
+    // After syncing, as it can move nodes to new slots
+    const fit = this._pickSlots(fitIds), center = this._pickSlots(centerIds);
+    if (fit && center) for (let i = 0; i < fit.length; i++) fit[i] |= center[i];
+    if (this._simulation.nodeList.length === 0 || (fit && !fit.includes(1))) return null;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
-    const inFrame = this._cull();
-
-    // Cleared first so a transparent or translucent background doesn't build
-    // up over earlier frames
-    this._ctx.clearRect(0, 0, this._size.w, this._size.h);
-    if (background !== null) {
-      this._ctx.fillStyle = background;
-      this._ctx.fillRect(0, 0, this._size.w, this._size.h);
-    }
-
-    if (hooks) this._runHooks("background", time);
-
-    // Text state shared by every label this frame; each label scales the font
-    // to its own size by transform
-    const hasLabels = inFrame.labelsI.length > 0;
-    if (hasLabels) {
-      this._ctx.font = `${LABEL_REF_SIZE}px ${this._opts.labelFont}`;
-      // Mitred corners would spike out of label strokes. Edges and outlines
-      // have no corners to join, so they're unaffected.
-      this._ctx.lineJoin = "round";
-      switch (this._opts.labelPosition) {
-        case "top":
-          this._ctx.textAlign = "center";
-          this._ctx.textBaseline = "bottom";
-          break;
-        case "right":
-          this._ctx.textAlign = "left";
-          this._ctx.textBaseline = "middle";
-          break;
-        case "left":
-          this._ctx.textAlign = "right";
-          this._ctx.textBaseline = "middle";
-          break;
-        default: // "bottom"
-          this._ctx.textAlign = "center";
-          this._ctx.textBaseline = "top";
-          break;
-      }
-    }
-    const dpr = this._dpr;
-
-    const hl = this._highlighter;
-    if (hl.has() || hl.isFading()) {
-      const { nodeState, edgeState } = hl;
-      this._frameAlpha = 1;
-      for (const flag of [0, 1]) {
-        for (const i of inFrame.edgesI) {
-          if (edgeState[i] === flag && this._useAlpha(edgeAlpha[i]))
-            this._renderEdgeByIndex(i, edgeAlpha[i]);
-        }
-        for (const i of inFrame.nodesI) {
-          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
-            this._renderNodeByIndex(i);
-        }
-        for (const i of inFrame.labelsI) {
-          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
-            this._renderNodeLabelByIndex(i);
-        }
-        // Highlighted nodes are drawn next, in canvas space
-        if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      }
-      if (this._frameAlpha !== 1) this._ctx.globalAlpha = 1;
-    } else {
-      for (const i of inFrame.edgesI) this._renderEdgeByIndex(i);
-      for (const i of inFrame.nodesI) this._renderNodeByIndex(i);
-      for (const i of inFrame.labelsI) this._renderNodeLabelByIndex(i);
-      if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    // Back to the canvas default, for hooks
-    if (hasLabels) this._ctx.lineJoin = "miter";
-
-    if (hooks) this._runHooks("overlay", time);
+    // Centring nodes that aren't picked centres on the nodes fitted instead
+    const middle = center?.includes(1) ? center : null;
+    const { w, h } = this._size;
+    const zoom = Math.min(Math.max(this._fitZoom(w, h, padding, fit, middle), minZoom), maxZoom);
+    const b = this._graphBounds(zoom, middle ?? fit);
+    return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom };
   }
 
 
   /**
-   * Draws the graph onto a new canvas, for saving as an image. By default
-   * it's drawn as it is on screen: the current view, at the attached canvas's
-   * size and pixel ratio. With `fit`, it's framed around the whole graph
-   * instead.
-   *
-   * The attached canvas, its view and the render loop are left alone.
-   * Highlights are drawn as they'll be once any fade ends, and node images at
-   * full detail from the images themselves; images still loading are drawn
-   * as their node's `color`. Hooks run unless `hooks` is `false`, and see the
-   * export's canvas, `size` and `view` while they do.
-   * @param {ExportOpts} [opts={}] - export options
-   * @returns {Canvas} the canvas drawn on: `opts.canvas` if given, otherwise
-   *    a new `HTMLCanvasElement`, or an `OffscreenCanvas` where there's no
-   *    document
-   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
-   * @throws {Error} throws if the size isn't given and can't be worked out
-   *    (no canvas attached, and not `fit`ting a graph with nodes), or no
-   *    canvas can be made
-   */
-  toCanvas(opts = {}) {
-    checkKnownKeys("Renderer", opts, EXPORT_OPTION_NAMES);
-    checkEach(opts, EXPORT_RULES);
-    const { fit = false, padding = 16, hooks = true } = opts;
-    const pixelRatio = opts.pixelRatio ?? this._dpr;
-    const background = opts.background === undefined ? this._opts.background : opts.background;
-
-    const canvas = opts.canvas ?? makeExportCanvas();
-    // Cast: tsc resolves `getContext` on the canvas union unreliably
-    const ctx = /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
-    if (!ctx) throw new TypeError("Renderer: export canvas has no 2D context");
-
-    this.sync();
-    const live = { canvas: this._canvas, ctx: this._ctx, size: this._size, dpr: this._dpr, view: this._view };
-    try {
-      this._exporting = true;
-      this._canvas = canvas;
-      this._ctx = ctx;
-      this._dpr = pixelRatio;
-      // Measured before framing, which needs label sizes, and with the
-      // export's context, since a renderer without a canvas has none
-      if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
-      const { size, view } = this._exportFrame(fit, padding, opts.width, opts.height, live.size);
-      this._size = size;
-      this._view = view;
-      canvas.width = Math.max(1, Math.round(size.w * pixelRatio));
-      canvas.height = Math.max(1, Math.round(size.h * pixelRatio));
-      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      const { nodeAlpha, edgeAlpha } = this._highlighter.settledAlphas(this._opts.highlightMode, this._opts.highlightAlpha);
-      this._drawFrame(now(), background, nodeAlpha, edgeAlpha, hooks);
-    } finally {
-      this._exporting = false;
-      this._canvas = live.canvas;
-      this._ctx = live.ctx;
-      this._size = live.size;
-      this._dpr = live.dpr;
-      this._view = live.view;
-    }
-    return canvas;
-  }
-
-
-  /**
-   * Draws the graph as `toCanvas()` does and encodes it as an image file.
-   * The graph is drawn when this is called, or with `waitForImages`, once
-   * every node image has loaded or failed; only the waiting and encoding are
-   * asynchronous.
-   * @param {ExportBlobOpts} [opts={}] - export options, plus the image
-   *    `type`, `quality` and `waitForImages`
-   * @returns {Promise<Blob>} the image
-   * @throws {TypeError | RangeError | Error} rejects as `toCanvas()` throws,
-   *    or if the image can't be encoded (it may be larger than the browser
-   *    allows). Rejects with a "SecurityError" `DOMException` if a node image
-   *    was loaded without CORS (`crossOrigin: null`). Invalid options reject
-   *    before any waiting.
-   */
-  async toBlob(opts = {}) {
-    checkKnownKeys("Renderer", opts, BLOB_OPTION_NAMES);
-    const { type, quality, waitForImages = false, ...canvasOpts } = opts;
-    checkEach({ type, quality, waitForImages }, BLOB_RULES);
-    checkEach(canvasOpts, EXPORT_RULES);
-    if (waitForImages) await this._nodeImagesSettled();
-    const canvas = this.toCanvas(canvasOpts);
-    const blob = "convertToBlob" in canvas
-      ? await canvas.convertToBlob({ type, quality })
-      : await new Promise(resolve => canvas.toBlob(resolve, type, quality));
-    if (!blob) throw new Error("Renderer: the image couldn't be encoded; it may be too large");
-    return blob;
-  }
-
-
-  /**
-   * Resolves once no node's image is still loading: each has loaded or
-   * failed. Images of nodes added, or changed, while waiting are waited for
-   * too.
-   * @returns {Promise<void>}
+   * Throws unless every id a selection names is a node in the graph.
+   * @template {Set<NodeId> | ((node: GraphNode) => boolean) | null} S
+   * @param {S} picked - a selection, as `readNodeSelection()` gives it
+   * @returns {S} the selection
+   * @throws {ReferenceError} throws if an id has no node
    * @private
    */
-  async _nodeImagesSettled() {
-    for (;;) {
-      this.sync();
-      const images = this._imageCache.images;
-      if (!this._nodeStyles.some(s => s.image && images.get(s.image)?.status === "loading")) return;
-      // A settle, or the entry being collected once no node uses it
-      await this._imageCache.changed();
+  _checkSelection(picked) {
+    if (picked instanceof Set) {
+      for (const id of picked) {
+        if (!this._graph.hasNode(id)) throw new ReferenceError(`Renderer: no node with id "${id}"`);
+      }
     }
+    return picked;
+  }
+
+
+  /**
+   * Flags the nodes a selection picks, by slot. Expects the simulation to be
+   * synced.
+   * @param {ReadonlySet<NodeId> | ((node: GraphNode) => boolean) | null} picked -
+   *    ids or a function of each node; `null` for every node
+   * @returns {Uint8Array | null} 1 for each node picked, or `null` for every
+   *    node
+   * @private
+   */
+  _pickSlots(picked) {
+    if (!picked) return null;
+    const sim = this._simulation, flags = new Uint8Array(sim.nodeList.length);
+    if (typeof picked === "function") {
+      const ids = sim.nodeId, nodes = this._graph.nodes;
+      for (let i = 0; i < flags.length; i++) {
+        const node = nodes.get(ids[i]);
+        if (node && picked(node)) flags[i] = 1;
+      }
+    } else {
+      for (const id of picked) {
+        const i = sim.nodeIndex.get(id);
+        if (i !== undefined) flags[i] = 1;
+      }
+    }
+    return flags;
   }
 
 
@@ -2036,38 +1930,6 @@ export class Renderer extends Emitter {
     if (zoom === Infinity) zoom = this._view.zoom;    // a graph with no extent
     if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
     return zoom;
-  }
-
-
-  /**
-   * Works out an export's size and view.
-   * @param {boolean} fit - whether to frame the whole graph
-   * @param {number} padding - canvas px around a fitted graph
-   * @param {number | undefined} width - requested width
-   * @param {number | undefined} height - requested height
-   * @param {Size | null} live - size of the attached canvas
-   * @returns {{ size: Size, view: View }} size and view
-   * @throws {Error} throws if the size can't be worked out
-   * @throws {RangeError} throws if `padding` leaves no room for the graph
-   * @private
-   */
-  _exportFrame(fit, padding, width, height, live) {
-    const current = this._view;
-    if (!fit || this._simulation.nodeList.length === 0) {
-      const w = width ?? live?.w, h = height ?? live?.h;
-      if (w === undefined || h === undefined) {
-        throw new Error("Renderer: an export needs a `width` and `height` without a canvas attached, unless it fits a graph with nodes");
-      }
-      return { size: { w, h }, view: { ...current } };
-    }
-
-    const zoom = width !== undefined || height !== undefined ?
-      this._fitZoom(width, height, padding) : current.zoom;
-    const b = this._graphBounds(zoom);
-    return {
-      size: { w: width ?? (b.x1 - b.x0) * zoom + 2 * padding, h: height ?? (b.y1 - b.y0) * zoom + 2 * padding },
-      view: { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom },
-    };
   }
 
 
@@ -2143,33 +2005,73 @@ export class Renderer extends Emitter {
   }
 
 
+
+  // COORDINATES AND HIT TESTING
+
   /**
-   * Places a node's label box, in simulation units, by `labelPosition`,
-   * including the part of its stroke outside the text. Writes into one
-   * reused object, so culling doesn't allocate per label.
-   * @param {number} i - cache index of the node
-   * @param {number} h - label height (font size) in simulation units
-   * @returns {{ x0: number, y0: number, w: number, h: number }} the box
+   * Converts simulation space coordinates to canvas coordinates based on the
+   * current view.
+   * @param {number} x - simulation x coordinate
+   * @param {number} y - simulation y coordinate
+   * @returns {[number, number]} - canvas coordinates
+   * @throws {Error} throws when no canvas is attached
+   */
+  simToCanvas(x, y) {
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+    return [this._canvasX(x), this._canvasY(y)];
+  }
+
+
+  /**
+   * Converts canvas coordinates to simulation space coordinates based on the
+   * current view.
+   * @param {number} x - canvas x coordinate
+   * @param {number} y - canvas y coordinate
+   * @returns {[number, number]} - simulation coordinates
+   * @throws {Error} throws when no canvas is attached
+   */
+  canvasToSim(x, y) {
+    if (!this._canvas || !this._size) throw new Error("Renderer: no canvas attached");
+    const v = this._view;
+    return [(x - this._size.w / 2) / v.zoom + v.x, (y - this._size.h / 2) / v.zoom + v.y];
+  }
+
+
+  /**
+   * Canvas x coordinate of a simulation x coordinate, as `simToCanvas()`
+   * gives it, for drawing loops: it doesn't check for a canvas or allocate an
+   * array. Expects a size, which drawing and hit tests already require.
+   * @param {number} x - simulation x coordinate
+   * @returns {number} canvas x coordinate
    * @private
    */
-  _layoutLabel(i, h) {
-    const sim = this._simulation, box = this._labelBox;
-    const x = sim.nodeX[i], y = sim.nodeY[i];
-    const w = this._labelWidthRatio[i] * h, d = sim.nodeRadius[i] + this._opts.labelMargin;
-    switch (this._opts.labelPosition) {
-      case "top":   box.x0 = x - w / 2; box.y0 = y - d - h; break;
-      case "right": box.x0 = x + d;     box.y0 = y - h / 2; break;
-      case "left":  box.x0 = x - d - w; box.y0 = y - h / 2; break;
-      default:      box.x0 = x - w / 2; box.y0 = y + d;     break;
-    }
-    // Half the stroke shows, scaled with the text as it's drawn
-    const { labelStrokeWidth: sw, labelScale } = this._nodeStyles[i];
-    const pad = sw > 0 && labelScale > 0 ? sw / 2 * h / labelScale : 0;
-    box.x0 -= pad;
-    box.y0 -= pad;
-    box.w = w + 2 * pad;
-    box.h = h + 2 * pad;
-    return box;
+  _canvasX(x) {
+    return /** @type {Size} */ (this._size).w / 2 + (x - this._view.x) * this._view.zoom;
+  }
+
+
+  /**
+   * Canvas y coordinate of a simulation y coordinate; see `_canvasX()`.
+   * @param {number} y - simulation y coordinate
+   * @returns {number} canvas y coordinate
+   * @private
+   */
+  _canvasY(y) {
+    return /** @type {Size} */ (this._size).h / 2 + (y - this._view.y) * this._view.zoom;
+  }
+
+
+  /**
+   * Returns the canvas coordinates of the node with the specified id, or null
+   * if the node does not exist
+   * @param {NodeId} id - node id
+   * @returns {[number, number] | null}
+   * @throws {Error} throws when no canvas is attached
+   */
+  getPosition(id) {
+    if (!this._canvas) throw new Error("Renderer: no canvas attached");
+    const p = this._simulation.getPosition(id);
+    return p ? this.simToCanvas(...p) : null;
   }
 
 
@@ -2285,17 +2187,147 @@ export class Renderer extends Emitter {
   }
 
 
+
+  // EXPORT
+
   /**
-   * Returns the canvas coordinates of the node with the specified id, or null
-   * if the node does not exist
-   * @param {NodeId} id - node id
-   * @returns {[number, number] | null}
-   * @throws {Error} throws when no canvas is attached
+   * Draws the graph onto a new canvas, for saving as an image. By default
+   * it's drawn as it is on screen: the current view, at the attached canvas's
+   * size and pixel ratio. With `fit`, it's framed around the whole graph
+   * instead.
+   *
+   * The attached canvas, its view and the render loop are left alone.
+   * Highlights are drawn as they'll be once any fade ends, and node images at
+   * full detail from the images themselves; images still loading are drawn
+   * as their node's `color`. Hooks run unless `hooks` is `false`, and see the
+   * export's canvas, `size` and `view` while they do.
+   * @param {ExportOpts} [opts={}] - export options
+   * @returns {Canvas} the canvas drawn on: `opts.canvas` if given, otherwise
+   *    a new `HTMLCanvasElement`, or an `OffscreenCanvas` where there's no
+   *    document
+   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
+   * @throws {Error} throws if the size isn't given and can't be worked out
+   *    (no canvas attached, and not `fit`ting a graph with nodes), or no
+   *    canvas can be made
    */
-  getPosition(id) {
-    if (!this._canvas) throw new Error("Renderer: no canvas attached");
-    const p = this._simulation.getPosition(id);
-    return p ? this.simToCanvas(...p) : null;
+  toCanvas(opts = {}) {
+    checkKnownKeys("Renderer", opts, EXPORT_OPTION_NAMES);
+    checkEach(opts, EXPORT_RULES);
+    const { fit = false, padding = 16, hooks = true } = opts;
+    const pixelRatio = opts.pixelRatio ?? this._dpr;
+    const background = opts.background === undefined ? this._opts.background : opts.background;
+
+    const canvas = opts.canvas ?? makeExportCanvas();
+    // Cast: tsc resolves `getContext` on the canvas union unreliably
+    const ctx = /** @type {CanvasContext | null} */ (canvas.getContext("2d"));
+    if (!ctx) throw new TypeError("Renderer: export canvas has no 2D context");
+
+    this.sync();
+    const live = { canvas: this._canvas, ctx: this._ctx, size: this._size, dpr: this._dpr, view: this._view };
+    try {
+      this._exporting = true;
+      this._canvas = canvas;
+      this._ctx = ctx;
+      this._dpr = pixelRatio;
+      // Measured before framing, which needs label sizes, and with the
+      // export's context, since a renderer without a canvas has none
+      if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
+      const { size, view } = this._exportFrame(fit, padding, opts.width, opts.height, live.size);
+      this._size = size;
+      this._view = view;
+      canvas.width = Math.max(1, Math.round(size.w * pixelRatio));
+      canvas.height = Math.max(1, Math.round(size.h * pixelRatio));
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      const { nodeAlpha, edgeAlpha } = this._highlighter.settledAlphas(this._opts.highlightMode, this._opts.highlightAlpha);
+      this._drawFrame(now(), background, nodeAlpha, edgeAlpha, hooks);
+    } finally {
+      this._exporting = false;
+      this._canvas = live.canvas;
+      this._ctx = live.ctx;
+      this._size = live.size;
+      this._dpr = live.dpr;
+      this._view = live.view;
+    }
+    return canvas;
+  }
+
+
+  /**
+   * Draws the graph as `toCanvas()` does and encodes it as an image file.
+   * The graph is drawn when this is called, or with `waitForImages`, once
+   * every node image has loaded or failed; only the waiting and encoding are
+   * asynchronous.
+   * @param {ExportBlobOpts} [opts={}] - export options, plus the image
+   *    `type`, `quality` and `waitForImages`
+   * @returns {Promise<Blob>} the image
+   * @throws {TypeError | RangeError | Error} rejects as `toCanvas()` throws,
+   *    or if the image can't be encoded (it may be larger than the browser
+   *    allows). Rejects with a "SecurityError" `DOMException` if a node image
+   *    was loaded without CORS (`crossOrigin: null`). Invalid options reject
+   *    before any waiting.
+   */
+  async toBlob(opts = {}) {
+    checkKnownKeys("Renderer", opts, BLOB_OPTION_NAMES);
+    const { type, quality, waitForImages = false, ...canvasOpts } = opts;
+    checkEach({ type, quality, waitForImages }, BLOB_RULES);
+    checkEach(canvasOpts, EXPORT_RULES);
+    if (waitForImages) await this._nodeImagesSettled();
+    const canvas = this.toCanvas(canvasOpts);
+    const blob = "convertToBlob" in canvas
+      ? await canvas.convertToBlob({ type, quality })
+      : await new Promise(resolve => canvas.toBlob(resolve, type, quality));
+    if (!blob) throw new Error("Renderer: the image couldn't be encoded; it may be too large");
+    return blob;
+  }
+
+
+  /**
+   * Resolves once no node's image is still loading: each has loaded or
+   * failed. Images of nodes added, or changed, while waiting are waited for
+   * too.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _nodeImagesSettled() {
+    for (;;) {
+      this.sync();
+      const images = this._imageCache.images;
+      if (!this._nodeStyles.some(s => s.image && images.get(s.image)?.status === "loading")) return;
+      // A settle, or the entry being collected once no node uses it
+      await this._imageCache.changed();
+    }
+  }
+
+
+  /**
+   * Works out an export's size and view.
+   * @param {boolean} fit - whether to frame the whole graph
+   * @param {number} padding - canvas px around a fitted graph
+   * @param {number | undefined} width - requested width
+   * @param {number | undefined} height - requested height
+   * @param {Size | null} live - size of the attached canvas
+   * @returns {{ size: Size, view: View }} size and view
+   * @throws {Error} throws if the size can't be worked out
+   * @throws {RangeError} throws if `padding` leaves no room for the graph
+   * @private
+   */
+  _exportFrame(fit, padding, width, height, live) {
+    const current = this._view;
+    if (!fit || this._simulation.nodeList.length === 0) {
+      const w = width ?? live?.w, h = height ?? live?.h;
+      if (w === undefined || h === undefined) {
+        throw new Error("Renderer: an export needs a `width` and `height` without a canvas attached, unless it fits a graph with nodes");
+      }
+      return { size: { w, h }, view: { ...current } };
+    }
+
+    const zoom = width !== undefined || height !== undefined ?
+      this._fitZoom(width, height, padding) : current.zoom;
+    const b = this._graphBounds(zoom);
+    return {
+      size: { w: width ?? (b.x1 - b.x0) * zoom + 2 * padding, h: height ?? (b.y1 - b.y0) * zoom + 2 * padding },
+      view: { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, zoom },
+    };
   }
 }
 

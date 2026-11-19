@@ -95,6 +95,23 @@ export class GraphJS extends Emitter {
    */
   get renderer() { return this._renderer; }
 
+  /**
+   * [read-only, set with `setView()` or the methods below] The `Renderer`'s
+   * current view: the simulation coordinates at the canvas centre, and the
+   * zoom (canvas px per simulation px).
+   *
+   * The view methods delegate to the `Renderer`'s. They don't emit events,
+   * and like other changes made from code, they show on the next render.
+   * @type {Readonly<View>}
+   */
+  get view() { return this._renderer.view; }
+
+  /**
+   * The `Renderer`'s canvas
+   * @type {Canvas | null}
+   */
+  get canvas() { return this._renderer.canvas; }
+
 
   /**
    * Hook functions by type, run by each frame of `start()` and by `step()`:
@@ -112,6 +129,12 @@ export class GraphJS extends Emitter {
    * @private
    */
   _interaction = null;
+
+  /**
+   * Current interaction options, or `null` while interaction is off
+   * @type {Readonly<InteractionOpts> | null}
+   */
+  get interactionOpts() { return this._interaction?.opts ?? null; }
 
 
   /**
@@ -191,12 +214,8 @@ export class GraphJS extends Emitter {
   }
 
 
-  /**
-   * The `Renderer`'s canvas
-   * @type {Canvas | null}
-   */
-  get canvas() { return this._renderer.canvas; }
 
+  // CANVAS
 
   /**
    * Attaches a canvas to the `Renderer`. If a canvas is already attached, it
@@ -228,6 +247,30 @@ export class GraphJS extends Emitter {
     return this;
   }
 
+
+  /**
+   * Updates the `Renderer`'s internal canvas dimensions. Delegates to
+   * `Renderer.resize()`.
+   * @returns {this} self reference
+   */
+  resize() { this._renderer.resize(); return this; }
+
+
+  /**
+   * Throws unless a canvas is attached. The canvas helpers check here first,
+   * so their error names `GraphJS`, the object the caller used, rather than
+   * the renderer they delegate to.
+   * @returns {void}
+   * @throws {Error} throws if no canvas is attached
+   * @private
+   */
+  _requireCanvas() {
+    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
+  }
+
+
+
+  // INTERACTION
 
   /**
    * Turns on built-in pointer interaction, or updates its options if it's
@@ -280,20 +323,8 @@ export class GraphJS extends Emitter {
   isInteractive() { return this._interaction !== null; }
 
 
-  /**
-   * Current interaction options, or `null` while interaction is off
-   * @type {Readonly<InteractionOpts> | null}
-   */
-  get interactionOpts() { return this._interaction?.opts ?? null; }
 
-
-  /**
-   * Updates the `Renderer`'s internal canvas dimensions. Delegates to
-   * `Renderer.resize()`.
-   * @returns {this} self reference
-   */
-  resize() { this._renderer.resize(); return this; }
-
+  // GRAPH
 
   /**
    * Adds a node to the `Graph`. Delegates to `Graph.addNode()`.
@@ -302,6 +333,14 @@ export class GraphJS extends Emitter {
    * @returns {NodeId} - id of the node added
    */
   addNode(data = {}, id = undefined) { return this.graph.addNode(data, id); }
+
+
+  /**
+   * Removes a node from the `Graph`. Delegates to `Graph.removeNode()`.
+   * @param {NodeId} id - node id
+   * @returns {boolean} success of the removal
+   */
+  removeNode(id) { return this.graph.removeNode(id); }
 
 
   /**
@@ -316,14 +355,6 @@ export class GraphJS extends Emitter {
 
 
   /**
-   * Removes a node from the `Graph`. Delegates to `Graph.removeNode()`.
-   * @param {NodeId} id - node id
-   * @returns {boolean} success of the removal
-   */
-  removeNode(id) { return this.graph.removeNode(id); }
-
-
-  /**
    * Removes an edge from the `Graph` based on source and destination id.
    * Delegates to `Graph.removeEdge()`.
    * @param {NodeId} srcId - source node id
@@ -332,6 +363,9 @@ export class GraphJS extends Emitter {
    */
   removeEdge(srcId, destId) { return this.graph.removeEdge(srcId, destId); }
 
+
+
+  // LOOP
 
   /**
    * Starts the `requestAnimationFrame()` loop. No-ops if a loop is already
@@ -382,6 +416,23 @@ export class GraphJS extends Emitter {
 
 
   /**
+   * Runs one frame: ticks the simulation and renders, with hooks around each.
+   * Shared by `start()` and `step()`.
+   * @param {number} time - frame timestamp
+   * @returns {void}
+   * @private
+   */
+  _frame(time) {
+    this.stepTweens(time);
+    this._runHooks("preTick", time);
+    this._simulation.tick();
+    this._runHooks("postTick", time);
+    this._renderer.render(time);
+    this._runHooks("postRender", time);
+  }
+
+
+  /**
    * Draws a frame on the next animation frame while the loop isn't running,
    * and keeps drawing one each frame while a tween or highlight fade is in
    * progress or node image sizes are being prepared, then stops. Each frame advances tweens and renders, but doesn't
@@ -425,6 +476,9 @@ export class GraphJS extends Emitter {
     this._onDemandFrame = null;
   }
 
+
+
+  // HOOKS
 
   /**
    * Adds a function to run each frame of `start()`, and on each `step()`.
@@ -472,22 +526,8 @@ export class GraphJS extends Emitter {
   }
 
 
-  /**
-   * Runs one frame: ticks the simulation and renders, with hooks around each.
-   * Shared by `start()` and `step()`.
-   * @param {number} time - frame timestamp
-   * @returns {void}
-   * @private
-   */
-  _frame(time) {
-    this.stepTweens(time);
-    this._runHooks("preTick", time);
-    this._simulation.tick();
-    this._runHooks("postTick", time);
-    this._renderer.render(time);
-    this._runHooks("postRender", time);
-  }
 
+  // TWEENS
 
   /**
    * Starts a tween, which animates a number or an array of numbers by passing
@@ -576,177 +616,8 @@ export class GraphJS extends Emitter {
   }
 
 
-  /**
-   * Converts simulation space coordinates to canvas space coordinates based on
-   * the `Renderer`'s current `view`. Delegates to `Renderer.simToCanvas()`.
-   * @param {number} x - simulation space x coordinate
-   * @param {number} y - simulation space y coordinate
-   * @returns {[number, number]} canvas space coordinates
-   * @throws {Error} throws if no canvas is attached
-   */
-  simToCanvas(x, y) {
-    this._requireCanvas();
-    return this._renderer.simToCanvas(x, y);
-  }
 
-
-  /**
-   * Converts canvas space coordinates to simulation space coordinates based on
-   * the `Renderer`'s current `view`. Delegates to `Renderer.canvasToSim()`.
-   * @param {number} cx - canvas space x coordinate
-   * @param {number} cy - canvas space y coordinate
-   * @returns {[number, number]} - simulation space coordinates
-   * @throws {Error} throws if no canvas is attached
-   */
-  canvasToSim(cx, cy) {
-    this._requireCanvas();
-    return this._renderer.canvasToSim(cx, cy);
-  }
-
-
-  /**
-   * Returns the id of the node occupying a specific coordinate in canvas
-   * space, or null if no node is there. Most commonly used for mouse UI
-   * interactions.
-   * @param {number} cx - canvas space x coordinate
-   * @param {number} cy - canvas space y coordinate
-   * @param {number} [slack] - extra hit radius around each node, in canvas
-   *    pixels (defaults to the renderer's default)
-   * @returns {NodeId | null} id of node at coordinates, or `null` if no node
-   *    was found
-   * @throws {Error} throws if no canvas is attached
-   */
-  nodeAt(cx, cy, slack = undefined) {
-    this._requireCanvas();
-    return this._renderer.nodeAt(cx, cy, slack);
-  }
-
-
-  /**
-   * Returns the edge drawn at a specific coordinate in canvas space, or `null`
-   * if no edge is there. When edges overlap, the one whose stroke is nearest
-   * wins, then the one drawn on top. Doesn't check for nodes covering the
-   * point, so call `nodeAt()` first to give nodes priority.
-   * @param {number} cx - canvas space x coordinate
-   * @param {number} cy - canvas space y coordinate
-   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
-   *    pixels (defaults to the renderer's default)
-   * @returns {GraphEdge | null} edge at coordinates, or `null` if no edge was
-   *    found
-   * @throws {Error} throws if no canvas is attached
-   */
-  edgeAt(cx, cy, slack = undefined) {
-    this._requireCanvas();
-    return this._renderer.edgeAt(cx, cy, slack);
-  }
-
-
-  /**
-   * Returns every edge within reach of a specific coordinate in canvas space,
-   * best match first, ranked like `edgeAt()`. Useful for letting the user
-   * cycle through edges that overlap under the pointer.
-   * @param {number} cx - canvas space x coordinate
-   * @param {number} cy - canvas space y coordinate
-   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
-   *    pixels (defaults to the renderer's default)
-   * @returns {GraphEdge[]} the edges, in a new array; empty if none are found
-   * @throws {Error} throws if no canvas is attached
-   */
-  edgesAt(cx, cy, slack = undefined) {
-    this._requireCanvas();
-    return this._renderer.edgesAt(cx, cy, slack);
-  }
-
-
-  /**
-   * Returns the canvas space coordinates of a node based on id, or `null` if
-   * the node id was not found. Delegates to `Renderer.getPosition()`.
-   * @param {NodeId} id - node id
-   * @returns {[number, number] | null} canvas space coordinates of the node,
-   *    or `null` if the node id was not found
-   * @throws {Error} throws if no canvas is attached
-   */
-  getPosition(id) {
-    this._requireCanvas();
-    return this._renderer.getPosition(id);
-  }
-
-
-  /**
-   * Draws the graph onto a new canvas, for saving as an image: the current
-   * view by default, or the whole graph with `fit`. The canvas on screen is
-   * left alone. Delegates to `Renderer.toCanvas()`.
-   * @param {ExportOpts} [opts] - export options
-   * @returns {Canvas} the canvas drawn on
-   * @throws {TypeError | RangeError | Error} throws as `Renderer.toCanvas()`
-   *    does
-   */
-  toCanvas(opts = undefined) {
-    return this._renderer.toCanvas(opts);
-  }
-
-
-  /**
-   * Draws the graph as `toCanvas()` does and encodes it as an image file,
-   * PNG by default. Delegates to `Renderer.toBlob()`.
-   * @param {ExportBlobOpts} [opts] - export options, plus the image `type`
-   *    and `quality`
-   * @returns {Promise<Blob>} the image
-   * @throws {TypeError | RangeError | Error} rejects as `Renderer.toBlob()`
-   *    does
-   */
-  toBlob(opts = undefined) {
-    return this._renderer.toBlob(opts);
-  }
-
-
-  /**
-   * Fixes the node with the specified id to a point in canvas space. Delegates
-   * to `Simulation.pin()`.
-   * @param {NodeId} id - node id
-   * @param {number} cx - canvas space x coordinate
-   * @param {number} cy - canvas space y coordinate
-   * @returns {boolean} whether the node was pinned (`false` if node not found)
-   * @throws {Error} throws if no canvas is attached
-   */
-  pin(id, cx, cy) {
-    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
-  }
-
-
-  /**
-   * Throws unless a canvas is attached. The canvas helpers check here first,
-   * so their error names `GraphJS`, the object the caller used, rather than
-   * the renderer they delegate to.
-   * @returns {void}
-   * @throws {Error} throws if no canvas is attached
-   * @private
-   */
-  _requireCanvas() {
-    if (!this.canvas) throw new Error("GraphJS: no canvas attached");
-  }
-
-
-  /**
-   * Unpins a node by reverting `fixed` to its default. Delegates to
-   * `Simulation.unpin()`.
-   * @param {NodeId} id - node id
-   * @returns {this} self reference
-   */
-  unpin(id) { this._simulation.unpin(id); return this; }
-
-
-  /**
-   * [read-only, set with `setView()` or the methods below] The `Renderer`'s
-   * current view: the simulation coordinates at the canvas centre, and the
-   * zoom (canvas px per simulation px).
-   *
-   * The view methods delegate to the `Renderer`'s. They don't emit events,
-   * and like other changes made from code, they show on the next render.
-   * @type {Readonly<View>}
-   */
-  get view() { return this._renderer.view; }
-
+  // VIEW
 
   /**
    * Sets some or all of the view. Delegates to `Renderer.setView()`.
@@ -955,5 +826,161 @@ export class GraphJS extends Emitter {
     if (duration === 0) tw.finish();
     else this.requestRender();
     return tw;
+  }
+
+
+
+  // COORDINATES AND HIT TESTING
+
+  /**
+   * Converts simulation space coordinates to canvas space coordinates based on
+   * the `Renderer`'s current `view`. Delegates to `Renderer.simToCanvas()`.
+   * @param {number} x - simulation space x coordinate
+   * @param {number} y - simulation space y coordinate
+   * @returns {[number, number]} canvas space coordinates
+   * @throws {Error} throws if no canvas is attached
+   */
+  simToCanvas(x, y) {
+    this._requireCanvas();
+    return this._renderer.simToCanvas(x, y);
+  }
+
+
+  /**
+   * Converts canvas space coordinates to simulation space coordinates based on
+   * the `Renderer`'s current `view`. Delegates to `Renderer.canvasToSim()`.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @returns {[number, number]} - simulation space coordinates
+   * @throws {Error} throws if no canvas is attached
+   */
+  canvasToSim(cx, cy) {
+    this._requireCanvas();
+    return this._renderer.canvasToSim(cx, cy);
+  }
+
+
+  /**
+   * Returns the canvas space coordinates of a node based on id, or `null` if
+   * the node id was not found. Delegates to `Renderer.getPosition()`.
+   * @param {NodeId} id - node id
+   * @returns {[number, number] | null} canvas space coordinates of the node,
+   *    or `null` if the node id was not found
+   * @throws {Error} throws if no canvas is attached
+   */
+  getPosition(id) {
+    this._requireCanvas();
+    return this._renderer.getPosition(id);
+  }
+
+
+  /**
+   * Returns the id of the node occupying a specific coordinate in canvas
+   * space, or null if no node is there. Most commonly used for mouse UI
+   * interactions.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - extra hit radius around each node, in canvas
+   *    pixels (defaults to the renderer's default)
+   * @returns {NodeId | null} id of node at coordinates, or `null` if no node
+   *    was found
+   * @throws {Error} throws if no canvas is attached
+   */
+  nodeAt(cx, cy, slack = undefined) {
+    this._requireCanvas();
+    return this._renderer.nodeAt(cx, cy, slack);
+  }
+
+
+  /**
+   * Returns the edge drawn at a specific coordinate in canvas space, or `null`
+   * if no edge is there. When edges overlap, the one whose stroke is nearest
+   * wins, then the one drawn on top. Doesn't check for nodes covering the
+   * point, so call `nodeAt()` first to give nodes priority.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels (defaults to the renderer's default)
+   * @returns {GraphEdge | null} edge at coordinates, or `null` if no edge was
+   *    found
+   * @throws {Error} throws if no canvas is attached
+   */
+  edgeAt(cx, cy, slack = undefined) {
+    this._requireCanvas();
+    return this._renderer.edgeAt(cx, cy, slack);
+  }
+
+
+  /**
+   * Returns every edge within reach of a specific coordinate in canvas space,
+   * best match first, ranked like `edgeAt()`. Useful for letting the user
+   * cycle through edges that overlap under the pointer.
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @param {number} [slack] - reach beyond the edge of each stroke, in canvas
+   *    pixels (defaults to the renderer's default)
+   * @returns {GraphEdge[]} the edges, in a new array; empty if none are found
+   * @throws {Error} throws if no canvas is attached
+   */
+  edgesAt(cx, cy, slack = undefined) {
+    this._requireCanvas();
+    return this._renderer.edgesAt(cx, cy, slack);
+  }
+
+
+
+  // PINNING
+
+  /**
+   * Fixes the node with the specified id to a point in canvas space. Delegates
+   * to `Simulation.pin()`.
+   * @param {NodeId} id - node id
+   * @param {number} cx - canvas space x coordinate
+   * @param {number} cy - canvas space y coordinate
+   * @returns {boolean} whether the node was pinned (`false` if node not found)
+   * @throws {Error} throws if no canvas is attached
+   */
+  pin(id, cx, cy) {
+    return this._simulation.pin(id, ...this.canvasToSim(cx, cy));
+  }
+
+
+  /**
+   * Unpins a node by reverting `fixed` to its default. Delegates to
+   * `Simulation.unpin()`.
+   * @param {NodeId} id - node id
+   * @returns {this} self reference
+   */
+  unpin(id) { this._simulation.unpin(id); return this; }
+
+
+
+  // EXPORT
+
+  /**
+   * Draws the graph onto a new canvas, for saving as an image: the current
+   * view by default, or the whole graph with `fit`. The canvas on screen is
+   * left alone. Delegates to `Renderer.toCanvas()`.
+   * @param {ExportOpts} [opts] - export options
+   * @returns {Canvas} the canvas drawn on
+   * @throws {TypeError | RangeError | Error} throws as `Renderer.toCanvas()`
+   *    does
+   */
+  toCanvas(opts = undefined) {
+    return this._renderer.toCanvas(opts);
+  }
+
+
+  /**
+   * Draws the graph as `toCanvas()` does and encodes it as an image file,
+   * PNG by default. Delegates to `Renderer.toBlob()`.
+   * @param {ExportBlobOpts} [opts] - export options, plus the image `type`
+   *    and `quality`
+   * @returns {Promise<Blob>} the image
+   * @throws {TypeError | RangeError | Error} rejects as `Renderer.toBlob()`
+   *    does
+   */
+  toBlob(opts = undefined) {
+    return this._renderer.toBlob(opts);
   }
 }
