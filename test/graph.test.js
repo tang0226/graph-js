@@ -62,10 +62,20 @@ describe("Graph: edges", () => {
     assert.throws(() => g.addEdge("a", "zz"), { name: "ReferenceError", message: /^Graph: no destination node with id "zz"$/ });
   });
 
+  test("addEdge returns the stored edge", () => {
+    const g = pair();
+    const edge = g.addEdge("a", "b", { w: 2 });
+    assert.equal(edge, g.getEdge("a", "b"));
+    assert.ok(g.edges.has(edge));
+    assert.equal(edge.src, g.getNode("a"));
+    assert.equal(edge.dest, g.getNode("b"));
+    assert.deepEqual(edge.data, { w: 2 });
+  });
+
   test("duplicate addEdge is rejected and leaves one edge", () => {
     const g = pair();
-    assert.equal(g.addEdge("a", "b"), true);
-    assert.equal(g.addEdge("a", "b"), false);
+    assert.ok(g.addEdge("a", "b"));
+    assert.equal(g.addEdge("a", "b"), null);
     assert.equal(g.edges.size, 1, "a second edge object would be unreachable and leak");
   });
 
@@ -193,7 +203,7 @@ describe("Graph: misc", () => {
   test("self-loops add and remove cleanly", () => {
     const g = new Graph();
     g.addNode({ id: "a" });
-    assert.equal(g.addEdge("a", "a"), true);
+    assert.equal(g.addEdge("a", "a"), g.getEdge("a", "a"));
     assert.equal(g.edges.size, 1);
     assert.equal(g.removeEdge("a", "a"), true);
     assert.equal(g.edges.size, 0);
@@ -239,8 +249,8 @@ describe("Graph: events", () => {
     g.addEdge("a", "b");
     log.length = 0;
     g.addNode({}, "a");                        // id in use
-    assert.equal(g.addEdge("a", "b"), false);  // duplicate
-    assert.equal(g.addEdge("b", "a"), false);  // the same undirected edge
+    assert.equal(g.addEdge("a", "b"), null);   // duplicate
+    assert.equal(g.addEdge("b", "a"), null);   // the same undirected edge
     assert.equal(g.removeEdge("a", "zzz"), false);
     assert.equal(g.removeNode("zzz"), false);
     assert.deepEqual(log, []);
@@ -648,7 +658,7 @@ describe("Graph: clear", () => {
 
       g.addNode({}, "a");
       g.addNode({}, "b");
-      assert.equal(g.addEdge("a", "b"), true, "the graph is usable afterwards");
+      assert.ok(g.addEdge("a", "b"), "the graph is usable afterwards");
       assert.equal(g.inDegree("b"), 1);
     });
   }

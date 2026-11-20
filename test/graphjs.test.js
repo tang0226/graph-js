@@ -52,8 +52,8 @@ describe("GraphJS: composition", () => {
     try {
       assert.equal(gjs.addNode({ id: "c" }), "c");
       assert.equal(typeof gjs.addNode({}), "string", "a generated id must reach the caller");
-      assert.equal(gjs.addEdge("a", "c"), true);
-      assert.equal(gjs.addEdge("a", "c"), false);
+      assert.equal(gjs.addEdge("a", "c"), gjs.graph.getEdge("a", "c"));
+      assert.equal(gjs.addEdge("a", "c"), null);
       assert.equal(gjs.removeEdge("a", "c"), true);
       assert.equal(gjs.removeNode("c"), true);
       assert.equal(gjs.removeNode("c"), false);

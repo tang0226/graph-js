@@ -238,7 +238,7 @@ export class Graph extends Emitter {
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @param {any} [data={}] - custom data to associate with the edge
-   * @returns {boolean} whether the edge was successfully added
+   * @returns {GraphEdge | null} the new edge, or null if the edge already exists
    * @throws {ReferenceError} thrown if either id matches no existing node
    */
   addEdge(srcId, destId, data = {}) {
@@ -246,7 +246,7 @@ export class Graph extends Emitter {
     const dest = this._nodes.get(destId);
     if (!src) throw new ReferenceError(`Graph: no source node with id "${srcId}"`);
     if (!dest) throw new ReferenceError(`Graph: no destination node with id "${destId}"`);
-    if (this._adjacency.get(srcId)?.get(destId)) return false;
+    if (this._adjacency.get(srcId)?.get(destId)) return null;
     const edge = { src, dest, data };
     this._edges.add(edge);
     this._adjacency.get(srcId)?.set(destId, edge);
@@ -254,7 +254,7 @@ export class Graph extends Emitter {
     else this._adjacency.get(destId)?.set(srcId, edge);
     this._version++;
     if (this._hasListeners("edgeadd")) this._emit("edgeadd", { srcId, destId, edge });
-    return true;
+    return edge;
   }
 
 

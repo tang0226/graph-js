@@ -238,8 +238,8 @@ gjs.addNode({ name: "Bob" }, "bob");
 // With neither, an id is generated and returned.
 const carol = gjs.addNode({ name: "Carol" });
 
-gjs.addEdge("alice", "bob");       // true
-gjs.addEdge("alice", "bob");       // false: that edge already exists
+gjs.addEdge("alice", "bob");       // the new edge: { src, dest, data }
+gjs.addEdge("alice", "bob");       // null: that edge already exists
 gjs.addEdge("bob", carol);
 
 gjs.removeEdge("bob", carol);
@@ -1372,6 +1372,7 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 
 - **Invalid config values throw.** Values set directly in node and edge configs, with the config methods or the `nodeConfig` and `edgeConfig` options, used to be clamped or replaced with a default; now an invalid one throws, as invalid options do. So do unknown field names, which used to be ignored, and a `nodeConfig` or `edgeConfig` option that isn't an object, which used to be ignored if falsy. Values returned by config functions are still clamped or replaced, but a function's invalid value now falls back to the field's default: a non-boolean `renderLabel` shows the label instead of hiding it when falsy, and a non-boolean `arrow` follows the graph instead of hiding the arrowhead. See [Invalid config values](#invalid-config-values) for the valid values.
 - **Edges 0 wide aren't drawn** with `scaleStrokes: false`. They were drawn at the width of the stroke before them.
+- **`addEdge()` returns the new edge,** or `null` if the edge already exists. It returned `true` and `false`. Code that checks the result for truthiness, as in `if (gjs.addEdge(a, b))`, keeps working; code that compares it with `true` or `false` needs updating, and TypeScript code that types it as `boolean` no longer compiles.
 - **`viewFitted()` takes an options object.** Pass the padding as `viewFitted({ padding: 24 })` instead of `viewFitted(24)`, on both `gjs` and `gjs.renderer`. A number now throws a `TypeError` that names the new form. `viewFitted()` with no argument is unchanged. The object also takes the new `nodes`, `centerNodes`, `minZoom` and `maxZoom` options (see [Fitting and focusing the view](#fitting-and-focusing-the-view)).
 
 ### From 0.7

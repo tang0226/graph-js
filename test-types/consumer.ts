@@ -52,7 +52,7 @@ gjs.simulation.setOpts({ collision: "quadtree" });
 // Graph mutators forward their results; an id can be passed through the facade
 const a: any = gjs.addNode({ label: "a" });
 gjs.addNode({ id: "b", group: 1 }, "b");
-const added: boolean = gjs.addEdge(a, "b");
+const added: GraphEdge | null = gjs.addEdge(a, "b");
 const removed: boolean = gjs.removeEdge(a, "b");
 const directed: boolean = gjs.graph.directed;
 const dir: EdgeDirection = "both";

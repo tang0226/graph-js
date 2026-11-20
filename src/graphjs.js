@@ -349,7 +349,8 @@ export class GraphJS extends Emitter {
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @param {any} data - data for the edge
-   * @returns {boolean} - whether the edge was successfully added
+   * @returns {GraphEdge | null} - the new edge, or null if the edge already exists
+   * @throws {ReferenceError} thrown if either id matches no existing node
    */
   addEdge(srcId, destId, data = {}) { return this.graph.addEdge(srcId, destId, data); }
 
