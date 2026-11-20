@@ -82,6 +82,7 @@ export const NODE_STYLE_DEFAULTS = Object.freeze({
   color: "#ffffff",
   outlineColor: "#000000",
   outlineWidth: 1,
+  opacity: 1,
   image: null,
   label: null,
   renderLabel: true,
@@ -101,6 +102,7 @@ export const EDGE_STYLE_DEFAULTS = Object.freeze({
   arrow: null,
   arrowSize: 10,
   bow: 14,
+  opacity: 1,
 });
 
 

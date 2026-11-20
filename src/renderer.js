@@ -24,7 +24,11 @@ import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
-import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString } from "./validate.js";
+import {
+  BOOLEAN_FIELD, STRING_FIELD, checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString,
+  numberField, typeField,
+} from "./validate.js";
+/** @import { FieldRule } from './validate.js' */
 import { HookRegistry } from "./hook-registry.js";
 import { Emitter } from "./emitter.js";
 
@@ -177,6 +181,41 @@ const MIN_OUTLINE_WIDTH = 0.05;
     circle in the image's average colour. */
 const IMAGE_DOT_THRESHOLD = 6;
 
+/**
+ * A rule per node style field. Colors are only checked to be strings: a
+ * canvas ignores a color it can't parse, keeping the last one set.
+ * @type {{ [F in keyof NodeStyle]: FieldRule<NodeStyle[F]> }}
+ */
+const NODE_STYLE_RULES = {
+  color:            STRING_FIELD,
+  outlineColor:     STRING_FIELD,
+  outlineWidth:     numberField({ min: 0 }),
+  opacity:          numberField({ min: 0, max: 1 }),
+  image:            typeField("a string or null",
+                      /** @returns {v is string | null} */ v => v === null || typeof v === "string"),
+  label:            typeField("a string, a finite number or null",
+                      /** @returns {v is string | number | null} */
+                      v => v === null || typeof v === "string" || (typeof v === "number" && Number.isFinite(v))),
+  renderLabel:      BOOLEAN_FIELD,
+  labelScale:       numberField({ min: 0 }),
+  labelTextColor:   STRING_FIELD,
+  labelStrokeColor: STRING_FIELD,
+  labelStrokeWidth: numberField({ min: 0 }),
+};
+
+/**
+ * A rule per edge style field. A negative `bow` curves the other way.
+ * @type {{ [F in keyof EdgeStyle]: FieldRule<EdgeStyle[F]> }}
+ */
+const EDGE_STYLE_RULES = {
+  color:     STRING_FIELD,
+  width:     numberField({ min: 0 }),
+  arrow:     typeField("a boolean or null", /** @returns {v is boolean | null} */ v => v === null || typeof v === "boolean"),
+  arrowSize: numberField({ min: 0 }),
+  bow:       numberField(),
+  opacity:   numberField({ min: 0, max: 1 }),
+};
+
 
 /**
  * Renders a graph simulation to a canvas. Caches node styles, edge styles, and node images.
@@ -277,7 +316,7 @@ export class Renderer extends Emitter {
    * @type {ConfigCascade<ResolvedNodeStyleConfig, ResolvedNodeStyleAccessors, NodeId>}
    * @private
    */
-  _nodeConfig = new ConfigCascade(NODE_STYLE_DEFAULTS);
+  _nodeConfig = new ConfigCascade(NODE_STYLE_DEFAULTS, NODE_STYLE_RULES, "Renderer", "node");
   /**
    * [read-only, set with `setDefaultNodeConfig()`]
    * Current default node style config. During style resolution, it takes
@@ -295,7 +334,7 @@ export class Renderer extends Emitter {
    * @type {ConfigCascade<ResolvedEdgeStyleConfig, ResolvedEdgeStyleAccessors, GraphEdge>}
    * @private
    */
-  _edgeConfig = new ConfigCascade(EDGE_STYLE_DEFAULTS);
+  _edgeConfig = new ConfigCascade(EDGE_STYLE_DEFAULTS, EDGE_STYLE_RULES, "Renderer", "edge");
   /**
    * [read-only, set with `setDefaultEdgeConfig()`]
    * Current default edge style config. During style resolution, it takes
@@ -413,6 +452,16 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Whether any node or edge has an `opacity` below 1. While none does and
+   * nothing is highlighted, frames are drawn without touching `globalAlpha`.
+   * Set by `sync()` when it resolves styles.
+   * @type {boolean}
+   * @private
+   */
+  _translucent = false;
+
+
+  /**
    * Node images and their cached sprites. Settled requests are emitted as
    * `imageload` and `imageerror` events.
    * @type {ImageCache}
@@ -510,12 +559,15 @@ export class Renderer extends Emitter {
    * changes if any option is invalid.
    * @param {RendererOptsInput} optsInput - options to set
    * @returns {this} self reference
-   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
+   * @throws {TypeError | RangeError} throws if an option is invalid or
+   *    unknown, including a node or edge config field
    */
   setOpts(optsInput = {}) {
     checkKnownKeys("Renderer", optsInput, OPTION_NAMES);
     const { canvas, nodeConfig, edgeConfig, ...opts } = optsInput;
     checkEach(opts, OPTION_RULES);
+    if (nodeConfig !== undefined) this._nodeConfig.check(nodeConfig, "`nodeConfig`");
+    if (edgeConfig !== undefined) this._edgeConfig.check(edgeConfig, "`edgeConfig`");
 
     for (const key of /** @type {(keyof RendererOpts)[]} */ (Object.keys(opts))) {
       if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
@@ -530,8 +582,8 @@ export class Renderer extends Emitter {
     // Mode and alpha set the dimmed target, so ease toward the new value
     if (opts.highlightAlpha !== undefined || opts.highlightMode !== undefined) this._highlighter.startFade();
     if (canvas) this.attach(canvas);
-    if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
-    if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
+    if (nodeConfig !== undefined) this.setDefaultNodeConfig(nodeConfig);
+    if (edgeConfig !== undefined) this.setDefaultEdgeConfig(edgeConfig);
     return this;
   }
 
@@ -602,9 +654,12 @@ export class Renderer extends Emitter {
   // STYLES
 
   /**
-   * Modifies fields of the `Renderer`'s default node style config
+   * Modifies fields of the `Renderer`'s default node style config. Nothing
+   * changes if a value is invalid.
    * @param {NodeStyleConfig} [config={}] - object of config parameters that will modify the default node config
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setDefaultNodeConfig(config = {}) {
     this._nodeConfig.setDefaults(config);
@@ -613,10 +668,13 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Merges new config data into a node's current style overrides.
+   * Merges new config data into a node's current style overrides. Nothing
+   * changes if a value is invalid.
    * @param {NodeId} id - node id
    * @param {NodeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setNodeConfig(id, config = {}) {
     this._nodeConfig.set(id, config);
@@ -636,9 +694,12 @@ export class Renderer extends Emitter {
 
 
   /**
-   * Modifies fields of the `Renderer`'s default edge style config
+   * Modifies fields of the `Renderer`'s default edge style config. Nothing
+   * changes if a value is invalid.
    * @param {EdgeStyleConfig} [config={}] - config parameters that will modify the default edge config
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setDefaultEdgeConfig(config = {}) {
     this._edgeConfig.setDefaults(config);
@@ -652,6 +713,8 @@ export class Renderer extends Emitter {
    * @param {NodeId} destId - destination node id
    * @param {EdgeStyleConfig} [config={}] - config fields to set
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    * @throws {ReferenceError} throws if the edge doesn't exist
    */
   setEdgeConfig(srcId, destId, config = {}) {
@@ -725,7 +788,9 @@ export class Renderer extends Emitter {
     this._edgeConfig.markClean();
     this._labelsDirty = true;
 
+    // Same slots: the style objects were updated in place
     if (this._syncedSimulation === this._simulation.version) {
+      this._checkTranslucent();
       this._garbageCollectImages();
       return true;
     }
@@ -792,10 +857,21 @@ export class Renderer extends Emitter {
     // Highlight flags and alphas: survivors keep theirs, new elements start at target
     hl.reslot(snap, sim.nodeList, sim.edgeList, this._nodeStyles, this._edgeStyles,
       this._opts.highlightMode, this._opts.highlightAlpha);
+    this._checkTranslucent();
 
     this._syncedSimulation = this._simulation.version;
     this._version++;
     return true;
+  }
+
+
+  /**
+   * Sets `_translucent` from the cached styles.
+   * @returns {void}
+   * @private
+   */
+  _checkTranslucent() {
+    this._translucent = this._nodeStyles.some(s => s.opacity < 1) || this._edgeStyles.some(s => s.opacity < 1);
   }
 
 
@@ -822,17 +898,18 @@ export class Renderer extends Emitter {
    * @private
    */
   _resolveNode(gNode, rNode) {
-    const acc = this._nodeConfig.accessors, g = this._graph, o = this._nodeConfig.overrides.get(gNode.id);
-    rNode.color = o?.color?.(gNode, g) ?? acc.color(gNode, g);
-    rNode.outlineColor = o?.outlineColor?.(gNode, g) ?? acc.outlineColor(gNode, g);
-    rNode.outlineWidth = o?.outlineWidth?.(gNode, g) ?? acc.outlineWidth(gNode, g);
-    rNode.image = o?.image?.(gNode, g) ?? acc.image(gNode, g);
-    rNode.label = o?.label?.(gNode, g) ?? acc.label(gNode, g);
-    rNode.renderLabel = o?.renderLabel?.(gNode, g) ?? acc.renderLabel(gNode, g);
-    rNode.labelScale = o?.labelScale?.(gNode, g) ?? acc.labelScale(gNode, g);
-    rNode.labelTextColor = o?.labelTextColor?.(gNode, g) ?? acc.labelTextColor(gNode, g);
-    rNode.labelStrokeColor = o?.labelStrokeColor?.(gNode, g) ?? acc.labelStrokeColor(gNode, g);
-    rNode.labelStrokeWidth = o?.labelStrokeWidth?.(gNode, g) ?? acc.labelStrokeWidth(gNode, g);
+    const c = this._nodeConfig, g = this._graph, id = gNode.id;
+    rNode.color = c.resolve("color", id, gNode, g);
+    rNode.outlineColor = c.resolve("outlineColor", id, gNode, g);
+    rNode.outlineWidth = c.resolve("outlineWidth", id, gNode, g);
+    rNode.opacity = c.resolve("opacity", id, gNode, g);
+    rNode.image = c.resolve("image", id, gNode, g);
+    rNode.label = c.resolve("label", id, gNode, g);
+    rNode.renderLabel = c.resolve("renderLabel", id, gNode, g);
+    rNode.labelScale = c.resolve("labelScale", id, gNode, g);
+    rNode.labelTextColor = c.resolve("labelTextColor", id, gNode, g);
+    rNode.labelStrokeColor = c.resolve("labelStrokeColor", id, gNode, g);
+    rNode.labelStrokeWidth = c.resolve("labelStrokeWidth", id, gNode, g);
   }
 
 
@@ -856,15 +933,14 @@ export class Renderer extends Emitter {
    * @private
    */
   _resolveEdge(gEdge, rEdge) {
-    const acc = this._edgeConfig.accessors, g = this._graph, o = this._edgeConfig.overrides.get(gEdge);
-    rEdge.color = o?.color?.(gEdge, g) ?? acc.color(gEdge, g);
-    rEdge.width = o?.width?.(gEdge, g) ?? acc.width(gEdge, g);
-    rEdge.arrowSize = o?.arrowSize?.(gEdge, g) ?? acc.arrowSize(gEdge, g);
-    rEdge.bow = o?.bow?.(gEdge, g) ?? acc.bow(gEdge, g);
-
-    // unset (null/undefined) means "whatever the graph is"
-    const arrow = o?.arrow?.(gEdge, g) ?? acc.arrow(gEdge, g);
-    rEdge.arrow = arrow === null || arrow === undefined ? g.directed : arrow === true;
+    const c = this._edgeConfig, g = this._graph;
+    rEdge.color = c.resolve("color", gEdge, gEdge, g);
+    rEdge.width = c.resolve("width", gEdge, gEdge, g);
+    rEdge.arrowSize = c.resolve("arrowSize", gEdge, gEdge, g);
+    rEdge.bow = c.resolve("bow", gEdge, gEdge, g);
+    rEdge.opacity = c.resolve("opacity", gEdge, gEdge, g);
+    // null means "whatever the graph is"
+    rEdge.arrow = c.resolve("arrow", gEdge, gEdge, g) ?? g.directed;
   }
 
 
@@ -1129,11 +1205,11 @@ export class Renderer extends Emitter {
    * @param {string | null} background - background color, or `null` for none
    * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
    * @param {Float64Array} edgeAlpha - highlight alpha of each edge slot
-   * @param {boolean} hooks - whether to run the drawing hooks
+   * @param {boolean} runHooks - whether to run the drawing hooks
    * @returns {void}
    * @private
    */
-  _drawFrame(time, background, nodeAlpha, edgeAlpha, hooks) {
+  _drawFrame(time, background, nodeAlpha, edgeAlpha, runHooks) {
     if (!this._ctx || !this._size) return;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
@@ -1147,7 +1223,7 @@ export class Renderer extends Emitter {
       this._ctx.fillRect(0, 0, this._size.w, this._size.h);
     }
 
-    if (hooks) this._runHooks("background", time);
+    if (runHooks) this._runHooks("background", time);
 
     // Text state shared by every label this frame; each label scales the font
     // to its own size by transform
@@ -1179,21 +1255,28 @@ export class Renderer extends Emitter {
     const dpr = this._dpr;
 
     const hl = this._highlighter;
-    if (hl.has() || hl.isFading()) {
+    const layered = hl.has() || hl.isFading();
+    if (layered || this._translucent) {
+      /* Each element is drawn at its highlight alpha times its opacity, which
+         `_useAlpha()` only writes to the context when it changes. While
+         highlighting, highlighted elements are drawn in a second pass, on
+         top; otherwise one pass draws everything at its opacity. */
       const { nodeState, edgeState } = hl;
+      const nodeStyles = this._nodeStyles, edgeStyles = this._edgeStyles;
       this._frameAlpha = 1;
-      for (const flag of [0, 1]) {
+      for (let flag = 0; flag < (layered ? 2 : 1); flag++) {
         for (const i of inFrame.edgesI) {
-          if (edgeState[i] === flag && this._useAlpha(edgeAlpha[i]))
-            this._renderEdgeByIndex(i, edgeAlpha[i]);
+          if (layered && edgeState[i] !== flag) continue;
+          const alpha = (layered ? edgeAlpha[i] : 1) * edgeStyles[i].opacity;
+          if (this._useAlpha(alpha)) this._renderEdgeByIndex(i, alpha);
         }
         for (const i of inFrame.nodesI) {
-          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
-            this._renderNodeByIndex(i);
+          if (layered && nodeState[i] !== flag) continue;
+          if (this._useAlpha((layered ? nodeAlpha[i] : 1) * nodeStyles[i].opacity)) this._renderNodeByIndex(i);
         }
         for (const i of inFrame.labelsI) {
-          if (nodeState[i] === flag && this._useAlpha(nodeAlpha[i]))
-            this._renderNodeLabelByIndex(i);
+          if (layered && nodeState[i] !== flag) continue;
+          if (this._useAlpha((layered ? nodeAlpha[i] : 1) * nodeStyles[i].opacity)) this._renderNodeLabelByIndex(i);
         }
         // Highlighted nodes are drawn next, in canvas space
         if (hasLabels) this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1208,15 +1291,15 @@ export class Renderer extends Emitter {
     // Back to the canvas default, for hooks
     if (hasLabels) this._ctx.lineJoin = "miter";
 
-    if (hooks) this._runHooks("overlay", time);
+    if (runHooks) this._runHooks("overlay", time);
   }
 
 
   /**
-   * Culls all nodes, edges, and labels fully outside the current view.
-   * Edges are tested as `_layoutEdge()` lays them out, so one crossing the
-   * view between two off-screen nodes is kept, and one that isn't drawn at
-   * all is dropped.
+   * Culls all nodes, edges, and labels fully outside the current view, or
+   * with an `opacity` of 0. Edges are tested as `_layoutEdge()` lays them
+   * out, so one crossing the view between two off-screen nodes is kept, and
+   * one that isn't drawn at all is dropped.
    * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
    * @private
    */
@@ -1228,8 +1311,9 @@ export class Renderer extends Emitter {
 
     const nodesI = [];
     const sim = this._simulation, n = sim.nodeList.length;
-    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius;
+    const xs = sim.nodeX, ys = sim.nodeY, rs = sim.nodeRadius, nodeStyles = this._nodeStyles;
     for (let i = 0; i < n; i++) {
+      if (nodeStyles[i].opacity === 0) continue;
       if (circleRectCollision(xs[i], ys[i], rs[i], xMin, xMax, yMin, yMax)) nodesI.push(i);
     }
 
@@ -1237,6 +1321,7 @@ export class Renderer extends Emitter {
     if (this._opts.renderEdges) {
       const ep = sim.edgePairs, styles = this._edgeStyles, bows = this._edgeBow;
       for (let i = 0, j = 0; i < ep.length / 2; i++, j += 2) {
+        if (styles[i].opacity === 0) continue;
         const p = this._layoutEdge(ep[j], ep[j + 1], styles[i], bows[i]);
         if (p && edgeInView(p, cw, ch)) edgesI.push(i);
       }
@@ -1247,8 +1332,8 @@ export class Renderer extends Emitter {
       const { minLabelSize, maxLabelSize } = this._opts;
       const zoom = this._view.zoom, ratios = this._labelWidthRatio;
       for (let i = 0; i < sim.nodeList.length; i++) {
-        const style = this._nodeStyles[i];
-        if (!ratios[i] || !style.renderLabel) continue;     // no label, or disabled
+        const style = nodeStyles[i];
+        if (!ratios[i] || !style.renderLabel || style.opacity === 0) continue;  // no label, disabled, or invisible
         const px = style.labelScale * zoom;
         if (px < minLabelSize) continue;                     // too small to read
         // Label bounds in world units
@@ -1341,8 +1426,8 @@ export class Renderer extends Emitter {
   /**
    * Draws an edge identified by cache index.
    * @param {number} i - cache index of edge
-   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
-   *    has already set on the context
+   * @param {number} [alpha=1] - the edge's alpha (highlight alpha times
+   *    opacity), which the caller has already set on the context
    * @private
    */
   _renderEdgeByIndex(i, alpha = 1) {
@@ -1364,10 +1449,10 @@ export class Renderer extends Emitter {
    * @param {number} dest - destination node's slot
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
-   * @param {number} [alpha=1] - the edge's highlight alpha, which the caller
-   *    has already set on the context. A faded edge (scaled below
-   *    `minEdgeWidth`) is drawn fainter than this, then the context is reset
-   *    to it.
+   * @param {number} [alpha=1] - the edge's alpha (highlight alpha times
+   *    opacity), which the caller has already set on the context. A faded
+   *    edge (scaled below `minEdgeWidth`) is drawn fainter than this, then
+   *    the context is reset to it.
    * @returns {void}
    * @private
    */
@@ -1407,7 +1492,7 @@ export class Renderer extends Emitter {
    * @param {EdgeStyle} style - resolved edge style
    * @param {number} bowDir - 1 to bow the edge (half of a reciprocal pair), 0 to draw it straight
    * @returns {EdgeLayout | null} the layout, or `null` when the edge isn't
-   *    drawn: too thin and faint to see, or its nodes overlap
+   *    drawn: 0 wide, too thin and faint to see, or its nodes overlap
    * @private
    */
   _layoutEdge(src, dest, style, bowDir) {
@@ -1430,8 +1515,11 @@ export class Renderer extends Emitter {
         fade = width / minEdgeWidth;
         width = minEdgeWidth;
       }
-      if (fade < MIN_EDGE_FADE || !(width > 0)) return null;    // too faint to see
+      if (fade < MIN_EDGE_FADE) return null;    // too faint to see
     }
+    // Nothing to draw, and a canvas ignores a line width of 0, keeping the
+    // last one set
+    if (!(width > 0)) return null;
     p.width = width;
     p.fade = fade;
 
@@ -2173,12 +2261,12 @@ export class Renderer extends Emitter {
     const edges = sim.edgeList, styles = this._edgeStyles, n = edges.length;
     const s = Math.max(slack, 0);
     // While highlighting, highlighted edges are drawn after the rest, and
-    // fully faded ones not at all
+    // fully faded ones not at all. Nor are fully transparent ones.
     const hl = this._highlighter, layered = hl.has() || hl.isFading();
     const { edgeState, edgeAlpha } = hl;
 
     for (let i = 0; i < n; i++) {
-      if (layered && edgeAlpha[i] === 0) continue;
+      if ((layered && edgeAlpha[i] === 0) || styles[i].opacity === 0) continue;
       const p = this._layoutEdge(ep[2 * i], ep[2 * i + 1], styles[i], this._edgeBow[i]);
       if (!p) continue;
       const gap = edgeDistance(p, cx, cy, p.width / 2 + s) - p.width / 2;

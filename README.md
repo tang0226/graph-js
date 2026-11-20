@@ -19,10 +19,12 @@ npm install @tang0226/graph-js
   - [Reading graph and simulation state](#reading-graph-and-simulation-state)
 - [Configuring nodes and edges](#configuring-nodes-and-edges)
   - [Individual node and edge settings](#individual-node-and-edge-settings)
+  - [Invalid config values](#invalid-config-values)
   - [Node charge](#node-charge)
   - [Node images](#node-images)
   - [Node labels](#node-labels)
   - [Edge and outline widths](#edge-and-outline-widths)
+  - [Opacity](#opacity)
 - [Running the animation](#running-the-animation)
   - [Starting and stopping](#starting-and-stopping)
   - [Loop hooks](#loop-hooks)
@@ -158,6 +160,7 @@ const gjs = new GraphJS({
       color: "#ffffff",             // fill color
       outlineColor: "#000000",
       outlineWidth: 1,              // in simulation units; 0 for no outline
+      opacity: 1,                   // from 0 to 1, for the node and its label (see "Opacity")
       image: null,                  // image URL drawn inside the node (see "Node images")
       label: null,                  // text drawn beside the node (see "Node labels")
       renderLabel: true,            // false hides this node's label
@@ -172,6 +175,7 @@ const gjs = new GraphJS({
       arrow: null,                  // null follows the graph: arrows only when it's directed
       arrowSize: 10,                // arrowhead length, in simulation units
       bow: 14,                      // how far a pair of opposite directed edges curve apart
+      opacity: 1,                   // from 0 to 1, for the edge and its arrowhead (see "Opacity")
     },
   },
 });
@@ -347,6 +351,7 @@ All the available settings:
 | Renderer (nodes) | `color` | `"#ffffff"` | fill color |
 | | `outlineColor` | `"#000000"` | |
 | | `outlineWidth` | `1` | in simulation units; `0` for no outline |
+| | `opacity` | `1` | from `0` to `1`, for the node and its label (see [Opacity](#opacity)) |
 | | `image` | `null` | image URL drawn inside the node (see [Node images](#node-images)) |
 | | `label` | `null` | text drawn beside the node; a string or number (see [Node labels](#node-labels)) |
 | | `renderLabel` | `true` | `false` hides this node's label |
@@ -359,6 +364,7 @@ All the available settings:
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
 | | `arrowSize` | `10` | arrowhead length, in simulation units |
 | | `bow` | `14` | how far a pair of opposite directed edges curve apart |
+| | `opacity` | `1` | from `0` to `1`, for the edge and its arrowhead (see [Opacity](#opacity)) |
 
 A function receives the node or edge object with custom data stored in `.data`. Whenever the graph changes, the function is re-run and the results are cached. That keeps the `radius` above in step as connections are added.
 
@@ -390,6 +396,34 @@ Setting config properties merges them with previously set config. `setEdgeConfig
 In a directed graph, a pair of opposite edges (`"a"` to `"b"` and `"b"` to `"a"`) pulls on its nodes through a single spring. Its stiffness is the average of the two edges' stiffnesses, and its length is the average of their lengths, weighted by stiffness.
 
 To read the spring settings an edge ends up with, use `gjs.simulation.getEdgeSpring(srcId, destId)`. It returns `{ length, stiffness }` (the combined settings for a pair of opposite directed edges), or `null` if the edge doesn't exist or connects a node to itself.
+
+### Invalid config values
+
+A value set directly is checked when it's set, by every config method and by the `nodeConfig` and `edgeConfig` options. An invalid one throws, and nothing changes:
+
+- **`TypeError`:** a value of the wrong type, a config that isn't an object, or a field name that doesn't exist, such as a misspelling or a simulation field given to the renderer.
+- **`RangeError`:** a number outside its field's range, or one that isn't finite.
+
+```js
+gjs.renderer.setNodeConfig("alice", { outlinewidth: 2 });  // TypeError: unknown node config field `outlinewidth`
+gjs.simulation.setDefaultNodeConfig({ radius: -5 });        // RangeError
+```
+
+| Fields | Valid values |
+|---|---|
+| `mass` | above `0` |
+| `radius`, `charge`, `length`, `stiffness`, `outlineWidth`, `width`, `arrowSize`, `labelScale`, `labelStrokeWidth` | `0` or more |
+| `opacity` | `0` to `1` |
+| `bow` | any number; negative curves the other way |
+| `color`, `outlineColor`, `labelTextColor`, `labelStrokeColor` | a string |
+| `image` | a string, or `null` |
+| `label` | a string, a number, or `null` |
+| `fixed`, `renderLabel` | a boolean |
+| `arrow` | a boolean, or `null` |
+
+Numbers must be finite. Colors are only checked to be strings: a color the canvas can't parse is ignored by the canvas, which draws in the last color it was given.
+
+What a function returns can't be checked when it's set, so it's fixed up when it's used instead, and one bad data point doesn't stop the layout or drawing. A number outside the range is clamped into it (a `mass` of `0` or less becomes `0.000001`), and any other invalid value falls back to the field's default from the table in [Configuring nodes and edges](#configuring-nodes-and-edges). That's the library's default, not one you've set with `setDefaultNodeConfig()`. A function returning `null` or `undefined` uses the default config, as when the field isn't set.
 
 ### Node charge
 
@@ -489,6 +523,21 @@ Edge `width`, `arrowSize` and node `outlineWidth` are in simulation units, so th
 - `maxEdgeWidth`: edges stop getting thicker past this width on screen (px), and their arrowheads stop growing with them.
 
 To keep widths fixed on screen at every zoom instead, set `scaleStrokes: false`. `width`, `arrowSize` and `outlineWidth` are then in screen pixels, and `minEdgeWidth` and `maxEdgeWidth` don't apply.
+
+### Opacity
+
+`opacity` makes a node or edge see-through, from `0` (invisible) to `1` (opaque, the default). A node's opacity also applies to its label, and an edge's to its arrowhead. Like other settings, it can be a function of the node or edge:
+
+```js
+gjs.renderer.setDefaultEdgeConfig({ opacity: e => e.data.weight ?? 1 });  // weaker links are fainter
+gjs.renderer.setNodeConfig("alice", { opacity: 0.4 });
+```
+
+Setting an opacity outside `0` to `1` throws, and a function's results are clamped into that range (see [Invalid config values](#invalid-config-values)). Opacity combines with [highlighting](#highlighting): a dimmed node at `opacity: 0.5` is drawn at half of `highlightAlpha`. It also combines with the fading of edges thinner than `minEdgeWidth`.
+
+An element at `opacity: 0` isn't drawn at all, and an edge at `0` can't be hit by `edgeAt()`. A node at `0` can still be found by `nodeAt()`, and dragged, as nodes hidden by highlighting can.
+
+While every node and edge is fully opaque and nothing is highlighted, frames are drawn exactly as they would be without the setting, so it costs nothing until it's used.
 
 ## Running the animation
 
@@ -1321,6 +1370,8 @@ Members whose names start with `_` are internal and declared `private`, so TypeS
 
 ### From 0.8
 
+- **Invalid config values throw.** Values set directly in node and edge configs, with the config methods or the `nodeConfig` and `edgeConfig` options, used to be clamped or replaced with a default; now an invalid one throws, as invalid options do. So do unknown field names, which used to be ignored, and a `nodeConfig` or `edgeConfig` option that isn't an object, which used to be ignored if falsy. Values returned by config functions are still clamped or replaced, but a function's invalid value now falls back to the field's default: a non-boolean `renderLabel` shows the label instead of hiding it when falsy, and a non-boolean `arrow` follows the graph instead of hiding the arrowhead. See [Invalid config values](#invalid-config-values) for the valid values.
+- **Edges 0 wide aren't drawn** with `scaleStrokes: false`. They were drawn at the width of the stroke before them.
 - **`viewFitted()` takes an options object.** Pass the padding as `viewFitted({ padding: 24 })` instead of `viewFitted(24)`, on both `gjs` and `gjs.renderer`. A number now throws a `TypeError` that names the new form. `viewFitted()` with no argument is unchanged. The object also takes the new `nodes`, `centerNodes`, `minZoom` and `maxZoom` options (see [Fitting and focusing the view](#fitting-and-focusing-the-view)).
 
 ### From 0.7

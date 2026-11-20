@@ -265,32 +265,70 @@ describe("Simulation: validation", () => {
     return sim.nodes.get("a");
   }
 
-  test("mass is clamped away from zero", () => {
-    assert.ok(resolved({ mass: 0 }).mass > 0, "mass 0 makes fx/mass infinite");
+  test("invalid values set directly throw, and change nothing", () => {
+    const g = new Graph();
+    g.addNode({ id: "a" });
+    g.addNode({ id: "b" });
+    g.addEdge("a", "b");
+    const sim = new Simulation(g, {});
+    const bad = [
+      [{ mass: 0 }, RangeError], [{ mass: -1 }, RangeError], [{ radius: -5 }, RangeError],
+      [{ charge: NaN }, RangeError], [{ radius: Infinity }, RangeError], [{ radius: "big" }, TypeError],
+      [{ fixed: 1 }, TypeError], [{ fixed: null }, TypeError], [{ radus: 5 }, TypeError],
+    ];
+    for (const [cfg, E] of bad) {
+      assert.throws(() => sim.setDefaultNodeConfig(cfg), E, JSON.stringify(cfg));
+      assert.throws(() => sim.setNodeConfig("a", cfg), E);
+    }
+    assert.throws(() => sim.setNodeConfig("a", { mass: 0 }),
+      /^RangeError: Simulation: `mass` must be a finite number above 0, or a function of the node$/);
+    assert.throws(() => sim.setNodeConfig("a", { radus: 5 }), /^TypeError: Simulation: unknown node config field `radus`$/);
+    assert.throws(() => sim.setDefaultEdgeConfig({ length: -1 }), RangeError);
+    assert.throws(() => sim.setEdgeConfig("a", "b", { stiffness: "stiff" }), TypeError);
+    assert.throws(() => sim.setDefaultEdgeConfig({ lenght: 5 }), /unknown edge config field `lenght`/);
+    sim.sync();
+    assert.deepEqual(sim.defaultNodeConfig, SIM_NODE_DEFAULTS);
+    assert.deepEqual(sim.defaultEdgeConfig, SIM_EDGE_DEFAULTS);
+    assert.equal(sim.nodes.get("a").radius, SIM_NODE_DEFAULTS.radius);
   });
 
-  test("non-finite params fall back to defaults", () => {
-    assert.equal(resolved({ mass: NaN }).mass, SIM_NODE_DEFAULTS.mass);
+  test("bad configs in options throw before any option changes", () => {
+    const g = new Graph();
+    assert.throws(() => new Simulation(g, { nodeConfig: { radius: -1 } }), RangeError);
+    const sim = new Simulation(g, {});
+    assert.throws(() => sim.setOpts({ friction: 0.5, edgeConfig: { length: "x" } }), TypeError);
+    assert.throws(() => sim.setOpts({ friction: 0.5, nodeConfig: null }), /^TypeError: Simulation: `nodeConfig` must be an object$/);
+    assert.equal(sim.opts.friction, 0.9);
+  });
+
+  test("the edges of each range are accepted", () => {
+    assert.equal(resolved({ radius: 0 }).radius, 0);
+    assert.equal(resolved({ charge: 0 }).charge, 0);
+    assert.equal(resolved({ mass: 1e-9 }).mass, 1e-9);
+    assert.equal(resolved({ fixed: true }).fixed, true);
+  });
+
+  test("a function's mass is raised to just above zero", () => {
+    assert.ok(resolved({ mass: () => 0 }).mass > 0, "mass 0 makes fx/mass infinite");
+    assert.ok(resolved({ mass: () => -3 }).mass > 0);
+  });
+
+  test("a function's non-finite or non-number results fall back to the base defaults", () => {
+    assert.equal(resolved({ mass: () => NaN }).mass, SIM_NODE_DEFAULTS.mass);
     assert.equal(resolved({ radius: undefined }).radius, SIM_NODE_DEFAULTS.radius);
     assert.equal(resolved({ radius: () => "big" }).radius, SIM_NODE_DEFAULTS.radius);
+    assert.equal(resolved({ charge: () => Infinity }).charge, SIM_NODE_DEFAULTS.charge);
   });
 
-  test("radius cannot go negative", () => {
-    assert.equal(resolved({ radius: -5 }).radius, 0);
+  test("a function's negative radius or charge clamps to 0", () => {
+    assert.equal(resolved({ radius: () => -5 }).radius, 0);
+    assert.equal(resolved({ charge: () => -2 }).charge, 0);
   });
 
-  test("charge has a default, cannot go negative, and falls back when non-finite", () => {
-    assert.equal(resolved({}).charge, SIM_NODE_DEFAULTS.charge);
-    assert.equal(resolved({ charge: 0 }).charge, 0);
-    assert.equal(resolved({ charge: -2 }).charge, 0);
-    assert.equal(resolved({ charge: NaN }).charge, SIM_NODE_DEFAULTS.charge);
-    assert.equal(resolved({ charge: () => "lots" }).charge, SIM_NODE_DEFAULTS.charge);
-  });
-
-  test("fixed is coerced to a real boolean", () => {
-    assert.equal(resolved({ fixed: "yes" }).fixed, false);
-    assert.equal(resolved({ fixed: 1 }).fixed, false);
-    assert.equal(resolved({ fixed: true }).fixed, true);
+  test("a function's fixed that isn't a boolean falls back to false", () => {
+    assert.equal(resolved({ fixed: () => "yes" }).fixed, false);
+    assert.equal(resolved({ fixed: () => 1 }).fixed, false);
+    assert.equal(resolved({ fixed: () => true }).fixed, true);
   });
 });
 
@@ -1428,11 +1466,18 @@ describe("Simulation: edge config", () => {
     assert.equal(spring(sim, "a", "b")[0], 123);
   });
 
-  test("negative values clamp to 0 and non-finite values use the global default", () => {
+  test("a function's negative values clamp to 0, and non-finite ones use the base default", () => {
     const [, sim] = edgeSim();
     sim.setDefaultEdgeConfig({ length: 99, stiffness: 0.5 });
-    sim.setEdgeConfig("a", "b", { length: -5, stiffness: NaN });
+    sim.setEdgeConfig("a", "b", { length: () => -5, stiffness: () => NaN });
     assert.deepEqual(spring(sim, "a", "b"), [0, SIM_EDGE_DEFAULTS.stiffness]);
+  });
+
+  test("invalid values set directly throw", () => {
+    const [, sim] = edgeSim();
+    assert.throws(() => sim.setEdgeConfig("a", "b", { length: -5 }), RangeError);
+    assert.throws(() => sim.setEdgeConfig("a", "b", { stiffness: NaN }), RangeError);
+    assert.throws(() => sim.setEdgeConfig("a", "nope", { length: -5 }), ReferenceError, "the edge is looked up first");
   });
 
   test("changing a resolved value reheats; a no-op change does not", () => {

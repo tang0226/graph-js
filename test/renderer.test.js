@@ -1524,30 +1524,31 @@ describe("Renderer: labels", () => {
   });
 });
 
+/* The stub context doesn't record state, so log globalAlpha writes into the
+   op stream. `draws()` then pairs each node circle (by its x: a=300, b=500)
+   and edge line with the alpha it was drawn at, in draw order. */
+function trackAlpha(ctx) {
+  let alpha = 1;
+  Object.defineProperty(ctx, "globalAlpha", {
+    get: () => alpha,
+    set: v => { alpha = v; ctx.ops.push(["globalAlpha", v]); },
+    configurable: true,
+  });
+}
+
+function draws(ctx) {
+  const out = [];
+  let alpha = 1;
+  for (const [name, ...args] of ctx.ops) {
+    if (name === "globalAlpha") alpha = args[0];
+    else if (name === "arc") out.push([args[0] === 300 ? "a" : args[0] === 500 ? "b" : "?", alpha]);
+    else if (name === "lineTo") out.push(["edge", alpha]);
+    else if (name === "fillText") out.push(["label " + args[0], alpha]);
+  }
+  return out;
+}
+
 describe("Renderer: highlighting", () => {
-  /* The stub context doesn't record state, so log globalAlpha writes into the
-     op stream. `draws()` then pairs each node circle (by its x: a=300, b=500)
-     and edge line with the alpha it was drawn at, in draw order. */
-  function trackAlpha(ctx) {
-    let alpha = 1;
-    Object.defineProperty(ctx, "globalAlpha", {
-      get: () => alpha,
-      set: v => { alpha = v; ctx.ops.push(["globalAlpha", v]); },
-      configurable: true,
-    });
-  }
-
-  function draws(ctx) {
-    const out = [];
-    let alpha = 1;
-    for (const [name, ...args] of ctx.ops) {
-      if (name === "globalAlpha") alpha = args[0];
-      else if (name === "arc") out.push([args[0] === 300 ? "a" : args[0] === 500 ? "b" : "?", alpha]);
-      else if (name === "lineTo") out.push(["edge", alpha]);
-    }
-    return out;
-  }
-
   // Fading is off by default here so drawing tests see the settled result;
   // the "fading" suite turns it on.
   function hscene(opts) {
@@ -1876,6 +1877,247 @@ describe("Renderer: highlighting", () => {
       assert.equal(r.opts.highlightMode, "hide");
       assert.equal(r.opts.highlightAlpha, 0.3);
     });
+  });
+});
+
+describe("Renderer: style config checks", () => {
+  test("values of the wrong type or out of range throw, and change nothing", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    const nodeBad = [
+      [{ color: 3 }, TypeError], [{ outlineColor: null }, TypeError], [{ outlineWidth: -1 }, RangeError],
+      [{ image: 5 }, TypeError], [{ label: NaN }, TypeError], [{ label: {} }, TypeError],
+      [{ renderLabel: "no" }, TypeError], [{ labelScale: -1 }, RangeError], [{ labelScale: NaN }, RangeError],
+      [{ labelTextColor: 0 }, TypeError], [{ labelStrokeColor: false }, TypeError],
+      [{ labelStrokeWidth: -2 }, RangeError],
+    ];
+    for (const [cfg, E] of nodeBad) {
+      assert.throws(() => r.setDefaultNodeConfig(cfg), E, JSON.stringify(cfg));
+      assert.throws(() => r.setNodeConfig("a", cfg), E, JSON.stringify(cfg));
+    }
+    const edgeBad = [
+      [{ color: 1 }, TypeError], [{ width: -1 }, RangeError], [{ width: Infinity }, RangeError],
+      [{ arrow: "yes" }, TypeError], [{ arrowSize: -3 }, RangeError], [{ bow: NaN }, RangeError],
+    ];
+    for (const [cfg, E] of edgeBad) {
+      assert.throws(() => r.setDefaultEdgeConfig(cfg), E, JSON.stringify(cfg));
+      assert.throws(() => r.setEdgeConfig("a", "b", cfg), E, JSON.stringify(cfg));
+    }
+    assert.throws(() => r.setNodeConfig("a", { label: NaN }),
+      /^TypeError: Renderer: `label` must be a string, a finite number or null, or a function of the node$/);
+    r.sync();
+    assert.deepEqual({ ...r.nodes.get("a"), id: undefined }, { ...r.defaultNodeConfig, id: undefined });
+    assert.equal(r.edgeStyles[0].width, 1);
+  });
+
+  test("unknown fields throw, so a misspelling isn't silently ignored", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    assert.throws(() => r.setNodeConfig("a", { outlinewidth: 3 }), /^TypeError: Renderer: unknown node config field `outlinewidth`$/);
+    assert.throws(() => r.setDefaultEdgeConfig({ radius: 3 }), /^TypeError: Renderer: unknown edge config field `radius`$/,
+      "simulation fields belong to the simulation");
+    assert.throws(() => r.setDefaultNodeConfig("red"), /^TypeError: Renderer: node config must be an object$/);
+  });
+
+  test("valid values at the edges of each range are accepted", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    assert.doesNotThrow(() => r.setNodeConfig("a", {
+      outlineWidth: 0, image: null, label: 0, labelScale: 0, labelStrokeWidth: 0, renderLabel: false,
+    }));
+    assert.doesNotThrow(() => r.setEdgeConfig("a", "b", { width: 0, arrow: null, arrowSize: 0, bow: -14 }));
+    assert.doesNotThrow(() => r.setNodeConfig("a", { color: undefined }), "undefined isn't checked");
+  });
+
+  test("bad configs in options throw before any option changes", () => {
+    assert.throws(() => scene(false, [], { nodeCfg: { colr: "red" } }), TypeError);
+    const { r } = scene(false, []);
+    assert.throws(() => r.setOpts({ background: "#000", edgeConfig: { width: -1 } }), RangeError);
+    assert.throws(() => r.setOpts({ background: "#000", nodeConfig: null }), /^TypeError: Renderer: `nodeConfig` must be an object$/);
+    assert.equal(r.opts.background, "#ffffff");
+  });
+
+  test("a function's invalid results fall back to the base default, or clamp", () => {
+    const { r } = scene(true, [["a", "b"]]);
+    r.setDefaultNodeConfig({ color: "red", labelScale: 30 });
+    r.setNodeConfig("a", {
+      color: () => 5, outlineWidth: () => -3, image: () => 7, label: () => NaN,
+      renderLabel: () => 0, labelScale: () => NaN, labelStrokeWidth: () => -1,
+    });
+    r.setEdgeConfig("a", "b", { width: () => -2, arrow: () => 1, arrowSize: () => "big", bow: () => Infinity });
+    r.sync();
+    const a = r.nodes.get("a");
+    assert.equal(a.color, "#ffffff", "the base default, not the default config's red");
+    assert.equal(a.outlineWidth, 0);
+    assert.equal(a.image, null);
+    assert.equal(a.label, null);
+    assert.equal(a.renderLabel, true);
+    assert.equal(a.labelScale, 15);
+    assert.equal(a.labelStrokeWidth, 0);
+    const e = r.edgeStyles[0];
+    assert.deepEqual([e.width, e.arrow, e.arrowSize, e.bow], [0, true, 10, 14], "arrow falls back to following the graph");
+  });
+
+  test("an edge 0 wide isn't drawn, even with strokes unscaled", () => {
+    // A canvas ignores lineWidth = 0, so it would draw at the last width set
+    for (const scaleStrokes of [true, false]) {
+      const { g, r, ctx } = scene(false, [["a", "b"]], { edgeCfg: { width: 0 }, opts: { scaleStrokes } });
+      r.render();
+      assert.equal(opsNamed(ctx, "lineTo").length, 0, `scaleStrokes: ${scaleStrokes}`);
+      assert.equal(r.edgeAt(400, 300), null);
+      assert.ok(g.getEdge("a", "b"));
+    }
+  });
+});
+
+describe("Renderer: opacity", () => {
+  function oscene(cfg = {}) {
+    const s = scene(false, [["a", "b"]], { ...cfg, opts: { highlightFadeDuration: 0, ...cfg.opts } });
+    trackAlpha(s.ctx);
+    return s;
+  }
+  function render(r, ctx) { ctx.ops.length = 0; r.render(); return draws(ctx).map(([k, a]) => [k, r2(a)]); }
+
+  test("defaults to 1, and fully opaque frames don't touch alpha", () => {
+    const { r, ctx } = oscene();
+    assert.equal(r.nodeStyles[0].opacity, 1);
+    assert.equal(r.edgeStyles[0].opacity, 1);
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 1]]);
+    assert.equal(opsNamed(ctx, "globalAlpha").length, 0);
+  });
+
+  test("each node and edge is drawn at its own opacity, in the usual order", () => {
+    const { r, ctx } = oscene();
+    r.setNodeConfig("a", { opacity: 0.5 }).setEdgeConfig("a", "b", { opacity: 0.25 });
+    assert.deepEqual(render(r, ctx), [["edge", 0.25], ["a", 0.5], ["b", 1]]);
+    assert.equal(ctx.globalAlpha, 1, "alpha is restored for hooks and the next frame");
+  });
+
+  test("alpha is only written when it changes", () => {
+    const { r, ctx } = oscene({ nodeCfg: { opacity: 0.5 }, edgeCfg: { opacity: 0.5 } });
+    assert.deepEqual(render(r, ctx), [["edge", 0.5], ["a", 0.5], ["b", 0.5]]);
+    assert.deepEqual(opsNamed(ctx, "globalAlpha").map(o => o[1]), [0.5, 1]);
+  });
+
+  test("opacity can be a function of the node or edge", () => {
+    const { g, r, ctx } = oscene({ nodeCfg: { opacity: n => n.data.group ? 0.3 : 1 } });
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 0.3]]);
+    g.setNodeData("a", { group: 1 });
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 0.3], ["b", 0.3]]);
+  });
+
+  test("setting an opacity that isn't a number from 0 to 1 throws, and changes nothing", () => {
+    const { r } = oscene();
+    const bad = [[2, RangeError], [-0.1, RangeError], [NaN, RangeError], [Infinity, RangeError],
+      ["0.5", TypeError], [null, TypeError]];
+    for (const [v, E] of bad) {
+      assert.throws(() => r.setNodeConfig("a", { opacity: v }), E, `node ${v}`);
+      assert.throws(() => r.setDefaultNodeConfig({ opacity: v }), E);
+      assert.throws(() => r.setEdgeConfig("a", "b", { opacity: v }), E);
+      assert.throws(() => r.setDefaultEdgeConfig({ opacity: v }), E);
+    }
+    assert.throws(() => r.setNodeConfig("a", { opacity: 2 }), /`opacity` must be a finite number from 0 to 1, or a function of the node/);
+    assert.throws(() => r.setDefaultEdgeConfig({ opacity: "x" }), /or a function of the edge/);
+    r.sync();
+    assert.equal(r.nodes.get("a").opacity, 1);
+    assert.equal(r.edgeStyles[0].opacity, 1);
+    assert.equal(r.defaultNodeConfig.opacity, 1);
+    assert.equal(r.defaultEdgeConfig.opacity, 1);
+
+    // The edge is looked up first, as in the simulation
+    assert.throws(() => r.setEdgeConfig("a", "nope", { opacity: 2 }), ReferenceError);
+    // The ends of the range, and leaving it unset, are fine
+    assert.doesNotThrow(() => r.setNodeConfig("a", { opacity: 0 }).setNodeConfig("b", { opacity: 1 }));
+    assert.doesNotThrow(() => r.setNodeConfig("a", { opacity: undefined }));
+  });
+
+  test("bad style configs in options throw before any option changes", () => {
+    assert.throws(() => oscene({ nodeCfg: { opacity: 1.5 } }), RangeError);
+    const { r, canvas } = oscene();
+    const other = makeCanvas();
+    assert.throws(() => r.setOpts({ background: "#000", canvas: other, edgeConfig: { opacity: -1 } }), RangeError);
+    assert.throws(() => r.setOpts({ nodeConfig: { color: "red", opacity: "half" } }), TypeError);
+    assert.equal(r.opts.background, "#ffffff");
+    assert.equal(r.canvas, canvas);
+    assert.equal(r.defaultNodeConfig.color, "#ffffff");
+  });
+
+  test("a function's results are clamped, and those that aren't numbers count as 1", () => {
+    const { r } = oscene();
+    const resolved = v => {
+      r.setNodeConfig("a", { opacity: () => v });
+      r.sync();
+      return r.nodes.get("a").opacity;
+    };
+    assert.equal(resolved(2), 1);
+    assert.equal(resolved(-1), 0);
+    assert.equal(resolved(NaN), 1);
+    assert.equal(resolved(Infinity), 1);
+    assert.equal(resolved("0.5"), 1);
+    assert.equal(resolved(null), 1, "null falls through to the default");
+    assert.equal(resolved(0.4), 0.4);
+  });
+
+  test("going back to fully opaque returns to the plain path", () => {
+    const { g, r, ctx } = oscene();
+    r.setNodeConfig("a", { opacity: 0.5 });
+    render(r, ctx);
+    r.clearNodeConfig("a");                      // a style change: slots stay
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 1]]);
+    assert.equal(opsNamed(ctx, "globalAlpha").length, 0);
+
+    r.setDefaultNodeConfig({ opacity: n => n.id === "c" ? 0.5 : 1 });
+    g.addNode({ id: "c" });                      // a structural change: slots move
+    assert.deepEqual(render(r, ctx).find(([k]) => k === "?"), ["?", 0.5]);
+    g.removeNode("c");
+    render(r, ctx);
+    assert.equal(opsNamed(ctx, "globalAlpha").length, 0);
+  });
+
+  test("an element at opacity 0 isn't drawn at all", () => {
+    const { r, ctx } = oscene({ nodeCfg: { label: n => n.id } });
+    r.setNodeConfig("a", { opacity: 0 }).setEdgeConfig("a", "b", { opacity: 0 });
+    assert.deepEqual(render(r, ctx), [["b", 1], ["label b", 1]]);
+    assert.equal(opsNamed(ctx, "arc").length, 1);
+  });
+
+  test("labels take their node's opacity", () => {
+    const { r, ctx } = oscene({ nodeCfg: { label: n => n.id } });
+    r.setNodeConfig("b", { opacity: 0.5 });
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 1], ["b", 0.5], ["label a", 1], ["label b", 0.5]]);
+  });
+
+  test("opacity multiplies with highlight dimming", () => {
+    const { r, ctx } = oscene({ opts: { highlightAlpha: 0.4 } });
+    r.setNodeConfig("a", { opacity: 0.5 }).setNodeConfig("b", { opacity: 0.5 });
+    r.setHighlight({ nodes: ["a"] });
+    assert.deepEqual(render(r, ctx), [["edge", 0.4], ["b", 0.2], ["a", 0.5]]);
+    r.clearHighlight();
+    assert.deepEqual(render(r, ctx), [["edge", 1], ["a", 0.5], ["b", 0.5]]);
+  });
+
+  test("a thin edge's fade multiplies with its opacity", () => {
+    const { r, ctx } = oscene({ edgeCfg: { opacity: 0.5 } });
+    r.view.zoom = 0.5;                           // width 0.5: drawn at 1px, half as strong
+    assert.deepEqual(render(r, ctx)[0], ["edge", 0.25]);
+    assert.deepEqual(opsNamed(ctx, "globalAlpha").map(o => o[1]), [0.5, 0.25, 0.5, 1],
+      "back to the edge's opacity after the fade, then to 1 for the nodes");
+  });
+
+  test("an edge at opacity 0 can't be hit; a node at opacity 0 still can", () => {
+    const { g, r } = oscene();
+    r.setEdgeConfig("a", "b", { opacity: 0.1 });
+    assert.equal(r.edgeAt(400, 300), g.getEdge("a", "b"), "faint is still drawn");
+    r.setEdgeConfig("a", "b", { opacity: 0 }).setNodeConfig("a", { opacity: 0 });
+    assert.equal(r.edgeAt(400, 300), null);
+    assert.deepEqual(r.edgesAt(400, 300), []);
+    assert.equal(r.nodeAt(300, 300), "a");
+  });
+
+  test("exports are drawn at each element's opacity", () => {
+    const { r } = oscene({ edgeCfg: { opacity: 0.25 } });
+    r.setNodeConfig("b", { opacity: 0.5 });
+    const out = makeCanvas();
+    trackAlpha(out.ctx);
+    r.toCanvas({ canvas: out });
+    assert.deepEqual(draws(out.ctx), [["edge", 0.25], ["a", 1], ["b", 0.5]]);
   });
 });
 

@@ -120,6 +120,11 @@
  * @property {string} outlineColor - node outline color
  * @property {number} outlineWidth - node outline width, in world px (canvas
  *    px when the renderer's `scaleStrokes` is off)
+ * @property {number} opacity - opacity of the node and its label, from 0
+ *    (invisible) to 1 (opaque). Multiplies with highlight dimming. A node at
+ *    0 isn't drawn, but `nodeAt()` still finds it. Setting a value outside
+ *    0 to 1 throws; a function's results are clamped, and those that aren't
+ *    numbers count as 1.
  * @property {string | null} image - node image source
  * @property {string | number | null} label - text label
  * @property {boolean} renderLabel - whether to render the label, if it exists
@@ -144,6 +149,11 @@
  *    px (canvas px when the renderer's `scaleStrokes` is off)
  * @property {number} bow - world px of perpendicular bow for reciprocal
  *    directed pairs
+ * @property {number} opacity - opacity of the edge and its arrowhead, from 0
+ *    (invisible) to 1 (opaque). Multiplies with highlight dimming. An edge at
+ *    0 isn't drawn or hit by `edgeAt()`. Setting a value outside 0 to 1
+ *    throws; a function's results are clamped, and those that aren't numbers
+ *    count as 1.
  */
 
 /**

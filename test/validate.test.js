@@ -1,6 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { checkKnownKeys, checkEach, checkBoolean, checkString, checkOneOf, checkNumber } from "../src/validate.js";
+import {
+  checkKnownKeys, checkEach, checkBoolean, checkString, checkOneOf, checkNumber,
+  numberField, typeField, STRING_FIELD, BOOLEAN_FIELD, checkConfig,
+} from "../src/validate.js";
 
 describe("validate", () => {
   test("checkKnownKeys rejects unknown names and non-objects, naming the owner", () => {
@@ -41,5 +44,53 @@ describe("validate", () => {
     assert.equal(fails(5, { max: 3 }), "T: `n` must be a finite number, 3 or less");
     assert.equal(fails(Infinity, { min: 0, allowInfinity: true }), null);
     assert.equal(fails(NaN, { min: 0, allowInfinity: true }), "T: `n` must be a number, 0 or more");
+  });
+});
+
+describe("config field rules", () => {
+  test("numberField checks like checkNumber, and clamps a function's result", () => {
+    const f = numberField({ min: 0, max: 1 });
+    assert.doesNotThrow(() => f.check("T", "x", 0.5));
+    assert.throws(() => f.check("T", "x", 2), RangeError);
+    assert.throws(() => f.check("T", "x", "1"), TypeError);
+    assert.throws(() => f.check("T", "x", Infinity), RangeError);
+    assert.equal(f.resolve(0.5, 9), 0.5);
+    assert.equal(f.resolve(2, 9), 1);
+    assert.equal(f.resolve(-2, 9), 0);
+    assert.equal(f.resolve(NaN, 9), 9);
+    assert.equal(f.resolve(Infinity, 9), 9);
+    assert.equal(f.resolve("0.5", 9), 9);
+  });
+
+  test("numberField with an excluded min clamps to `least`", () => {
+    const f = numberField({ min: 0, aboveMin: true, least: 1e-6 });
+    assert.throws(() => f.check("T", "x", 0), RangeError);
+    assert.equal(f.resolve(0, 9), 1e-6);
+    assert.equal(f.resolve(-3, 9), 1e-6);
+    assert.equal(f.resolve(1e-9, 9), 1e-9, "values in the range are kept");
+  });
+
+  test("typeField checks and falls back by its test", () => {
+    const f = typeField("a string or null", v => v === null || typeof v === "string");
+    assert.doesNotThrow(() => f.check("T", "x", null));
+    assert.throws(() => f.check("T", "x", 1), /^TypeError: T: `x` must be a string or null$/);
+    assert.equal(f.resolve(null, "d"), null);
+    assert.equal(f.resolve(1, "d"), "d");
+    assert.equal(STRING_FIELD.resolve(undefined, "d"), "d");
+    assert.equal(BOOLEAN_FIELD.resolve(0, true), true);
+    assert.equal(BOOLEAN_FIELD.resolve(false, true), false);
+  });
+
+  test("checkConfig rejects non-objects, unknown fields and bad values; skips functions and undefined", () => {
+    const rules = { size: numberField({ min: 0 }) };
+    assert.throws(() => checkConfig("T", "edge", 5, rules), /^TypeError: T: edge config must be an object$/);
+    assert.throws(() => checkConfig("T", "edge", { toString: 1 }, rules), /unknown edge config field `toString`/,
+      "inherited names aren't fields");
+    assert.throws(() => checkConfig("T", "edge", { size: -1 }, rules),
+      /^RangeError: T: `size` must be a finite number, 0 or more, or a function of the edge$/);
+    assert.throws(() => checkConfig("T", "edge", { size: "1" }, rules), TypeError);
+    assert.doesNotThrow(() => checkConfig("T", "edge", { size: () => -1 }, rules));
+    assert.doesNotThrow(() => checkConfig("T", "edge", { size: undefined }, rules));
+    assert.doesNotThrow(() => checkConfig("T", "edge", {}, rules));
   });
 });

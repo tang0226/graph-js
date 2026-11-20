@@ -23,7 +23,10 @@ import { Emitter } from "./emitter.js";
 import { HookRegistry } from "./hook-registry.js";
 import { keysOf } from "./utils.js";
 import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
-import { checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf } from "./validate.js";
+import {
+  BOOLEAN_FIELD, checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, numberField,
+} from "./validate.js";
+/** @import { FieldRule } from './validate.js' */
 
 
 /** Every simulation option name, including the nested config and Barnes-Hut options */
@@ -44,6 +47,27 @@ const OPTION_RULES = {
   freezePoint:  v => checkNumber("Simulation", "freezePoint", v, { min: 0 }),
   useBarnesHut: v => checkBoolean("Simulation", "useBarnesHut", v),
   collision:    v => checkOneOf("Simulation", "collision", v, ["grid", "barnesHut", "pairs"]),
+};
+
+/**
+ * A rule per node config field. Mass must be above 0, since forces are
+ * divided by it: a config function's result is raised to at least 1e-6.
+ * @type {Record<keyof ResolvedSimNodeConfig, FieldRule<any>>}
+ */
+const NODE_CONFIG_RULES = {
+  mass:   numberField({ min: 0, aboveMin: true, least: 1e-6 }),
+  radius: numberField({ min: 0 }),
+  charge: numberField({ min: 0 }),
+  fixed:  BOOLEAN_FIELD,
+};
+
+/**
+ * A rule per edge config field
+ * @type {Record<keyof ResolvedSimEdgeConfig, FieldRule<any>>}
+ */
+const EDGE_CONFIG_RULES = {
+  length:    numberField({ min: 0 }),
+  stiffness: numberField({ min: 0 }),
 };
 
 
@@ -372,7 +396,7 @@ export class Simulation extends Emitter {
    * @type {ConfigCascade<ResolvedSimNodeConfig, ResolvedSimNodeAccessors, NodeId>}
    * @private
    */
-  _nodeConfig = new ConfigCascade(SIM_NODE_DEFAULTS);
+  _nodeConfig = new ConfigCascade(SIM_NODE_DEFAULTS, NODE_CONFIG_RULES, "Simulation", "node");
   /**
    * [read-only, set with `setDefaultNodeConfig()` or `setOpts()`]
    * Current default node config. Takes precedence over the global default config,
@@ -388,7 +412,7 @@ export class Simulation extends Emitter {
    * @type {ConfigCascade<ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors, GraphEdge>}
    * @private
    */
-  _edgeConfig = new ConfigCascade(SIM_EDGE_DEFAULTS);
+  _edgeConfig = new ConfigCascade(SIM_EDGE_DEFAULTS, EDGE_CONFIG_RULES, "Simulation", "edge");
   /**
    * [read-only, set with `setDefaultEdgeConfig()` or `setOpts()`]
    * Current default edge config. Takes precedence over the global default
@@ -475,19 +499,22 @@ export class Simulation extends Emitter {
    * current value. Nothing changes if any option is invalid.
    * @param {SimOptsInput} [optsInput={}] - options to set
    * @returns {this} self reference
-   * @throws {TypeError | RangeError} throws if an option is invalid or unknown
+   * @throws {TypeError | RangeError} throws if an option is invalid or
+   *    unknown, including a node or edge config field
    */
   setOpts(optsInput = {}) {
     checkKnownKeys("Simulation", optsInput, OPTION_NAMES);
     const { nodeConfig, edgeConfig, barnesHut, ...opts } = optsInput;
     checkEach(opts, OPTION_RULES);
     if (barnesHut !== undefined) checkBarnesHutOpts("Simulation", barnesHut, "barnesHut.");
+    if (nodeConfig !== undefined) this._nodeConfig.check(nodeConfig, "`nodeConfig`");
+    if (edgeConfig !== undefined) this._edgeConfig.check(edgeConfig, "`edgeConfig`");
 
     for (const key of /** @type {(keyof SimOpts)[]} */ (Object.keys(opts))) {
       if (opts[key] !== undefined) /** @type {any} */ (this._opts)[key] = opts[key];
     }
-    if (nodeConfig) this.setDefaultNodeConfig(nodeConfig);
-    if (edgeConfig) this.setDefaultEdgeConfig(edgeConfig);
+    if (nodeConfig !== undefined) this.setDefaultNodeConfig(nodeConfig);
+    if (edgeConfig !== undefined) this.setDefaultEdgeConfig(edgeConfig);
     if (barnesHut) this._barnesHutCtx.setOpts(barnesHut);
     this.heat();
     return this;
@@ -500,9 +527,11 @@ export class Simulation extends Emitter {
   /**
    * Sets the default physical attributes for all nodes.
    * `sync()` will update all nodes with the new defaults, except for
-   * specific overrides
+   * specific overrides. Nothing changes if the config is invalid.
    * @param {SimNodeConfig} config
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setDefaultNodeConfig(config = {}) {
     this._nodeConfig.setDefaults(config);
@@ -511,10 +540,13 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Merges new config data into the current overrides of a specific node
+   * Merges new config data into the current overrides of a specific node.
+   * Nothing changes if the config is invalid.
    * @param {NodeId} id - node id
    * @param {SimNodeConfig} [config] - sim-node config
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setNodeConfig(id, config = {}) {
     this._nodeConfig.set(id, config);
@@ -536,9 +568,11 @@ export class Simulation extends Emitter {
   /**
    * Sets the default spring settings for all edges.
    * `sync()` will update all edges with the new defaults, except for
-   * specific overrides
+   * specific overrides. Nothing changes if the config is invalid.
    * @param {SimEdgeConfig} config
    * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setDefaultEdgeConfig(config = {}) {
     this._edgeConfig.setDefaults(config);
@@ -547,12 +581,15 @@ export class Simulation extends Emitter {
 
 
   /**
-   * Merges new config data into the current overrides of a specific edge
+   * Merges new config data into the current overrides of a specific edge.
+   * Nothing changes if the config is invalid.
    * @param {NodeId} srcId - source node id
    * @param {NodeId} destId - destination node id
    * @param {SimEdgeConfig} [config] - edge config
    * @returns {this} self reference
    * @throws {ReferenceError} throws if the edge doesn't exist
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
    */
   setEdgeConfig(srcId, destId, config = {}) {
     const gEdge = this._graph.getEdge(srcId, destId);
@@ -780,16 +817,11 @@ export class Simulation extends Emitter {
    * @private
    */
   _resolveNode(gNode, i) {
-    const acc = this._nodeConfig.accessors,
-          g = this._graph,
-          o = this._nodeConfig.overrides.get(gNode.id);
-    let mass   = o?.mass?.(gNode, g)   ?? acc.mass(gNode, g);
-    let radius = o?.radius?.(gNode, g) ?? acc.radius(gNode, g);
-    let charge = o?.charge?.(gNode, g) ?? acc.charge(gNode, g);
-    mass   = Number.isFinite(mass)   ? Math.max(mass, 1e-6) : SIM_NODE_DEFAULTS.mass;
-    radius = Number.isFinite(radius) ? Math.max(radius, 0)  : SIM_NODE_DEFAULTS.radius;
-    charge = Number.isFinite(charge) ? Math.max(charge, 0)  : SIM_NODE_DEFAULTS.charge;
-    const fixed = (o?.fixed?.(gNode, g) ?? acc.fixed(gNode, g)) === true ? 1 : 0;
+    const c = this._nodeConfig, g = this._graph, id = gNode.id;
+    const mass   = c.resolve("mass", id, gNode, g);
+    const radius = c.resolve("radius", id, gNode, g);
+    const charge = c.resolve("charge", id, gNode, g);
+    const fixed  = c.resolve("fixed", id, gNode, g) ? 1 : 0;
 
     const changed = this._nodeMass[i] !== mass || this._nodeRadius[i] !== radius ||
       this._nodeCharge[i] !== charge || this._nodeFixed[i] !== fixed;
@@ -830,15 +862,8 @@ export class Simulation extends Emitter {
    * @private
    */
   _resolveEdge(gEdge) {
-    const acc = this._edgeConfig.accessors,
-          g = this._graph,
-          o = this._edgeConfig.overrides.get(gEdge);
-    const length    = o?.length?.(gEdge, g)    ?? acc.length(gEdge, g);
-    const stiffness = o?.stiffness?.(gEdge, g) ?? acc.stiffness(gEdge, g);
-    return [
-      Number.isFinite(length)    ? Math.max(length, 0)    : SIM_EDGE_DEFAULTS.length,
-      Number.isFinite(stiffness) ? Math.max(stiffness, 0) : SIM_EDGE_DEFAULTS.stiffness,
-    ];
+    const c = this._edgeConfig, g = this._graph;
+    return [c.resolve("length", gEdge, gEdge, g), c.resolve("stiffness", gEdge, gEdge, g)];
   }
 
 
