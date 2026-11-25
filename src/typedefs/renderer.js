@@ -24,7 +24,16 @@
  * @property {number} [minLabelSize] - canvas px font size below which scaled
  *    labels are hidden
  * @property {number} [maxLabelSize] - canvas px font size that scaled labels
- *    are capped at
+ *    are capped at. A node's `labelFloorSize` and `highlightLabelSize` can
+ *    take a label past it.
+ * @property {boolean} [declutterLabels] - whether to hide labels that would
+ *    overlap another label on screen. Labels are placed by `labelPriority`,
+ *    and among equals, labels already shown keep their place, so they don't
+ *    flicker as the view moves. Highlighted nodes' labels are placed over
+ *    that layout, in the order the nodes were highlighted, hiding the
+ *    labels they overlap only until the highlight ends.
+ * @property {number} [labelPadding] - canvas px of space kept between labels
+ *    when `declutterLabels` is on
  * @property {boolean} [scaleStrokes] - whether edge `width`, `arrowSize` and
  *    node `outlineWidth` are in world px and scale with zoom. When `false`
  *    they are in canvas px and stay the same size at every zoom.
@@ -37,6 +46,13 @@
  * @property {number} [highlightFadeDuration] - milliseconds for an element to
  *    fade fully between opacity 0 and 1 when highlighting changes; 0 disables
  *    fading
+ * @property {number} [highlightLabelSize] - canvas px font size that
+ *    highlighted nodes' labels grow to at least, at any zoom, so they stay
+ *    readable zoomed out. They grow and shrink back over
+ *    `highlightLabelDuration`. 0 for none.
+ * @property {number} [highlightLabelDuration] - milliseconds for a label to
+ *    grow fully to its `highlightLabelSize`, or shrink back; 0 changes size
+ *    instantly
  * @property {ReferrerPolicy | ((src: string) => ReferrerPolicy)} [imageReferrerPolicy] -
  *    referrer policy for image requests, or a function giving it per image
  *    source
@@ -136,6 +152,13 @@
  *    label's letters, in world px at the label's `labelScale`, so it keeps
  *    its size relative to the text; centred on the letters' edges, so half
  *    of it shows. 0 for none.
+ * @property {number} labelFloorSize - canvas px font size the label never
+ *    shrinks below as the view zooms out, so important labels stay readable;
+ *    0 for none. It takes the label past the renderer's `maxLabelSize`, and
+ *    keeps it from being hidden by `minLabelSize`, unless it's below that too.
+ * @property {number} labelPriority - with the renderer's `declutterLabels`,
+ *    labels of higher priority are placed first, so they hide overlapping
+ *    labels of lower priority. Any finite number; 0 by default.
  */
 
 /**

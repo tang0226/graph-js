@@ -23,6 +23,7 @@ import { circleRectCollision, keysOf, now, readNodeSelection, segmentDistance2 }
 import { ConfigCascade } from "./config-cascade.js";
 import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
+import { LabelPlacer } from "./label-placer.js";
 import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
 import {
   BOOLEAN_FIELD, STRING_FIELD, checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString,
@@ -140,12 +141,16 @@ const OPTION_RULES = {
   labelMargin:           v => checkNumber("Renderer", "labelMargin", v),
   minLabelSize:          v => checkNumber("Renderer", "minLabelSize", v, { min: 0 }),
   maxLabelSize:          v => checkNumber("Renderer", "maxLabelSize", v, { min: 0, allowInfinity: true }),
+  declutterLabels:       v => checkBoolean("Renderer", "declutterLabels", v),
+  labelPadding:          v => checkNumber("Renderer", "labelPadding", v, { min: 0 }),
   scaleStrokes:          v => checkBoolean("Renderer", "scaleStrokes", v),
   minEdgeWidth:          v => checkNumber("Renderer", "minEdgeWidth", v, { min: 0 }),
   maxEdgeWidth:          v => checkNumber("Renderer", "maxEdgeWidth", v, { min: 0, allowInfinity: true }),
   highlightMode:         v => checkOneOf("Renderer", "highlightMode", v, ["dim", "hide"]),
   highlightAlpha:        v => checkNumber("Renderer", "highlightAlpha", v, { min: 0, max: 1 }),
   highlightFadeDuration: v => checkNumber("Renderer", "highlightFadeDuration", v, { min: 0 }),
+  highlightLabelSize:    v => checkNumber("Renderer", "highlightLabelSize", v, { min: 0 }),
+  highlightLabelDuration: v => checkNumber("Renderer", "highlightLabelDuration", v, { min: 0 }),
   imageReferrerPolicy:   v => checkImageRequestOpt("imageReferrerPolicy", v, REFERRER_POLICIES),
   crossOrigin:           v => checkImageRequestOpt("crossOrigin", v, CROSS_ORIGINS),
   imageCacheMB:          v => checkNumber("Renderer", "imageCacheMB", v, { min: 0, allowInfinity: true }),
@@ -201,6 +206,8 @@ const NODE_STYLE_RULES = {
   labelTextColor:   STRING_FIELD,
   labelStrokeColor: STRING_FIELD,
   labelStrokeWidth: numberField({ min: 0 }),
+  labelFloorSize:   numberField({ min: 0 }),
+  labelPriority:    numberField(),
 };
 
 /**
@@ -441,6 +448,53 @@ export class Renderer extends Emitter {
    * @private
    */
   _labelsDirty = true;
+
+
+  /**
+   * Font size of each label kept by the last `_cull()`, in canvas px,
+   * parallel to `Simulation.nodeList`, so each is drawn at the size it was
+   * culled and placed at. Stale for labels that weren't kept.
+   * @type {Float64Array}
+   * @private
+   */
+  _labelPx = new Float64Array(0);
+
+
+  /**
+   * Whether each node's label was in the last decluttered base layout on
+   * screen, parallel to `Simulation.nodeList` (see `_declutterLabels()`).
+   * Decluttering places these ahead of other labels of the same priority, so
+   * labels don't trade places from frame to frame. All 0 while not
+   * decluttering. Exports leave it alone.
+   * @type {Uint8Array}
+   * @private
+   */
+  _labelShown = new Uint8Array(0);
+
+
+  /**
+   * Each label's box in the decluttered base layout, as left, top, right
+   * and bottom edges in canvas px. Reused between frames.
+   * @type {Float64Array}
+   * @private
+   */
+  _labelBoxes = new Float64Array(0);
+
+
+  /**
+   * Each highlighted label's box while decluttering, as `_labelBoxes`
+   * @type {Float64Array}
+   * @private
+   */
+  _raisedBoxes = new Float64Array(0);
+
+
+  /**
+   * Places labels while decluttering
+   * @type {LabelPlacer}
+   * @private
+   */
+  _labelPlacer = new LabelPlacer();
 
 
   /**
@@ -824,12 +878,19 @@ export class Renderer extends Emitter {
 
     // Refresh caches
 
-    // Node styles
+    // Node styles, and which labels were shown, carried across by style
+    // object as alphas are
+    /** @type {Set<NodeStyle>} */
+    const shown = new Set();
+    for (let i = 0; i < this._labelShown.length; i++) {
+      if (this._labelShown[i]) shown.add(this._nodeStyles[i]);
+    }
     this._nodeStyles = [];
     for (const id of this._simulation.nodeId) {
       const rNode = this._nodes.get(id);
       if (rNode) this._nodeStyles.push(rNode);
     }
+    this._labelShown = Uint8Array.from(this._nodeStyles, style => (shown.has(style) ? 1 : 0));
 
     const sim = this._simulation;
 
@@ -910,6 +971,8 @@ export class Renderer extends Emitter {
     rNode.labelTextColor = c.resolve("labelTextColor", id, gNode, g);
     rNode.labelStrokeColor = c.resolve("labelStrokeColor", id, gNode, g);
     rNode.labelStrokeWidth = c.resolve("labelStrokeWidth", id, gNode, g);
+    rNode.labelFloorSize = c.resolve("labelFloorSize", id, gNode, g);
+    rNode.labelPriority = c.resolve("labelPriority", id, gNode, g);
   }
 
 
@@ -1190,9 +1253,10 @@ export class Renderer extends Emitter {
     // Eases every alpha toward its target, off-screen elements included, so
     // they don't come back into view mid-fade
     const opts = this._opts, hl = this._highlighter;
-    hl.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha);
+    hl.step(time, opts.highlightFadeDuration, opts.highlightMode, opts.highlightAlpha,
+      opts.highlightLabelSize > 0 ? opts.highlightLabelDuration : 0);
     this._imageCache.beginFrame();
-    this._drawFrame(time, opts.background, hl.nodeAlpha, hl.edgeAlpha, true);
+    this._drawFrame(time, opts.background, hl.nodeAlpha, hl.edgeAlpha, hl.labelGrowth, true);
     this._imageCache.endFrame(opts.imageCacheMB * 1024 * 1024);
     return true;
   }
@@ -1205,15 +1269,17 @@ export class Renderer extends Emitter {
    * @param {string | null} background - background color, or `null` for none
    * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
    * @param {Float64Array} edgeAlpha - highlight alpha of each edge slot
+   * @param {Float64Array} labelGrowth - how far each node slot's label has
+   *    grown toward its highlighted size, from 0 to 1
    * @param {boolean} runHooks - whether to run the drawing hooks
    * @returns {void}
    * @private
    */
-  _drawFrame(time, background, nodeAlpha, edgeAlpha, runHooks) {
+  _drawFrame(time, background, nodeAlpha, edgeAlpha, labelGrowth, runHooks) {
     if (!this._ctx || !this._size) return;
     if (this._opts.renderLabels && this._labelsDirty) this._measureLabels();
 
-    const inFrame = this._cull();
+    const inFrame = this._cull(nodeAlpha, labelGrowth);
 
     // Cleared first so a transparent or translucent background doesn't build
     // up over earlier frames
@@ -1299,11 +1365,18 @@ export class Renderer extends Emitter {
    * Culls all nodes, edges, and labels fully outside the current view, or
    * with an `opacity` of 0. Edges are tested as `_layoutEdge()` lays them
    * out, so one crossing the view between two off-screen nodes is kept, and
-   * one that isn't drawn at all is dropped.
+   * one that isn't drawn at all is dropped. Labels are also dropped when too
+   * small to read, or fully faded by highlighting, and with
+   * `declutterLabels`, when they'd overlap another (see `_declutterLabels()`).
+   * Sets `_labelPx` for each label kept.
+   * @param {Float64Array} [nodeAlpha] - highlight alpha of each node slot;
+   *    the current alphas by default
+   * @param {Float64Array} [labelGrowth] - how far each node slot's label has
+   *    grown toward its highlighted size; the current growth by default
    * @returns {{nodesI: number[], edgesI: number[], labelsI: number[]}}
    * @private
    */
-  _cull() {
+  _cull(nodeAlpha = this._highlighter.nodeAlpha, labelGrowth = this._highlighter.labelGrowth) {
     if (!this._size) return { nodesI: [], edgesI: [], labelsI: [] };
     const { w: cw, h: ch } = this._size;
     const [xMin, yMin] = this.canvasToSim(0, 0);
@@ -1327,22 +1400,195 @@ export class Renderer extends Emitter {
       }
     }
 
+    if (this._labelPx.length !== n) this._labelPx = new Float64Array(n);
+    /** @type {number[]} */
+    let labelsI;
+    if (!this._opts.renderLabels) labelsI = [];
+    else if (this._opts.declutterLabels) labelsI = this._declutterLabels(nodeAlpha, labelGrowth);
+    else labelsI = this._visibleLabels(nodeAlpha, labelGrowth);
+    // Only decluttering keeps track of the labels it shows
+    if (!this._exporting && !(this._opts.renderLabels && this._opts.declutterLabels)) this._labelShown.fill(0);
+
+    return { nodesI, edgesI, labelsI };
+  }
+
+
+  /**
+   * A label's font size on screen, in canvas px: its `labelScale` at the
+   * zoom, capped at `maxLabelSize`, held at least at its `labelFloorSize`,
+   * and grown toward `highlightLabelSize` as far as its highlight has taken it.
+   * @param {NodeStyle} style - the node's style
+   * @param {number} zoom - zoom to size it at
+   * @param {number} growth - how far the label has grown toward its
+   *    highlighted size, from 0 to 1
+   * @returns {number} font size, in canvas px
+   * @private
+   */
+  _labelSize(style, zoom, growth) {
+    const { maxLabelSize, highlightLabelSize } = this._opts;
+    const size = Math.max(Math.min(style.labelScale * zoom, maxLabelSize), style.labelFloorSize);
+    return growth > 0 && highlightLabelSize > size ? size + (highlightLabelSize - size) * growth : size;
+  }
+
+
+  /**
+   * Whether a node has a label to draw: it has text, isn't turned off, and
+   * isn't invisible.
+   * @param {number} i - the node's slot
+   * @returns {boolean} whether it has a label to draw
+   * @private
+   */
+  _hasLabel(i) {
+    const style = this._nodeStyles[i];
+    return !!this._labelWidthRatio[i] && style.renderLabel && style.opacity !== 0;
+  }
+
+
+  /**
+   * Lays out a node's label at a size on screen, and writes its box, in
+   * canvas px, into `boxes` as box `j`.
+   * @param {number} i - the node's slot
+   * @param {number} px - font size, in canvas px
+   * @param {Float64Array | null} boxes - left, top, right and bottom edges
+   *    of each box in turn; `null` to only test it
+   * @param {number} j - which box to write
+   * @returns {boolean} whether any of the label is on the canvas; nothing is
+   *    written when it isn't
+   * @private
+   */
+  _labelOnCanvas(i, px, boxes, j) {
+    const zoom = this._view.zoom, { w, h } = /** @type {Size} */ (this._size);
+    const b = this._layoutLabel(i, px / zoom);
+    const x0 = this._canvasX(b.x0), y0 = this._canvasY(b.y0);
+    const x1 = x0 + b.w * zoom, y1 = y0 + b.h * zoom;
+    if (!(x0 < w && x1 > 0 && y0 < h && y1 > 0)) return false;
+    if (boxes) {
+      const k = 4 * j;
+      boxes[k] = x0; boxes[k + 1] = y0; boxes[k + 2] = x1; boxes[k + 3] = y1;
+    }
+    return true;
+  }
+
+
+  /**
+   * The labels to draw without decluttering: each on the canvas, large
+   * enough to read, and not faded out. Sets `_labelPx` for each.
+   * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
+   * @param {Float64Array} labelGrowth - how far each node slot's label has
+   *    grown toward its highlighted size, from 0 to 1
+   * @returns {number[]} slots of the labels, in slot order
+   * @private
+   */
+  _visibleLabels(nodeAlpha, labelGrowth) {
+    const n = this._simulation.nodeList.length, zoom = this._view.zoom, min = this._opts.minLabelSize;
     const labelsI = [];
-    if (this._opts.renderLabels) {
-      const { minLabelSize, maxLabelSize } = this._opts;
-      const zoom = this._view.zoom, ratios = this._labelWidthRatio;
-      for (let i = 0; i < sim.nodeList.length; i++) {
-        const style = nodeStyles[i];
-        if (!ratios[i] || !style.renderLabel || style.opacity === 0) continue;  // no label, disabled, or invisible
-        const px = style.labelScale * zoom;
-        if (px < minLabelSize) continue;                     // too small to read
-        // Label bounds in world units
-        const { x0, y0, w, h } = this._layoutLabel(i, Math.min(px, maxLabelSize) / zoom);
-        if (x0 < xMax && x0 + w > xMin && y0 < yMax && y0 + h > yMin) labelsI.push(i);
+    for (let i = 0; i < n; i++) {
+      if (!this._hasLabel(i) || nodeAlpha[i] === 0) continue;
+      const px = this._labelSize(this._nodeStyles[i], zoom, labelGrowth[i]);
+      if (px < min || !this._labelOnCanvas(i, px, null, 0)) continue;
+      this._labelPx[i] = px;
+      labelsI.push(i);
+    }
+    return labelsI;
+  }
+
+
+  /**
+   * The labels to draw with decluttering, which hides each label that would
+   * overlap, or come within `labelPadding` of, a label placed before it.
+   *
+   * Labels are placed in two layers, so highlighting doesn't change which
+   * labels show once it ends. The base layout places every label at its
+   * size without highlighting, by `labelPriority`, then those in the base
+   * layout last frame, then by slot. It's the same whatever is highlighted,
+   * and only it is remembered as shown. Highlighted labels, and those still
+   * shrinking back, are then placed over it at their current size, hiding
+   * the base labels they overlap until they're gone. Highlighted ones go
+   * first, in the order their nodes were highlighted, then those shrinking
+   * back, in the base order.
+   * Sets `_labelPx` for each label with text.
+   * @param {Float64Array} nodeAlpha - highlight alpha of each node slot
+   * @param {Float64Array} labelGrowth - how far each node slot's label has
+   *    grown toward its highlighted size, from 0 to 1
+   * @returns {number[]} slots of the labels to draw, in slot order
+   * @private
+   */
+  _declutterLabels(nodeAlpha, labelGrowth) {
+    const n = this._simulation.nodeList.length, styles = this._nodeStyles, zoom = this._view.zoom;
+    const { minLabelSize, labelPadding: pad } = this._opts;
+    const { w, h } = /** @type {Size} */ (this._size);
+    const state = this._highlighter.nodeState, shown = this._labelShown;
+    if (this._labelBoxes.length < 4 * n) {
+      this._labelBoxes = new Float64Array(4 * n);
+      this._raisedBoxes = new Float64Array(4 * n);
+    }
+    const baseBoxes = this._labelBoxes, raisedBoxes = this._raisedBoxes;
+    /** @type {(i: number) => boolean} whether a label is placed over the base layout */
+    const isRaised = i => state[i] === 1 || labelGrowth[i] > 0;
+
+    /** @type {number[]} */
+    const baseI = [], raisedI = [];
+    for (let i = 0; i < n; i++) {
+      if (!this._hasLabel(i)) continue;
+      const basePx = this._labelSize(styles[i], zoom, 0);
+      if (basePx >= minLabelSize && this._labelOnCanvas(i, basePx, baseBoxes, baseI.length)) baseI.push(i);
+      if (!isRaised(i)) {
+        this._labelPx[i] = basePx;
+        continue;
+      }
+      const px = this._labelSize(styles[i], zoom, labelGrowth[i]);
+      this._labelPx[i] = px;
+      if (nodeAlpha[i] > 0 && px >= minLabelSize && this._labelOnCanvas(i, px, raisedBoxes, raisedI.length)) {
+        raisedI.push(i);
       }
     }
 
-    return { nodesI, edgesI, labelsI };
+    /** @type {(slots: number[]) => number[]} indexes into `slots`, best first */
+    const rank = slots => slots.map((_, j) => j).sort((a, b) => {
+      const i = slots[a], j = slots[b];
+      return styles[j].labelPriority - styles[i].labelPriority || (shown[j] ?? 0) - (shown[i] ?? 0) || i - j;
+    });
+    // Highlighted labels go first, in the order their nodes were highlighted
+    // (the order of the highlighter's set), then those shrinking back
+    /** @type {Map<NodeId, number>} */
+    const hlOrder = new Map();
+    if (raisedI.length > 0) for (const id of this._highlighter.nodes) hlOrder.set(id, hlOrder.size);
+    const nodeList = this._simulation.nodeList;
+    const raisedRank = raisedI.map(i => hlOrder.get(nodeList[i].id) ?? Infinity);
+    const raisedOrder = rank(raisedI).sort((a, b) => (raisedRank[a] - raisedRank[b]) || 0);
+    const placer = this._labelPlacer;
+    const basePlaced = placer.placeAll(baseBoxes, rank(baseI), pad, w, h);
+
+    /** @type {number[]} */
+    const labelsI = [];
+    if (raisedI.length === 0) {
+      for (let j = 0; j < baseI.length; j++) {
+        if (basePlaced[j] && nodeAlpha[baseI[j]] > 0) labelsI.push(baseI[j]);
+      }
+    } else {
+      placer.begin(w, h);
+      for (const j of raisedOrder) {
+        const k = 4 * j;
+        if (placer.tryPlace(raisedBoxes[k], raisedBoxes[k + 1], raisedBoxes[k + 2], raisedBoxes[k + 3], pad)) {
+          labelsI.push(raisedI[j]);
+        }
+      }
+      // Base labels don't overlap each other, so only raised ones hide them
+      for (let j = 0; j < baseI.length; j++) {
+        const i = baseI[j], k = 4 * j;
+        if (!basePlaced[j] || isRaised(i) || nodeAlpha[i] === 0) continue;
+        if (placer.tryPlace(baseBoxes[k], baseBoxes[k + 1], baseBoxes[k + 2], baseBoxes[k + 3], pad)) labelsI.push(i);
+      }
+      placer.end();
+      labelsI.sort((a, b) => a - b);
+    }
+
+    if (!this._exporting) {
+      if (this._labelShown.length !== n) this._labelShown = new Uint8Array(n);
+      else this._labelShown.fill(0);
+      for (let j = 0; j < baseI.length; j++) if (basePlaced[j]) this._labelShown[baseI[j]] = 1;
+    }
+    return labelsI;
   }
 
 
@@ -1722,7 +1968,8 @@ export class Renderer extends Emitter {
 
   /**
    * Draws a node's label. Whether it should be drawn (has a label, is
-   * enabled, large enough, on screen) is decided by `_cull()`.
+   * enabled, large enough, on screen, not decluttered) is decided by
+   * `_cull()`, which also sets its size in `_labelPx`.
    *
    * Expects the context to hold the label font at `LABEL_REF_SIZE`, the
    * alignment for `labelPosition` and a round line join, all set once per
@@ -1745,7 +1992,7 @@ export class Renderer extends Emitter {
       default:      y += r; break;   // "bottom"
     }
     // Scale the reference-size font to this label's size, anchored at (x, y)
-    const size = Math.min(nodeStyle.labelScale * zoom, this._opts.maxLabelSize);
+    const size = this._labelPx[i];
     const s = dpr * size / LABEL_REF_SIZE;
     this._ctx.setTransform(s, 0, 0, s, dpr * x, dpr * y);
     const { labelStrokeWidth: sw, labelScale } = nodeStyle;
@@ -2008,16 +2255,51 @@ export class Renderer extends Emitter {
         height === undefined ? Infinity : (height - 2 * padding) / bh,
       );
     };
-    // Label sizes depend on the zoom: fit them at full size, then at the
-    // size they are at that zoom. The second fit is closer, but labels
-    // that only show once zoomed in could make it overflow, so it's only
-    // kept if it still fits.
+    /* Label sizes depend on the zoom, and a zoom fits when the graph sized
+       at it fits at it: `fitZoom(z) >= z`. Labels are fitted at full size
+       first, then at the size they are at that zoom. Without labels held at
+       a size on screen, full size is the largest, so the first fit fits,
+       and the second, closer one is kept if it still fits (labels that only
+       show once zoomed in could make it overflow). */
     const first = fitZoom(null);
     const second = fitZoom(first);
-    let zoom = fitZoom(second) >= second ? second : first;
+    let zoom;
+    if (second >= first) zoom = fitZoom(second) >= second ? second : first;
+    else zoom = this._fitHeldLabels(fitZoom, first, second);
     if (zoom === Infinity) zoom = this._view.zoom;    // a graph with no extent
     if (!(zoom > 0)) throw new RangeError("Renderer: `padding` leaves no room for the graph");
     return zoom;
+  }
+
+
+  /**
+   * The largest zoom that fits, when labels held at a size on screen
+   * (`labelFloorSize`, `highlightLabelSize`) are larger at the first fit than
+   * at full size, so the first fit doesn't fit. Searches below `second`,
+   * which doesn't fit either, for a zoom that does, then bisects between the
+   * two. If the held labels don't fit at any zoom, such as one wider than
+   * the canvas, they're fitted at full size instead, as `first` was.
+   * @param {(at: number) => number} fitZoom - the largest zoom that fits the
+   *    graph sized at `at`
+   * @param {number} first - the fit with labels at full size
+   * @param {number} second - the fit with labels sized at `first`
+   * @returns {number} the zoom
+   * @private
+   */
+  _fitHeldLabels(fitZoom, first, second) {
+    let hi = second, lo = second / 2;
+    for (let k = 0; fitZoom(lo) < lo; k++) {
+      if (k === 40) return first;
+      hi = lo;
+      lo /= 2;
+    }
+    // Bisected by ratio, since zooms span orders of magnitude
+    for (let k = 0; k < 24; k++) {
+      const mid = Math.sqrt(lo * hi);
+      if (fitZoom(mid) >= mid) lo = mid;
+      else hi = mid;
+    }
+    return lo;
   }
 
 
@@ -2028,8 +2310,9 @@ export class Renderer extends Emitter {
    * nodes picked, their labels and self-loops, and the bowed edges between
    * them count. Expects at least one node picked, and labels to be measured.
    * @param {number | null} zoom - zoom to size labels at, which also hides
-   *    those too small to read; `null` for every label at full size, which
-   *    is as big as they get at any zoom
+   *    those too small to read; `null` for every label at its `labelScale`,
+   *    as big as it gets at any zoom unless held at a larger size on screen
+   *    by `labelFloorSize` or `highlightLabelSize`
    * @param {Uint8Array | null} [picked=null] - flags of the nodes to bound,
    *    by slot; `null` for every node
    * @returns {Bounds} bounds
@@ -2076,13 +2359,16 @@ export class Renderer extends Emitter {
     }
 
     if (opts.renderLabels) {
+      // Highlighted labels at the size they settle at
+      const state = this._highlighter.nodeState;
       for (let i = 0; i < xs.length; i++) {
         const style = this._nodeStyles[i];
         if ((picked && !picked[i]) || !this._labelWidthRatio[i] || !style.renderLabel) continue;
         let h = style.labelScale;
         if (zoom !== null) {
-          if (h * zoom < opts.minLabelSize) continue;
-          h = Math.min(h * zoom, opts.maxLabelSize) / zoom;
+          const px = this._labelSize(style, zoom, state[i]);
+          if (px < opts.minLabelSize) continue;
+          h = px / zoom;
         }
         const box = this._layoutLabel(i, h);
         add(box.x0, box.y0, box.x0 + box.w, box.y0 + box.h);
@@ -2326,8 +2612,9 @@ export class Renderer extends Emitter {
       canvas.width = Math.max(1, Math.round(size.w * pixelRatio));
       canvas.height = Math.max(1, Math.round(size.h * pixelRatio));
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      const { nodeAlpha, edgeAlpha } = this._highlighter.settledAlphas(this._opts.highlightMode, this._opts.highlightAlpha);
-      this._drawFrame(now(), background, nodeAlpha, edgeAlpha, hooks);
+      const { nodeAlpha, edgeAlpha, labelGrowth } =
+        this._highlighter.settledAlphas(this._opts.highlightMode, this._opts.highlightAlpha);
+      this._drawFrame(now(), background, nodeAlpha, edgeAlpha, labelGrowth, hooks);
     } finally {
       this._exporting = false;
       this._canvas = live.canvas;

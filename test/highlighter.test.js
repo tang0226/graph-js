@@ -87,4 +87,55 @@ describe("Highlighter", () => {
     const { hl, nodeStyles, edgeStyles } = setup();
     assert.equal(hl.snapshot(nodeStyles, edgeStyles), null);
   });
+
+  describe("label growth", () => {
+    const growth = hl => [...hl.labelGrowth].map(b => +b.toFixed(2));
+
+    test("eases from 0 to 1 as a node is highlighted, and back, over the full duration", () => {
+      const { hl } = setup();
+      assert.deepEqual(growth(hl), [0, 0, 0]);
+      hl.addNode("a", 0);
+      hl.startFade();
+      hl.step(1000, 100, "dim", 0.2);
+      hl.step(1040, 100, "dim", 0.2);
+      assert.deepEqual(growth(hl), [0.4, 0, 0]);
+      hl.step(1090, 100, "dim", 0.2);         // alphas settled at 0.2 after 80 ms
+      assert.equal(hl.isFading(), true, "the label still has 10% to grow");
+      hl.step(1100, 100, "dim", 0.2);
+      assert.deepEqual(growth(hl), [1, 0, 0]);
+      assert.equal(hl.isFading(), false);
+
+      hl.removeNode("a", 0);
+      hl.startFade();
+      hl.step(2000, 100, "dim", 0.2);
+      hl.step(2025, 100, "dim", 0.2);
+      assert.deepEqual(growth(hl), [0.75, 0, 0]);
+    });
+
+    test("jumps to its target when it doesn't fade, so the fade ends with the alphas", () => {
+      const { hl } = setup();
+      hl.addNode("a", 0);
+      hl.startFade();
+      hl.step(1000, 100, "dim", 0.2, 0);
+      assert.deepEqual(growth(hl), [1, 0, 0]);
+      hl.step(1080, 100, "dim", 0.2, 0);
+      assert.equal(hl.isFading(), false);
+    });
+
+    test("is kept by style across a re-slot, and settles at the highlight flags", () => {
+      const { hl, nodeList, edgeList, nodeStyles, edgeStyles } = setup();
+      hl.addNode("b", 1);
+      hl.startFade();
+      hl.step(0, 100, "dim", 0.2);
+      hl.step(30, 100, "dim", 0.2);
+      assert.deepEqual([...hl.settledAlphas("dim", 0.2).labelGrowth], [0, 1, 0], "as it'll be");
+      assert.deepEqual(growth(hl), [0, 0.3, 0], "left alone");
+
+      const snap = hl.snapshot(nodeStyles, edgeStyles);
+      const next = [nodeList[1], { id: "d" }];
+      hl.addNode("d", 1);                      // highlighted before it has a slot of its own
+      hl.reslot(snap, next, edgeList, [nodeStyles[1], {}], edgeStyles, "dim", 0.2);
+      assert.deepEqual(growth(hl), [0.3, 1], "b keeps its growth; d starts at its target");
+    });
+  });
 });

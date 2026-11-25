@@ -345,6 +345,36 @@
       <label for="minLabelSize">Hide below (screen px)</label><output id="minLabelSizeOut">6.0</output>
       <input type="range" id="minLabelSize" min="0" max="30" step="0.5" value="6">
     </div>
+    <div class="row">
+      <label for="labelFloorSize">Min size (screen px)</label><output id="labelFloorSizeOut">0</output>
+      <input type="range" id="labelFloorSize" min="0" max="24" step="1" value="0">
+    </div>
+    <div class="row inline">
+      <label for="labelFloorFor">Min size applies to</label>
+      <select id="labelFloorFor">
+        <option value="hubs" id="labelFloorHubsOption" selected>hubs (degree ≥ 3)</option>
+        <option value="all">all nodes</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="hubDegree">Hub degree (at least)</label><output id="hubDegreeOut">3</output>
+      <input type="range" id="hubDegree" min="1" max="12" step="1" value="3">
+    </div>
+    <div class="row inline">
+      <label for="declutterLabels">Hide overlapping labels</label>
+      <input type="checkbox" id="declutterLabels">
+    </div>
+    <div class="row inline">
+      <label for="labelPriorityMode">Keep first</label>
+      <select id="labelPriorityMode">
+        <option value="degree" selected>higher degree</option>
+        <option value="none">earlier nodes</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="labelPadding">Gap between labels (screen px)</label><output id="labelPaddingOut">2</output>
+      <input type="range" id="labelPadding" min="0" max="20" step="1" value="2">
+    </div>
   </fieldset>
 
   <fieldset>
@@ -368,6 +398,14 @@
     <div class="row">
       <label for="highlightAlpha">Highlight alpha</label><output id="highlightAlphaOut">0.15</output>
       <input type="range" id="highlightAlpha" min="0" max="1" step="0.01" value="0.15">
+    </div>
+    <div class="row">
+      <label for="highlightLabelSize">Highlighted label size (screen px)</label><output id="highlightLabelSizeOut">0</output>
+      <input type="range" id="highlightLabelSize" min="0" max="30" step="1" value="0">
+    </div>
+    <div class="row">
+      <label for="highlightLabelDuration">Label grow time (ms)</label><output id="highlightLabelDurationOut">150</output>
+      <input type="range" id="highlightLabelDuration" min="0" max="1000" step="10" value="150">
     </div>
     <div class="row inline">
       <label for="gotoNode">Go to node</label>
@@ -614,14 +652,32 @@ function applyEdgeConfig() {
   });
 }
 
+/* Labels shrink with the view; "Min size" holds them at a size on screen as
+   it zooms out, for hubs (nodes of at least "Hub degree") or every node. Held labels crowd each other when
+   zoomed out, so "Hide overlapping labels" declutters them, keeping
+   higher-degree nodes' labels first (labelPriority). Degree functions are
+   re-run by the renderer whenever the graph changes.                       */
 function applyLabelConfig() {
+  const g = gjs.graph;
   gjs.renderer.setOpts({
     renderLabels: ui.renderLabels,
     labelPosition: ui.labelPosition,
     labelMargin: ui.labelMargin,
     minLabelSize: ui.minLabelSize,
+    declutterLabels: ui.declutterLabels,
+    labelPadding: ui.labelPadding,
   });
-  gjs.renderer.setDefaultNodeConfig({ labelScale: ui.labelScale });
+  gjs.renderer.setDefaultNodeConfig({
+    labelScale: ui.labelScale,
+    labelFloorSize: ui.labelFloorFor === "all"
+      ? ui.labelFloorSize
+      : node => (g.degree(node.id) >= ui.hubDegree ? ui.labelFloorSize : 0),
+    labelPriority: ui.labelPriorityMode === "degree" ? node => g.degree(node.id) : 0,
+  });
+  $("labelFloorHubsOption").textContent = `hubs (degree ≥ ${ui.hubDegree})`;
+  $("labelFloorFor").disabled = ui.labelFloorSize === 0;
+  $("hubDegree").disabled = ui.labelFloorSize === 0 || ui.labelFloorFor === "all";
+  $("labelPriorityMode").disabled = $("labelPadding").disabled = !ui.declutterLabels;
 }
 
 function applyViewConfig() {
@@ -629,7 +685,10 @@ function applyViewConfig() {
     background: ui.background,
     highlightFadeDuration: ui.highlightFade,
     highlightAlpha: ui.highlightAlpha,
+    highlightLabelSize: ui.highlightLabelSize,   // highlighted labels stay readable zoomed out
+    highlightLabelDuration: ui.highlightLabelDuration,   // separate from the fade
   });
+  $("highlightLabelDuration").disabled = ui.highlightLabelSize === 0;
   gjs.zoomTo(ui.zoom);
 }
 
@@ -766,8 +825,9 @@ function updateHover(id) {
 const SIM_IDS  = ["friction", "repulsion", "springStiffness", "springLength", "gravity", "cooling", "maxSpeed", "dt", "useBarnesHut", "theta", "maxDepth"];
 const NODE_IDS = ["radiusMode", "radius", "massMode", "mass", "colorMode", "nodeColor", "outlineColor", "outlineWidth"];
 const EDGE_IDS = ["renderEdges", "edgeColor", "edgeWidth", "edgeWidthMode", "scaleStrokes", "minEdgeWidth", "maxEdgeWidth"];
-const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize"];
-const VIEW_IDS = ["background", "zoom", "highlightFade", "highlightAlpha"];
+const LABEL_IDS = ["renderLabels", "labelPosition", "labelMargin", "labelScale", "minLabelSize",
+  "labelFloorSize", "labelFloorFor", "hubDegree", "declutterLabels", "labelPriorityMode", "labelPadding"];
+const VIEW_IDS = ["background", "zoom", "highlightFade", "highlightAlpha", "highlightLabelSize", "highlightLabelDuration"];
 
 for (const el of document.querySelectorAll("input, select")) {
   el.addEventListener("input", () => {

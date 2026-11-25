@@ -23,6 +23,7 @@ npm install @tang0226/graph-js
   - [Node charge](#node-charge)
   - [Node images](#node-images)
   - [Node labels](#node-labels)
+  - [Keeping labels readable](#keeping-labels-readable)
   - [Edge and outline widths](#edge-and-outline-widths)
   - [Opacity](#opacity)
 - [Running the animation](#running-the-animation)
@@ -147,6 +148,8 @@ const gjs = new GraphJS({
     labelMargin: 2,                 // gap between a node and its label, in simulation units
     minLabelSize: 6,                // labels smaller than this on screen (px) are hidden
     maxLabelSize: Infinity,         // labels stop growing at this size on screen (px)
+    declutterLabels: false,         // true hides labels that would overlap another (see "Keeping labels readable")
+    labelPadding: 2,                // space kept between decluttered labels on screen (px)
     scaleStrokes: true,             // edge and outline widths scale with zoom (see "Edge and outline widths")
     minEdgeWidth: 1,                // edges thinner than this on screen (px) fade out instead
     maxEdgeWidth: 8,                // edges stop growing at this width on screen (px)
@@ -155,6 +158,8 @@ const gjs = new GraphJS({
     highlightMode: "dim",           // how non-highlighted items are drawn: "dim" or "hide"
     highlightAlpha: 0.15,           // opacity of dimmed items, from 0 to 1
     highlightFadeDuration: 150,     // ms to fade fully in or out when highlighting changes; 0 for instant
+    highlightLabelSize: 0,          // highlighted nodes' labels are at least this size on screen (px); 0 for none
+    highlightLabelDuration: 150,    // ms for those labels to grow fully, or shrink back; 0 for instant
     imageCacheMB: 64,               // soft memory budget for cached node image sizes
     nodeConfig: {                   // default style for nodes (see "Configuring nodes and edges")
       color: "#ffffff",             // fill color
@@ -168,6 +173,8 @@ const gjs = new GraphJS({
       labelTextColor: "#000000",
       labelStrokeColor: "#ffffff",  // color of the stroke around the label's letters
       labelStrokeWidth: 0,          // stroke width, in simulation units; 0 for none (see "Node labels")
+      labelFloorSize: 0,            // the label never shrinks below this size on screen (px); 0 for none
+      labelPriority: 0,             // with declutterLabels, higher-priority labels win overlaps
     },
     edgeConfig: {                   // default style for edges
       color: "#000000",             // also used for the arrowhead
@@ -359,6 +366,8 @@ All the available settings:
 | | `labelTextColor` | `"#000000"` | |
 | | `labelStrokeColor` | `"#ffffff"` | color of the stroke around the label's letters |
 | | `labelStrokeWidth` | `0` | stroke width, in simulation units; `0` for none (see [Node labels](#node-labels)) |
+| | `labelFloorSize` | `0` | the label never shrinks below this size on screen (px) as the view zooms out; `0` for none (see [Keeping labels readable](#keeping-labels-readable)) |
+| | `labelPriority` | `0` | with `declutterLabels`, labels of higher priority win overlaps (see [Keeping labels readable](#keeping-labels-readable)) |
 | Renderer (edges) | `color` | `"#000000"` | also used for the arrowhead |
 | | `width` | `1` | in simulation units (see [Edge and outline widths](#edge-and-outline-widths)) |
 | | `arrow` | `null` | `null` follows the graph: arrows only when it's directed |
@@ -412,9 +421,10 @@ gjs.simulation.setDefaultNodeConfig({ radius: -5 });        // RangeError
 | Fields | Valid values |
 |---|---|
 | `mass` | above `0` |
-| `radius`, `charge`, `length`, `stiffness`, `outlineWidth`, `width`, `arrowSize`, `labelScale`, `labelStrokeWidth` | `0` or more |
+| `radius`, `charge`, `length`, `stiffness`, `outlineWidth`, `width`, `arrowSize`, `labelScale`, `labelStrokeWidth`, `labelFloorSize` | `0` or more |
 | `opacity` | `0` to `1` |
 | `bow` | any number; negative curves the other way |
+| `labelPriority` | any number |
 | `color`, `outlineColor`, `labelTextColor`, `labelStrokeColor` | a string |
 | `image` | a string, or `null` |
 | `label` | a string, a number, or `null` |
@@ -495,7 +505,7 @@ A node with a `label` of `null` or `""` has no label; `0` is drawn. `labelFont` 
 
 Labels scale with the view like the nodes do: `labelScale` is the font size in simulation units. Two renderer options keep them readable at the extremes:
 
-- `minLabelSize`: the renderer skips drawing labels at any font size below this threshold.
+- `minLabelSize`: the renderer skips drawing labels at any font size below this threshold. To keep important labels shown when zoomed out, see [Keeping labels readable](#keeping-labels-readable).
 - `maxLabelSize`: for large labels or high zoom levels, the renderer limits a label's canvas font size to this cap.
 
 To keep labels readable over edges and other nodes, give them a stroke in the background color:
@@ -514,6 +524,52 @@ gjs.renderer.setOpts({ renderLabels: false });                                  
 ```
 
 Labels are drawn on top of the nodes. When highlighting, a label fades with its node, and highlighted nodes are drawn over dimmed labels. A label stays visible while its node is just off the edge of the canvas.
+
+### Keeping labels readable
+
+Labels scale with the view, so zoomed out far enough, they all shrink below `minLabelSize` and disappear. To keep some readable, give them a size they don't shrink below on screen, in px:
+
+```js
+// Hubs keep their labels at 12px or more, however far you zoom out
+gjs.renderer.setDefaultNodeConfig({
+  labelFloorSize: node => (gjs.graph.degree(node.id) >= 10 ? 12 : 0),
+});
+// Highlighted nodes' labels grow to at least 14px
+gjs.renderer.setOpts({ highlightLabelSize: 14 });
+```
+
+`labelFloorSize` only stops a label from shrinking: zoomed in, the label still grows with the view as usual. The floor takes a label past `maxLabelSize`, and keeps it from being hidden by `minLabelSize`, as long as the floor itself isn't below `minLabelSize`. The label's stroke keeps its size relative to the text.
+
+`highlightLabelSize` does the same for highlighted nodes (see [Highlighting](#highlighting)). Labels grow to it as their nodes are highlighted and shrink back as they're unhighlighted, over `highlightLabelDuration` milliseconds (150 by default), which is separate from `highlightFadeDuration`, so labels can change size more slowly or quickly than nodes fade. Set it to `0` to change size instantly. A highlighted label that's already larger keeps its size.
+
+Labels held at a size on screen take up more of the graph the further you zoom out, so many of them will overlap. Turn on decluttering to hide labels, of any size, that would overlap another:
+
+```js
+gjs.renderer.setOpts({ declutterLabels: true });
+```
+
+Labels are placed one at a time, and each is hidden if it would overlap, or come within `labelPadding` px of, a label placed before it. They're placed in this order:
+
+1. Labels of higher `labelPriority`. It's `0` by default, and can be any number, or a function of the node:
+
+   ```js
+   gjs.renderer.setDefaultNodeConfig({ labelPriority: node => gjs.graph.degree(node.id) });
+   ```
+
+2. Labels that were shown in the last frame, so labels don't trade places as the view moves or the layout settles.
+3. The rest, in the order the nodes were added.
+
+Highlighting doesn't change that layout. Highlighted nodes' labels are placed over it, at their highlighted size. They hide the labels they overlap only while they're highlighted, and while they shrink back afterwards. So hovering over the graph shows the labels you point at, and the same labels as before come back as you move on.
+
+Highlighted labels are placed in the order their nodes were highlighted: the order they're listed in `setHighlight()`, then those added by later `addHighlight()` calls. List the most important node first, such as the hovered node before its neighbors:
+
+```js
+gjs.renderer.setHighlight({ nodes: [id, ...gjs.graph.neighbors(id)] });
+```
+
+Labels still shrinking back from a highlight that has ended come after them.
+
+Decluttering only compares labels with each other: labels can still be drawn over nodes and edges. Labels faded out completely by highlighting aren't drawn, but keep their place in the layout. Fitting the view (`fitView()` and `toCanvas({ fit: true })`) frames every label shown at the fitted zoom, at the size it's drawn at, before any are hidden by decluttering.
 
 ### Edge and outline widths
 
@@ -772,7 +828,7 @@ gjs.viewFitted();                       // the view fitView() aims for: { x, y, 
 gjs.viewFitted({ nodes: "alice" });     // ... for the same options, without the move ones
 ```
 
-Both glide the view there, by default over 600 ms with `"inOutCubic"` easing. They aim for where the graph or node is on every frame, so they land on a layout that's still settling, or a node that's still moving. `fitView()` frames the graph as `toCanvas({ fit: true })` does, including self-loops, bowed edges and the labels shown at the fitted zoom. `fitView()` returns `null` for an empty graph, `focusNode()` throws a `ReferenceError` for an unknown node, and both need an attached canvas.
+Both glide the view there, by default over 600 ms with `"inOutCubic"` easing. They aim for where the graph or node is on every frame, so they land on a layout that's still settling, or a node that's still moving. `fitView()` frames the graph as `toCanvas({ fit: true })` does, including self-loops, bowed edges and the labels shown at the fitted zoom, at the size they're drawn at there. `fitView()` returns `null` for an empty graph, `focusNode()` throws a `ReferenceError` for an unknown node, and both need an attached canvas.
 
 **Fitting some nodes.** `fitView()` frames every node unless you pick some with `nodes`, and centres them unless you pick others with `centerNodes`. Either takes one node id, an array (or `Set`, or other iterable) of ids, or a function that returns `true` for each node to pick. A node's label and self-loop are fitted with it, and so are the bowed edges between nodes picked. Nodes in `centerNodes` are always fitted too, so to frame a node's neighbourhood with the node in the middle:
 
@@ -1066,6 +1122,8 @@ How the rest is drawn comes from the renderer's `highlightMode` and `highlightAl
 gjs.renderer.setHighlight({ nodes: results, mode: "hide" });
 gjs.renderer.setOpts({ highlightMode: "dim", highlightAlpha: 0.3 });
 ```
+
+To keep highlighted nodes' labels readable when zoomed out, set `highlightLabelSize` to a size in screen px; their labels grow to at least that size (see [Keeping labels readable](#keeping-labels-readable)).
 
 Changes fade rather than switching instantly, so a quickly moving hover highlight doesn't flash the whole canvas. Each item takes up to `highlightFadeDuration` milliseconds to reach its new opacity; in `"hide"` mode, items fade out until they're invisible. Set the option to `0` to switch instantly.
 

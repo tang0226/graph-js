@@ -1206,10 +1206,30 @@ describe("Renderer: labels", () => {
       assert.equal(r.opts.labelMargin, 2);
       assert.equal(r.opts.minLabelSize, 6);
       assert.equal(r.opts.maxLabelSize, Infinity);
+      assert.equal(r.opts.declutterLabels, false);
+      assert.equal(r.opts.labelPadding, 2);
+      assert.equal(r.opts.highlightLabelSize, 0);
+      assert.equal(r.opts.highlightLabelDuration, 150);
       const style = r.nodeStyles[0];
       assert.equal(style.label, null);
       assert.equal(style.renderLabel, true);
       assert.equal(style.labelScale, 15);
+      assert.equal(style.labelFloorSize, 0);
+      assert.equal(style.labelPriority, 0);
+    });
+
+    test("declutter and highlight size options are checked", () => {
+      const { r } = scene(false, []);
+      assert.throws(() => r.setOpts({ declutterLabels: "yes" }), /^TypeError: Renderer: `declutterLabels` must be a boolean$/);
+      assert.throws(() => r.setOpts({ labelPadding: -1 }), RangeError);
+      assert.throws(() => r.setOpts({ labelPadding: Infinity }), RangeError);
+      assert.throws(() => r.setOpts({ highlightLabelSize: -1 }), RangeError);
+      assert.throws(() => scene(false, [], { opts: { highlightLabelSize: NaN } }), RangeError);
+      assert.throws(() => r.setOpts({ highlightLabelDuration: -1 }), RangeError);
+      assert.throws(() => r.setOpts({ highlightLabelDuration: "fast" }), TypeError);
+      r.setOpts({ declutterLabels: true, labelPadding: 0, highlightLabelSize: 14, highlightLabelDuration: 0 });
+      assert.deepEqual([r.opts.declutterLabels, r.opts.labelPadding, r.opts.highlightLabelSize, r.opts.highlightLabelDuration],
+        [true, 0, 14, 0]);
     });
 
     test("negative label sizes are rejected, in the constructor and setOpts", () => {
@@ -1520,6 +1540,290 @@ describe("Renderer: labels", () => {
       r.render();
       assert.deepEqual(measures(ctx).map(([t]) => t), ["a", "b", "c"]);
       assert.deepEqual(texts(ctx).map(([t]) => t).sort(), ["a", "b", "c"]);
+    });
+  });
+
+  // Each label drawn, by text, with its on-screen size
+  const sizes = ctx => Object.fromEntries(opsNamed(ctx, "fillText").map(op => [op[1], r2(op[4].size)]));
+
+  describe("floors", () => {
+    test("labelFloorSize holds a label's size as the view zooms out, but not in", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelFloorSize: 12 } });
+      r.view.zoom = 0.2;                              // 3px scaled, under minLabelSize
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 12, b: 12 });
+      ctx.ops.length = 0;
+      r.view.zoom = 2;
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 30, b: 30 }, "grows with the zoom past the floor");
+    });
+
+    test("a floor is per node, and can be a function", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelFloorSize: n => (n.id === "a" ? 12 : 0) } });
+      r.view.zoom = 0.2;
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 12 });
+    });
+
+    test("a floor takes a label past maxLabelSize", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelFloorSize: 12 }, opts: { maxLabelSize: 10 } });
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 12, b: 12 });
+    });
+
+    test("a floor below minLabelSize doesn't keep a label shown", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelFloorSize: 4 } });
+      r.view.zoom = 0.2;
+      r.render();
+      assert.deepEqual(sizes(ctx), {});
+    });
+
+    test("a label with a labelScale of 0 is drawn at its floor", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelScale: 0, labelFloorSize: 9 } });
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 9, b: 9 });
+    });
+
+    test("a floored label's stroke scales with it", () => {
+      const { r, ctx } = lscene({ nodeCfg: { labelFloorSize: 12, labelStrokeWidth: 3 } });
+      r.view.zoom = 0.2;
+      r.render();
+      assert.deepEqual(opsNamed(ctx, "strokeText").map(([, , , , s]) => r2(s.width)), [2.4, 2.4], "3 * 12 / 15");
+    });
+
+    test("a floored label is culled at its floored size", () => {
+      const { sim, r, ctx } = lscene({ nodeCfg: { labelFloorSize: 30 } });
+      r.view.zoom = 0.5;                              // view spans y -600..600
+      sim.nodes.get("a").y = -680;                    // label from -658: 7.5px scaled ends at -643, 30px at -598
+      sim.nodes.get("b").y = -720;                    // 30px label ends at -638
+      r.render();
+      assert.deepEqual(Object.keys(sizes(ctx)), ["a"]);
+    });
+  });
+
+  describe("highlighted label size", () => {
+    test("highlighted labels grow to highlightLabelSize; the rest keep theirs", () => {
+      const { r, ctx } = lscene({ opts: { highlightLabelSize: 20, highlightFadeDuration: 0, highlightLabelDuration: 0 } });
+      r.setHighlight({ nodes: ["a"] });
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 20, b: 15 });
+      ctx.ops.length = 0;
+      r.view.zoom = 0.2;
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 20 }, "shown zoomed out, where b is too small");
+    });
+
+    test("a label already larger keeps its size", () => {
+      const { r, ctx } = lscene({ opts: { highlightLabelSize: 10, highlightFadeDuration: 0, highlightLabelDuration: 0 } });
+      r.setHighlight({ nodes: ["a"] });
+      r.render();
+      assert.deepEqual(sizes(ctx), { a: 15, b: 15 });
+    });
+
+    test("labels grow over highlightLabelDuration, and shrink back", () => {
+      const { r, ctx } = lscene({ opts: { highlightLabelSize: 25, highlightFadeDuration: 100, highlightLabelDuration: 100 } });
+      const at = time => { ctx.ops.length = 0; r.render(time); return sizes(ctx).a; };
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual([at(1000), at(1050), at(1100)], [15, 20, 25]);
+      assert.equal(r.isFading(), false);
+      r.clearHighlight();
+      assert.deepEqual([at(2000), at(2050), at(2100)], [25, 20, 15]);
+    });
+
+    test("labels change size over their own duration, apart from the fade", () => {
+      const { r, ctx } = lscene({ opts: { highlightLabelSize: 25, highlightFadeDuration: 100, highlightLabelDuration: 400 } });
+      const at = time => { ctx.ops.length = 0; r.render(time); return sizes(ctx).a; };
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual([at(1000), at(1100), at(1200)], [15, 17.5, 20], "a quarter of the way per 100 ms");
+      assert.equal(r.isFading(), true, "the alphas are done, but the label isn't");
+      assert.deepEqual([at(1400), at(1500)], [25, 25]);
+      assert.equal(r.isFading(), false);
+
+      r.setOpts({ highlightLabelDuration: 0 });
+      r.clearHighlight();
+      assert.equal(at(2000), 15, "0 changes size at once");
+      assert.equal(r.isFading(), true, "while the alphas still fade");
+    });
+
+    test("a label hidden for being small appears as it grows past minLabelSize", () => {
+      const { r, ctx } = lscene({ opts: { highlightLabelSize: 13, highlightFadeDuration: 100, highlightLabelDuration: 100 } });
+      r.view.zoom = 0.2;                              // 3px scaled
+      const at = time => { ctx.ops.length = 0; r.render(time); return sizes(ctx).a; };
+      r.setHighlight({ nodes: ["a"] });
+      assert.deepEqual([at(0), at(20), at(40), at(100)], [undefined, undefined, 7, 13]);
+    });
+
+    test("exports draw highlighted labels at the size they settle at", () => {
+      const { r } = lscene({ opts: { highlightLabelSize: 25, highlightFadeDuration: 100, highlightLabelDuration: 100 } });
+      r.setHighlight({ nodes: ["a"] });
+      r.render(0);
+      const target = r.toCanvas({ canvas: makeCanvas() });
+      assert.equal(sizes(target.ctx).a, 25);
+    });
+  });
+
+  describe("decluttering", () => {
+    /* b is moved to 5 world units right of a, so at zoom 1 their 7.5px wide
+       labels overlap: a's spans canvas x 296.25..303.75, b's 301.25..308.75. */
+    function dscene({ nodeCfg, opts, gap = 5 } = {}) {
+      const s = lscene({ nodeCfg, opts: { declutterLabels: true, ...opts } });
+      s.sim.nodes.get("b").x = -100 + gap;
+      return s;
+    }
+    const drawn = ctx => opsNamed(ctx, "fillText").map(([, t]) => t).sort();
+
+    test("is off by default: overlapping labels are all drawn", () => {
+      const { r, ctx } = dscene({ opts: { declutterLabels: false } });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a", "b"]);
+    });
+
+    test("hides a label overlapping one placed before it", () => {
+      const { r, ctx } = dscene();
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a"]);
+    });
+
+    test("labels apart from each other are all drawn", () => {
+      const { r, ctx } = dscene({ gap: 200 });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a", "b"]);
+    });
+
+    test("labelPadding keeps labels at least that far apart", () => {
+      // 10 apart: a's label ends at 303.75, b's starts at 306.25, 2.5 later
+      const run = labelPadding => {
+        const { r, ctx } = dscene({ gap: 10, opts: { labelPadding } });
+        r.render();
+        return drawn(ctx);
+      };
+      assert.deepEqual(run(2), ["a", "b"]);
+      assert.deepEqual(run(3), ["a"]);
+    });
+
+    test("labels of higher labelPriority are placed first", () => {
+      const { r, ctx } = dscene({ nodeCfg: { labelPriority: n => (n.id === "b" ? 1 : 0) } });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["b"]);
+    });
+
+    test("highlighted nodes' labels are placed before any priority", () => {
+      const { r, ctx } = dscene({
+        nodeCfg: { labelPriority: n => (n.id === "b" ? 5 : 0) }, opts: { highlightFadeDuration: 0 },
+      });
+      r.setHighlight({ nodes: ["a"] });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a"]);
+    });
+
+    test("highlighted labels are placed in the order their nodes were highlighted", () => {
+      // a comes first by slot, and by priority, but b was highlighted first
+      const { r, ctx } = dscene({
+        nodeCfg: { labelPriority: n => (n.id === "a" ? 5 : 0) }, opts: { highlightFadeDuration: 0 },
+      });
+      const at = () => { ctx.ops.length = 0; r.render(); return drawn(ctx); };
+      r.setHighlight({ nodes: ["b", "a"] });
+      assert.deepEqual(at(), ["b"]);
+      r.setHighlight({ nodes: ["a", "b"] });
+      assert.deepEqual(at(), ["a"]);
+      r.clearHighlight({ nodes: ["a"] }).addHighlight({ nodes: ["a"] });
+      assert.deepEqual(at(), ["b"], "a, highlighted again, now comes after b");
+      r.addHighlight({ nodes: ["b"] });
+      assert.deepEqual(at(), ["b"], "highlighting b again keeps its place");
+    });
+
+    test("a highlighted label is placed before one shrinking back", () => {
+      const { r, ctx } = dscene({ opts: { highlightFadeDuration: 100, highlightLabelDuration: 100, highlightLabelSize: 20 } });
+      const at = time => { ctx.ops.length = 0; r.render(time); return drawn(ctx); };
+      r.setHighlight({ nodes: ["a"] });
+      at(0);
+      assert.deepEqual(at(100), ["a"]);
+      r.setHighlight({ nodes: ["b"] });
+      at(200);
+      assert.deepEqual(at(220), ["b"], "not a, though a is still shrinking and comes first by slot");
+    });
+
+    test("labels hidden by a highlight come back when it ends", () => {
+      // a wins by slot; highlighting b shows b over it, until b is unhighlighted
+      const { r, ctx } = dscene({ opts: { highlightFadeDuration: 0 } });
+      const at = () => { ctx.ops.length = 0; r.render(); return drawn(ctx); };
+      assert.deepEqual(at(), ["a"]);
+      r.setHighlight({ nodes: ["b"] });
+      assert.deepEqual(at(), ["b"]);
+      r.clearHighlight();
+      assert.deepEqual(at(), ["a"], "not b, though b was shown last");
+    });
+
+    test("a highlight only hides the labels its labels overlap", () => {
+      const { r, ctx } = dscene({ gap: 200, opts: { highlightFadeDuration: 0, highlightLabelDuration: 0, highlightLabelSize: 30 } });
+      r.setHighlight({ nodes: ["a"] });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a", "b"]);
+    });
+
+    test("a label shrinking back from a highlight covers what it overlaps until it's done", () => {
+      // 20 apart: a's 7.5px wide label clears b's, but at 57.5px (halfway
+      // back from 100px), it comes within 2px of it
+      const { r, ctx } = dscene({ gap: 20, opts: { highlightFadeDuration: 100, highlightLabelDuration: 100, highlightLabelSize: 100 } });
+      const at = time => { ctx.ops.length = 0; r.render(time); return drawn(ctx); };
+      r.setHighlight({ nodes: ["a"] });
+      at(0);
+      assert.deepEqual(at(100), ["a"]);
+      r.clearHighlight();
+      at(200);
+      assert.deepEqual(at(250), ["a"]);
+      assert.deepEqual(at(300), ["a", "b"]);
+    });
+
+    test("among equals, a label already shown keeps its place", () => {
+      const { r, ctx } = dscene({ nodeCfg: { labelPriority: n => (n.id === "b" ? 1 : 0) } });
+      r.render();
+      r.setDefaultNodeConfig({ labelPriority: 0 });
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(drawn(ctx), ["b"], "not a, though a comes first by slot");
+    });
+
+    test("a label already shown keeps its place when slots shift", () => {
+      // c overlaps b; a is off screen. Removing a moves b and c down a
+      // slot, where b would come first by slot.
+      const { g, sim, r, ctx } = lscene({
+        nodeCfg: { labelPriority: n => (n.id === "c" ? 1 : 0) }, opts: { declutterLabels: true },
+      });
+      g.addNode({ id: "c" });
+      r.sync();
+      Object.assign(sim.nodes.get("c"), { x: 105, y: 0 });
+      sim.nodes.get("a").x = 1000;
+      r.render();
+      assert.deepEqual(drawn(ctx), ["c"]);
+      r.setDefaultNodeConfig({ labelPriority: 0 });
+      g.removeNode("a");
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(drawn(ctx), ["c"]);
+    });
+
+    test("labels are placed at their highlighted size", () => {
+      // 20 apart: the 7.5px wide labels clear each other, but a's 80px label
+      // (40 wide) reaches b's
+      const { r, ctx } = dscene({ gap: 20, opts: { highlightLabelSize: 80, highlightFadeDuration: 0, highlightLabelDuration: 0 } });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a", "b"]);
+      r.setHighlight({ nodes: ["a"] });
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a"]);
+    });
+
+    test("can be turned on and off with setOpts", () => {
+      const { r, ctx } = dscene({ opts: { declutterLabels: false } });
+      r.setOpts({ declutterLabels: true });
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a"]);
+      r.setOpts({ declutterLabels: false });
+      ctx.ops.length = 0;
+      r.render();
+      assert.deepEqual(drawn(ctx), ["a", "b"]);
     });
   });
 });
@@ -1888,7 +2192,9 @@ describe("Renderer: style config checks", () => {
       [{ image: 5 }, TypeError], [{ label: NaN }, TypeError], [{ label: {} }, TypeError],
       [{ renderLabel: "no" }, TypeError], [{ labelScale: -1 }, RangeError], [{ labelScale: NaN }, RangeError],
       [{ labelTextColor: 0 }, TypeError], [{ labelStrokeColor: false }, TypeError],
-      [{ labelStrokeWidth: -2 }, RangeError],
+      [{ labelStrokeWidth: -2 }, RangeError], [{ labelFloorSize: -1 }, RangeError],
+      [{ labelFloorSize: Infinity }, RangeError], [{ labelPriority: NaN }, RangeError],
+      [{ labelPriority: "high" }, TypeError],
     ];
     for (const [cfg, E] of nodeBad) {
       assert.throws(() => r.setDefaultNodeConfig(cfg), E, JSON.stringify(cfg));
@@ -1921,6 +2227,7 @@ describe("Renderer: style config checks", () => {
     const { r } = scene(false, [["a", "b"]]);
     assert.doesNotThrow(() => r.setNodeConfig("a", {
       outlineWidth: 0, image: null, label: 0, labelScale: 0, labelStrokeWidth: 0, renderLabel: false,
+      labelFloorSize: 0, labelPriority: -5,
     }));
     assert.doesNotThrow(() => r.setEdgeConfig("a", "b", { width: 0, arrow: null, arrowSize: 0, bow: -14 }));
     assert.doesNotThrow(() => r.setNodeConfig("a", { color: undefined }), "undefined isn't checked");
@@ -1940,6 +2247,7 @@ describe("Renderer: style config checks", () => {
     r.setNodeConfig("a", {
       color: () => 5, outlineWidth: () => -3, image: () => 7, label: () => NaN,
       renderLabel: () => 0, labelScale: () => NaN, labelStrokeWidth: () => -1,
+      labelFloorSize: () => -4, labelPriority: () => "high",
     });
     r.setEdgeConfig("a", "b", { width: () => -2, arrow: () => 1, arrowSize: () => "big", bow: () => Infinity });
     r.sync();
@@ -1951,6 +2259,8 @@ describe("Renderer: style config checks", () => {
     assert.equal(a.renderLabel, true);
     assert.equal(a.labelScale, 15);
     assert.equal(a.labelStrokeWidth, 0);
+    assert.equal(a.labelFloorSize, 0);
+    assert.equal(a.labelPriority, 0);
     const e = r.edgeStyles[0];
     assert.deepEqual([e.width, e.arrow, e.arrowSize, e.bow], [0, true, 10, 14], "arrow falls back to following the graph");
   });
@@ -2863,6 +3173,39 @@ describe("Renderer: export", () => {
       assert.equal(r2(size), 15);
       assert.ok(y + size <= 1000, "the label fits");
       assert.ok(arcs(target.ctx)[0][2] > 450, "zoomed past what uncapped labels would allow");
+    });
+
+    test("labels held at a floor are fitted at the size they're drawn at", () => {
+      /* At full size, the labels fit a zoom of 100 / 57. There, 40px floored
+         labels are taller, so the zoom must come down until the graph is
+         42 * zoom + 40 high: zoom 60 / 42 = 1.43. */
+      const { r } = scene(false, [], { nodeCfg: { label: n => n.id, labelFloorSize: 40 } });
+      const target = r.toCanvas({ canvas: out(), fit: true, padding: 0, width: 1000, height: 100 });
+      const [[y, size]] = opsNamed(target.ctx, "fillText").map(([, , , ty, s]) => [ty, s.size]);
+      assert.equal(r2(size), 40);
+      assert.ok(y + size <= 100 + 1e-6, "the label fits");
+      assert.ok(y + size > 99.99, "and fills the height");
+      assert.equal(arcs(target.ctx)[0][2], r2(20 * 60 / 42));
+    });
+
+    test("highlighted labels are fitted at highlightLabelSize", () => {
+      const { sim, r } = scene(false, [], { nodeCfg: { label: n => n.id }, opts: { highlightLabelSize: 40 } });
+      Object.assign(sim.nodes.get("a"), { x: 0, y: -1000 });
+      Object.assign(sim.nodes.get("b"), { x: 0, y: 1000 });
+      // Fitting the 600 px canvas, labels are about 4px, too small to show,
+      // so the graph is 2040 high. With b's held at 40px, it's 2042 * zoom + 40.
+      assert.ok(Math.abs(r.viewFitted({ padding: 0 }).zoom - 600 / 2040) < 1e-9);
+      r.setHighlight({ nodes: ["b"] });               // fitted as it'll be once the fade ends
+      const view = r.viewFitted({ padding: 0 });
+      assert.ok(Math.abs(view.zoom - 560 / 2042) < 1e-6, String(view.zoom));
+    });
+
+    test("floored labels too wide for any zoom are fitted at their full size instead", () => {
+      // 40 letters at 100px are 2000 wide. At full size (300 wide), the
+      // labels span 500 world units, so the graph fits at zoom 2.
+      const { r } = scene(false, [], { nodeCfg: { label: () => "x".repeat(40), labelFloorSize: 100 } });
+      const view = r.viewFitted({ padding: 0 });
+      assert.equal(view.zoom, 800 / 500);
     });
 
     test("self-loops and bowed edges are included", () => {

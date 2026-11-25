@@ -26,9 +26,12 @@ const stepAlphas = (alphas, flags, dim, step) => {
 
 
 /**
- * Each element's alpha before a re-slot, keyed by its style object, which
- * survives re-slotting. `null` when alphas don't need carrying over.
- * @typedef {{ nodeAlpha: Map<object, number>, edgeAlpha: Map<object, number> } | null} HighlightSnapshot
+ * Each element's alpha, and each node's label growth, before a re-slot, keyed
+ * by its style object, which survives re-slotting. `null` when they don't
+ * need carrying over.
+ * @typedef {{
+ *  nodeAlpha: Map<object, number>, edgeAlpha: Map<object, number>, labelGrowth: Map<object, number>,
+ * } | null} HighlightSnapshot
  */
 
 
@@ -36,6 +39,9 @@ const stepAlphas = (alphas, flags, dim, step) => {
  * Highlight state for the renderer: which nodes and edges are highlighted, a
  * flag per slot (parallel to the simulation's node and edge lists), and each
  * slot's current drawing alpha, which fades toward its target over time.
+ * Each node slot also has a label growth: how far its label has grown toward
+ * its highlighted size. It eases from 0 to 1 as the node is highlighted, and
+ * back as it isn't, over a duration of its own.
  *
  * Slots are resolved by the renderer, which passes them in, so this holds no
  * reference to the graph or simulation.
@@ -93,6 +99,16 @@ export class Highlighter {
    * @returns {Float64Array}
    */
   get edgeAlpha() { return this._edgeAlpha; }
+
+
+  /** @private @type {Float64Array} */
+  _labelGrowth = new Float64Array(0);
+  /**
+   * How far each node slot's label has grown toward its highlighted size,
+   * from 0 to 1, eased toward its highlight flag alongside the alphas
+   * @returns {Float64Array}
+   */
+  get labelGrowth() { return this._labelGrowth; }
 
 
   /**
@@ -213,18 +229,20 @@ export class Highlighter {
 
 
   /**
-   * Records each element's alpha before a re-slot, so survivors keep theirs.
-   * Only needed while something is highlighted or fading; otherwise every
-   * alpha equals its target anyway.
+   * Records each element's alpha and label growth before a re-slot, so
+   * survivors keep theirs. Only needed while something is highlighted or
+   * fading; otherwise every one equals its target anyway.
    * @param {ReadonlyArray<object>} nodeStyles - node style objects, in slot order
    * @param {ReadonlyArray<object>} edgeStyles - edge style objects, in slot order
-   * @returns {HighlightSnapshot} alphas keyed by style object, or `null`
+   * @returns {HighlightSnapshot} alphas and growth keyed by style object,
+   *    or `null`
    */
   snapshot(nodeStyles, edgeStyles) {
     if (!this._fadeActive && !this.has()) return null;
     return {
       nodeAlpha: new Map(nodeStyles.map((s, i) => [s, this._nodeAlpha[i]])),
       edgeAlpha: new Map(edgeStyles.map((s, i) => [s, this._edgeAlpha[i]])),
+      labelGrowth: new Map(nodeStyles.map((s, i) => [s, this._labelGrowth[i]])),
     };
   }
 
@@ -246,10 +264,10 @@ export class Highlighter {
 
 
   /**
-   * Rebuilds the per-slot flags and alphas after the simulation's slots
-   * changed. Survivors keep their alpha from `snap`; new elements start at
+   * Rebuilds the per-slot flags, alphas and label growth after the simulation's
+   * slots changed. Survivors keep theirs from `snap`; new elements start at
    * their target.
-   * @param {HighlightSnapshot} snap - alphas from `snapshot()`
+   * @param {HighlightSnapshot} snap - alphas and growth from `snapshot()`
    * @param {ReadonlyArray<{ id: NodeId }>} nodeList - the simulation's nodes, in slot order
    * @param {ReadonlyArray<GraphEdge>} edgeList - the simulation's edges, in slot order
    * @param {ReadonlyArray<object>} nodeStyles - node style objects, in slot order
@@ -273,6 +291,10 @@ export class Highlighter {
     for (const [i, style] of nodeStyles.entries()) {
       this._nodeAlpha[i] = snap?.nodeAlpha.get(style) ?? (this._nodeState[i] ? 1 : dim);
     }
+    this._labelGrowth = new Float64Array(nodeStyles.length);
+    for (const [i, style] of nodeStyles.entries()) {
+      this._labelGrowth[i] = snap?.labelGrowth.get(style) ?? this._nodeState[i];
+    }
     this._edgeAlpha = new Float64Array(edgeStyles.length);
     for (const [i, style] of edgeStyles.entries()) {
       this._edgeAlpha[i] = snap?.edgeAlpha.get(style) ?? (this._edgeState[i] ? 1 : dim);
@@ -282,41 +304,50 @@ export class Highlighter {
 
 
   /**
-   * Every alpha as it will be once fading ends, leaving the current alphas
-   * alone. The current arrays when no fade is running, otherwise new ones.
+   * Every alpha and label growth as it will be once fading ends, leaving the
+   * current ones alone. The current arrays when no fade is running,
+   * otherwise new ones.
    * @param {HighlightMode} mode - highlight mode
    * @param {number} alpha - alpha of dimmed elements
-   * @returns {{ nodeAlpha: Float64Array, edgeAlpha: Float64Array }} alphas,
-   *    parallel to `nodeState` and `edgeState`
+   * @returns {{ nodeAlpha: Float64Array, edgeAlpha: Float64Array, labelGrowth: Float64Array }}
+   *    alphas, parallel to `nodeState` and `edgeState`, and label growth,
+   *    parallel to `nodeState`
    */
   settledAlphas(mode, alpha) {
-    if (!this._fadeActive) return { nodeAlpha: this._nodeAlpha, edgeAlpha: this._edgeAlpha };
+    if (!this._fadeActive) return { nodeAlpha: this._nodeAlpha, edgeAlpha: this._edgeAlpha, labelGrowth: this._labelGrowth };
     const dim = this.dimmedAlpha(mode, alpha);
     return {
       nodeAlpha: Float64Array.from(this._nodeState, f => (f ? 1 : dim)),
       edgeAlpha: Float64Array.from(this._edgeState, f => (f ? 1 : dim)),
+      labelGrowth: Float64Array.from(this._nodeState),
     };
   }
 
 
   /**
-   * Advances every alpha toward its target.
+   * Advances every alpha and label growth toward its target.
    * @param {number} time - frame timestamp in milliseconds
    * @param {number} duration - milliseconds to fade fully between 0 and 1;
    *    0 switches instantly
    * @param {HighlightMode} mode - highlight mode
    * @param {number} alpha - alpha of dimmed elements
+   * @param {number} [growthDuration=duration] - milliseconds for a label
+   *    growth to ease fully between 0 and 1; 0 sets it to its target, so a
+   *    fade isn't drawn out by growth nothing uses
    * @returns {void}
    */
-  step(time, duration, mode, alpha) {
+  step(time, duration, mode, alpha, growthDuration = duration) {
     const dt = this._lastFrameTime === null ? 0 : time - this._lastFrameTime;
     this._lastFrameTime = time;
     if (!this._fadeActive) return;
 
-    const stepSize = duration > 0 ? Math.max(dt, 0) / duration : Infinity;
+    /** @type {(ms: number) => number} largest change in a step of this frame, for a fade taking `ms` */
+    const stepFor = ms => (ms > 0 ? Math.max(dt, 0) / ms : Infinity);
+    const stepSize = stepFor(duration);
     const dim = this.dimmedAlpha(mode, alpha);
     const nodesSettled = stepAlphas(this._nodeAlpha, this._nodeState, dim, stepSize);
     const edgesSettled = stepAlphas(this._edgeAlpha, this._edgeState, dim, stepSize);
-    if (nodesSettled && edgesSettled) this._fadeActive = false;
+    const growthSettled = stepAlphas(this._labelGrowth, this._nodeState, 0, stepFor(growthDuration));
+    if (nodesSettled && edgesSettled && growthSettled) this._fadeActive = false;
   }
 }

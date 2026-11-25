@@ -63,12 +63,16 @@ export const RENDERER_DEFAULTS = Object.freeze({
   labelMargin: 2,
   minLabelSize: 6,
   maxLabelSize: Infinity,
+  declutterLabels: false,
+  labelPadding: 2,
   scaleStrokes: true,
   minEdgeWidth: 1,
   maxEdgeWidth: 8,
   highlightMode: "dim",
   highlightAlpha: 0.15,
   highlightFadeDuration: 150,
+  highlightLabelSize: 0,
+  highlightLabelDuration: 150,
   imageReferrerPolicy: "no-referrer",
   crossOrigin: "anonymous",
   imageCacheMB: 64,
@@ -90,6 +94,8 @@ export const NODE_STYLE_DEFAULTS = Object.freeze({
   labelTextColor: "#000000",
   labelStrokeColor: "#ffffff",
   labelStrokeWidth: 0,
+  labelFloorSize: 0,
+  labelPriority: 0,
 });
 
 /**
