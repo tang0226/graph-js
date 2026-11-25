@@ -1,22 +1,22 @@
-/** @import { NodeData, NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
-/** @import { Canvas, View, ViewFittedOpts, ExportOpts, ExportBlobOpts } from './typedefs/renderer.js' */
-/** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from './typedefs/graphjs.js' */
-/** @import { GraphJSEventMap, GraphJSEventType } from './typedefs/graphjs.js' */
-/** @import { ViewMoveOpts, FitViewOpts, FocusNodeOpts } from './typedefs/graphjs.js' */
-/** @import { TweenValue, TweenUnit, TweenOpts } from './typedefs/tween.js' */
-/** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
+/** @import { NodeData, NodeId, GraphNode, GraphEdge } from '../typedefs/graph.js' */
+/** @import { Canvas, View, ViewFittedOpts, ExportOpts, ExportBlobOpts } from '../typedefs/renderer.js' */
+/** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from '../typedefs/graphjs.js' */
+/** @import { GraphJSEventMap, GraphJSEventType } from '../typedefs/graphjs.js' */
+/** @import { ViewMoveOpts, FitViewOpts, FocusNodeOpts } from '../typedefs/graphjs.js' */
+/** @import { TweenValue, TweenUnit, TweenOpts } from '../typedefs/tween.js' */
+/** @import { InteractionOpts, InteractionOptsInput } from '../typedefs/interaction.js' */
 
 
-import { Graph } from "./graph.js";
-import { Simulation } from "./simulation.js";
-import { Renderer } from "./renderer.js";
-import { Tween } from "./tween.js";
+import { Graph } from "../graph.js";
+import { Simulation } from "../simulation/simulation.js";
+import { Renderer } from "../renderer/renderer.js";
+import { Tween } from "../tween.js";
 import { Interaction } from "./interaction.js";
-import { Emitter } from "./emitter.js";
-import { HookRegistry } from "./hook-registry.js";
+import { Emitter } from "../shared/emitter.js";
+import { HookRegistry } from "../shared/hook-registry.js";
 import { viewPath } from "./view-path.js";
-import { checkKnownKeys, checkEach, checkNumber, checkOneOf } from "./validate.js";
-import { keysOf, now, readNodeSelection } from "./utils.js";
+import { checkKnownKeys, checkEach, checkNumber, checkOneOf } from "../shared/validate.js";
+import { keysOf, now, readNodeSelection } from "../shared/utils.js";
 
 
 /**

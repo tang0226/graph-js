@@ -7,7 +7,7 @@ import { Simulation } from "@tang0226/graph-js/simulation";
 import { Tween, easings } from "@tang0226/graph-js/tween";
 // Internal, so not a package subpath: imported by path to check it stays DOM-free
 // for the headless layers that will extend it
-import { Emitter } from "../types/emitter.js";
+import { Emitter } from "../types/shared/emitter.js";
 
 const graph = new Graph({ directed: false });
 

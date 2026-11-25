@@ -1,4 +1,4 @@
-import { growI32 } from "./utils.js";
+import { growI32 } from "../shared/utils.js";
 
 
 /**

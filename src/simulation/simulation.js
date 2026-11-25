@@ -1,32 +1,32 @@
 /**
- * @import { Graph } from './graph.js'
+ * @import { Graph } from '../graph.js'
  */
-/** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
+/** @import { NodeId, GraphNode, GraphEdge } from '../typedefs/graph.js' */
 /**
  * @import {
  *  SimNodeConfig, SimEdge, SimEdgeConfig,
  *  SimOpts, SimOptsInput,
  *  SimEventMap, SimEventType, SimForce, SimConstraint,
- * } from './typedefs/simulation.js'
+ * } from '../typedefs/simulation.js'
  */
 /**
  * @import {
  *  ResolvedSimNodeConfig, ResolvedSimNodeAccessors,
  *  ResolvedSimEdgeConfig, ResolvedSimEdgeAccessors,
- * } from './typedefs/internal/simulation.js'
+ * } from '../typedefs/internal/simulation.js'
  */
 
 import { BarnesHutContext, checkBarnesHutOpts } from "./barnes-hut.js";
-import { ConfigCascade } from "./config-cascade.js";
+import { ConfigCascade } from "../shared/config-cascade.js";
 import { CollisionGrid } from "./collision-grid.js";
-import { Emitter } from "./emitter.js";
-import { HookRegistry } from "./hook-registry.js";
-import { keysOf } from "./utils.js";
-import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "./defaults.js";
+import { Emitter } from "../shared/emitter.js";
+import { HookRegistry } from "../shared/hook-registry.js";
+import { keysOf } from "../shared/utils.js";
+import { SIM_DEFAULTS, SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../shared/defaults.js";
 import {
   BOOLEAN_FIELD, checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, numberField,
-} from "./validate.js";
-/** @import { FieldRule } from './validate.js' */
+} from "../shared/validate.js";
+/** @import { FieldRule } from '../shared/validate.js' */
 
 
 /** Every simulation option name, including the nested config and Barnes-Hut options */

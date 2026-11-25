@@ -1,7 +1,7 @@
 /** @import {NodeId, NodeData, GraphNode, GraphEdge, EdgeDirection, GraphEventMap, GraphEventType} from './typedefs/graph.js' */
 
-import { Emitter } from "./emitter.js";
-import { keysOf, isPlainObject } from "./utils.js";
+import { Emitter } from "./shared/emitter.js";
+import { keysOf, isPlainObject } from "./shared/utils.js";
 
 
 /**

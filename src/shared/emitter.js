@@ -1,4 +1,4 @@
-/** @import { EmitterEvent, EmitterListener } from './typedefs/emitter.js' */
+/** @import { EmitterEvent, EmitterListener } from '../typedefs/emitter.js' */
 
 
 /**

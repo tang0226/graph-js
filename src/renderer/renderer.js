@@ -1,10 +1,10 @@
-/** @import { Graph } from './graph.js' */
-/** @import { NodeId, GraphNode, GraphEdge } from './typedefs/graph.js' */
+/** @import { Graph } from '../graph.js' */
+/** @import { NodeId, GraphNode, GraphEdge } from '../typedefs/graph.js' */
 /**
  * @import {
  *  ResolvedNodeStyleConfig, ResolvedEdgeStyleConfig,
  *  ResolvedNodeStyleAccessors, ResolvedEdgeStyleAccessors, EdgeLayout, LabelBox, Bounds,
- * } from './typedefs/internal/renderer.js'
+ * } from '../typedefs/internal/renderer.js'
  */
 /**
  * @import {
@@ -14,24 +14,24 @@
  *  RendererHookType, RendererHook,
  *  RendererEventMap, RendererEventType,
  *  Canvas, CanvasContext, Size, View, ImageEntry, ImageCrossOrigin,
- * } from './typedefs/renderer.js'
+ * } from '../typedefs/renderer.js'
  */
 
 
-import { Simulation } from "./simulation.js";
-import { circleRectCollision, keysOf, now, readNodeSelection, segmentDistance2 } from "./utils.js";
-import { ConfigCascade } from "./config-cascade.js";
+import { Simulation } from "../simulation/simulation.js";
+import { circleRectCollision, keysOf, now, readNodeSelection, segmentDistance2 } from "../shared/utils.js";
+import { ConfigCascade } from "../shared/config-cascade.js";
 import { ImageCache } from "./image-cache.js";
 import { Highlighter } from "./highlighter.js";
 import { LabelPlacer } from "./label-placer.js";
-import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "./defaults.js";
+import { RENDERER_DEFAULTS, NODE_STYLE_DEFAULTS, EDGE_STYLE_DEFAULTS } from "../shared/defaults.js";
 import {
   BOOLEAN_FIELD, STRING_FIELD, checkBoolean, checkEach, checkKnownKeys, checkNumber, checkOneOf, checkString,
   numberField, typeField,
-} from "./validate.js";
-/** @import { FieldRule } from './validate.js' */
-import { HookRegistry } from "./hook-registry.js";
-import { Emitter } from "./emitter.js";
+} from "../shared/validate.js";
+/** @import { FieldRule } from '../shared/validate.js' */
+import { HookRegistry } from "../shared/hook-registry.js";
+import { Emitter } from "../shared/emitter.js";
 
 
 /**

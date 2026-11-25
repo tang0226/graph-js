@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { Emitter } from "../src/emitter.js";
+import { Emitter } from "../src/shared/emitter.js";
 
 /* A minimal emitter, standing in for a layer: no DOM, no GraphJS. `fire()`
    exposes the protected `_emit()` the way a subclass method would use it. */

@@ -1,5 +1,5 @@
 // RENDERER LAYER
-/** @import { Renderer } from '../renderer.js' */
+/** @import { Renderer } from '../renderer/renderer.js' */
 /** @import { NodeOption, EdgeOption, NodeSelection } from './graph.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
 

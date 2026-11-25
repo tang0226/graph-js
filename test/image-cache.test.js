@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ImageCache, pickSpriteSize } from "../src/image-cache.js";
+import { ImageCache, pickSpriteSize } from "../src/renderer/image-cache.js";
 import { installImage, installOffscreenCanvas, flush, opsNamed } from "./helpers/stubs.js";
 
 /* Loads `srcs` into a new cache and waits for them to settle. */

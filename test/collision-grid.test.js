@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { CollisionGrid } from "../src/collision-grid.js";
+import { CollisionGrid } from "../src/simulation/collision-grid.js";
 import {
   rng, scatter, bruteCollide, overlapDepth, assertClose, assertAllClose,
 } from "./helpers/bodies.js";

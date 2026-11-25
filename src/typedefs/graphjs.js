@@ -1,5 +1,5 @@
 // GRAPHJS LAYER
-/** @import { GraphJS } from '../graphjs.js' */
+/** @import { GraphJS } from '../graphjs/graphjs.js' */
 /** @import { GraphOpts, NodeId, GraphEdge } from './graph.js' */
 /** @import { SimOptsInput } from './simulation.js' */
 /** @import { RendererOptsInput, Canvas, View, ViewFittedOpts } from './renderer.js' */

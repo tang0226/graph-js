@@ -1,4 +1,4 @@
-/** @import { Canvas, CanvasContext, ImageCrossOrigin, ImageEntry } from './typedefs/renderer.js' */
+/** @import { Canvas, CanvasContext, ImageCrossOrigin, ImageEntry } from '../typedefs/renderer.js' */
 
 
 /** Standard sprite sizes (device px). */

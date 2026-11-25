@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { LabelPlacer } from "../src/label-placer.js";
+import { LabelPlacer } from "../src/renderer/label-placer.js";
 
 /** Boxes as [x0, y0, x1, y1] each, flattened as `place()` takes them */
 const flat = boxes => Float64Array.from(boxes.flat());

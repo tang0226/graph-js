@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { GraphJS } from "../src/graphjs.js";
+import { GraphJS } from "../src/graphjs/graphjs.js";
 import { makeCanvas, installWindow, installRaf, dispatchPointer, r2 } from "./helpers/stubs.js";
 
 // Every event but nodepress and edgepress, which would start most logs; their

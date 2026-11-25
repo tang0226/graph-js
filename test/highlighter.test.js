@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { Highlighter } from "../src/highlighter.js";
+import { Highlighter } from "../src/renderer/highlighter.js";
 
 /* Three node slots (a, b, c) and one edge slot, with a style object per slot.
    Starts re-slotted with nothing highlighted, so every alpha is 1. */

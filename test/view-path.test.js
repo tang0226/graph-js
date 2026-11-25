@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { viewPath } from "../src/view-path.js";
+import { viewPath } from "../src/graphjs/view-path.js";
 import { assertClose } from "./helpers/bodies.js";
 
 const W = 800, H = 600;

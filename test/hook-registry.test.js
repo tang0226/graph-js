@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { HookRegistry } from "../src/hook-registry.js";
+import { HookRegistry } from "../src/shared/hook-registry.js";
 
 describe("HookRegistry", () => {
   const make = () => new HookRegistry(["before", "after"], "Thing");

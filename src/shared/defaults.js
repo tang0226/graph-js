@@ -1,9 +1,9 @@
 // Default options and configs for every layer, in one place. Internal: not
 // listed in package.json `exports`, so not part of the public API. Each is
 // frozen, so nothing can change a default for every instance at once.
-/** @import { SimOpts, BarnesHutOpts } from './typedefs/simulation.js' */
-/** @import { RendererOpts, NodeStyle, EdgeStyle } from './typedefs/renderer.js' */
-/** @import { InteractionOpts } from './typedefs/interaction.js' */
+/** @import { SimOpts, BarnesHutOpts } from '../typedefs/simulation.js' */
+/** @import { RendererOpts, NodeStyle, EdgeStyle } from '../typedefs/renderer.js' */
+/** @import { InteractionOpts } from '../typedefs/interaction.js' */
 
 
 // SIMULATION

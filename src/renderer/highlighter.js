@@ -1,5 +1,5 @@
-/** @import { NodeId, GraphEdge } from './typedefs/graph.js' */
-/** @import { HighlightMode } from './typedefs/renderer.js' */
+/** @import { NodeId, GraphEdge } from '../typedefs/graph.js' */
+/** @import { HighlightMode } from '../typedefs/renderer.js' */
 
 
 /**

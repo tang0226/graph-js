@@ -1,4 +1,4 @@
-/** @import { View } from './typedefs/renderer.js' */
+/** @import { View } from '../typedefs/renderer.js' */
 
 /*
  * Camera paths between two views, for `GraphJS.fitView()` and `focusNode()`.

@@ -1,4 +1,4 @@
-/** @import { NodeId, GraphNode, NodeSelection } from './typedefs/graph.js' */
+/** @import { NodeId, GraphNode, NodeSelection } from '../typedefs/graph.js' */
 
 /**
  * Normalizes a value into a function: a function passes through, anything

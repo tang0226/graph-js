@@ -1,8 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
-import { Simulation } from "../src/simulation.js";
-import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/defaults.js";
+import { Simulation } from "../src/simulation/simulation.js";
+import { SIM_NODE_DEFAULTS, SIM_EDGE_DEFAULTS } from "../src/shared/defaults.js";
 
 const NODE_FIELDS = ["id", "mass", "radius", "charge", "fixed", "x", "y", "vx", "vy", "fx", "fy"];
 const NODE_ARRAYS = ["_nodeId", "_nodeX", "_nodeY", "_nodeVx", "_nodeVy", "_nodeFx", "_nodeFy",

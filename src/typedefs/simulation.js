@@ -2,7 +2,7 @@
 // Types only. No DOM types here: the headless entry points depend on this file.
 /** @import { NodeId, NodeOption, EdgeOption } from './graph.js' */
 /** @import { EmitterEvent, EmitterListener } from './emitter.js' */
-/** @import { Simulation } from '../simulation.js' */
+/** @import { Simulation } from '../simulation/simulation.js' */
 
 /**
  * @typedef {object} SimOpts
@@ -46,7 +46,7 @@
  * Live view of a simulation node, reading and writing the simulation's
  * `node*` arrays. `x`, `y`, `vx` and `vy` can be set directly; `mass`,
  * `radius`, `charge` and `fixed` are set with `setNodeConfig()`.
- * @typedef {import('../simulation.js').SimNode} SimNode
+ * @typedef {import('../simulation/simulation.js').SimNode} SimNode
  */
 
 /**

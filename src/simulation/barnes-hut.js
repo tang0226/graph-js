@@ -1,8 +1,8 @@
-/** @import {BarnesHutOpts, BarnesHutOptsInput} from './typedefs/simulation.js' */
+/** @import {BarnesHutOpts, BarnesHutOptsInput} from '../typedefs/simulation.js' */
 
-import { growF64, growI32 } from "./utils.js";
-import { BARNES_HUT_DEFAULTS } from "./defaults.js";
-import { checkEach, checkKnownKeys, checkNumber } from "./validate.js";
+import { growF64, growI32 } from "../shared/utils.js";
+import { BARNES_HUT_DEFAULTS } from "../shared/defaults.js";
+import { checkEach, checkKnownKeys, checkNumber } from "../shared/validate.js";
 
 
 /** Every Barnes-Hut option name */

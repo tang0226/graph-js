@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { GraphJS } from "../src/graphjs.js";
+import { GraphJS } from "../src/graphjs/graphjs.js";
 import * as pkg from "../src/index.js";
 import { makeCanvas, installWindow, installRaf, installImage, flush, r2 } from "./helpers/stubs.js";
 

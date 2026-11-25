@@ -1,12 +1,12 @@
 /** @import { GraphJS } from './graphjs.js' */
-/** @import { NodeId, GraphEdge, GraphEvent } from './typedefs/graph.js' */
-/** @import { Canvas } from './typedefs/renderer.js' */
-/** @import { InteractionOpts, InteractionOptsInput } from './typedefs/interaction.js' */
-/** @import { InteractionEmit, InteractionPress } from './typedefs/internal/interaction.js' */
+/** @import { NodeId, GraphEdge, GraphEvent } from '../typedefs/graph.js' */
+/** @import { Canvas } from '../typedefs/renderer.js' */
+/** @import { InteractionOpts, InteractionOptsInput } from '../typedefs/interaction.js' */
+/** @import { InteractionEmit, InteractionPress } from '../typedefs/internal/interaction.js' */
 
 
-import { INTERACTION_DEFAULTS } from "./defaults.js";
-import { checkBoolean, checkKnownKeys, checkNumber } from "./validate.js";
+import { INTERACTION_DEFAULTS } from "../shared/defaults.js";
+import { checkBoolean, checkKnownKeys, checkNumber } from "../shared/validate.js";
 
 
 /** Every interaction option name */

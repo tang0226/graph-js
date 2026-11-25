@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   checkKnownKeys, checkEach, checkBoolean, checkString, checkOneOf, checkNumber,
   numberField, typeField, STRING_FIELD, BOOLEAN_FIELD, checkConfig,
-} from "../src/validate.js";
+} from "../src/shared/validate.js";
 
 describe("validate", () => {
   test("checkKnownKeys rejects unknown names and non-objects, naming the owner", () => {

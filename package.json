@@ -33,12 +33,12 @@
       "default": "./src/graph.js"
     },
     "./simulation": {
-      "types": "./types/simulation.d.ts",
-      "default": "./src/simulation.js"
+      "types": "./types/simulation/simulation.d.ts",
+      "default": "./src/simulation/simulation.js"
     },
     "./renderer": {
-      "types": "./types/renderer.d.ts",
-      "default": "./src/renderer.js"
+      "types": "./types/renderer/renderer.d.ts",
+      "default": "./src/renderer/renderer.js"
     },
     "./tween": {
       "types": "./types/tween.d.ts",

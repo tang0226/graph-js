@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { ConfigCascade } from "../src/config-cascade.js";
-import { numberField, STRING_FIELD } from "../src/validate.js";
+import { ConfigCascade } from "../src/shared/config-cascade.js";
+import { numberField, STRING_FIELD } from "../src/shared/validate.js";
 
 describe("ConfigCascade", () => {
   const BASE = { size: 1, color: "red" };

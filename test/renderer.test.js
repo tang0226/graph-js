@@ -1,8 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Graph } from "../src/graph.js";
-import { Simulation } from "../src/simulation.js";
-import { Renderer } from "../src/renderer.js";
+import { Simulation } from "../src/simulation/simulation.js";
+import { Renderer } from "../src/renderer/renderer.js";
 import {
   makeCanvas, installImage, installOffscreenCanvas, installWindow, opsNamed, flush, r2,
 } from "./helpers/stubs.js";

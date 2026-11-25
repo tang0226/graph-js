@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { BarnesHutContext } from "../src/barnes-hut.js";
+import { BarnesHutContext } from "../src/simulation/barnes-hut.js";
 import {
   rng, scatter, bruteCollide, overlapDepth, assertClose, assertAllClose,
 } from "./helpers/bodies.js";
