@@ -11,7 +11,7 @@ import { GraphJS, Graph, Renderer, Tween, easings } from "@tang0226/graph-js";
 import { Simulation } from "@tang0226/graph-js/simulation";   // headless subpath
 // Public types, re-exported from the package root
 import type {
-  NodeId, NodeData, GraphNode, GraphEdge, EdgeDirection, GraphOpts,
+  NodeId, NodeData, GraphNode, GraphEdge, EdgeDirection, EdgeInput, GraphOpts,
   GraphNodeEventData, GraphEdgeEventData, GraphDataChangeEventData,
   GraphEventMap, GraphEventType, GraphEvent, GraphListener,
   NodeAccessor, NodeOption, EdgeAccessor, EdgeOption,
@@ -58,6 +58,20 @@ const directed: boolean = gjs.graph.directed;
 const dir: EdgeDirection = "both";
 const hubNeighbors: NodeId[] = gjs.graph.neighbors("a", dir);
 
+// Batching: bulk methods, and batch() returning what its function returns
+const bulkEdges: EdgeInput[] = [["a", "b"], ["b", "a", { weight: 2 }]];
+const batched: number = gjs.batch(g => {
+  const ids: NodeId[] = g.addNodes([{ id: "c" }, { label: "d" }]);
+  const newEdges: (GraphEdge | null)[] = g.addEdges(bulkEdges);
+  const placed: boolean = g.simulation.setPosition("c", 10, 20);
+  return ids.length;
+});
+const graphBatched: string = gjs.graph.batch(g => (g.batching ? "yes" : "no"));
+const removedNodes: number = gjs.removeNodes(["c"]);
+const removedEdges: number = gjs.removeEdges([["a", "b"]]);
+// @ts-expect-error -- batch takes a function
+gjs.batch(1);
+
 // Chainable methods return the facade, never an inner layer
 gjs.resize().stop().step();
 gjs.requestRender().requestRender().stop();   // draws on demand, and chains
@@ -85,6 +99,10 @@ if (p) { const [x, y]: [number, number] = p; }
 // Config cascade: constants or accessors receiving the graph element
 gjs.simulation.setDefaultNodeConfig({ mass: 2, radius: n => 5 + n.data.group, fixed: false });
 gjs.simulation.setNodeConfig("b", { fixed: true });
+gjs.simulation.setNodeConfigs(new Map([["a", { mass: 3 }], ["b", { charge: 2 }]]));
+gjs.renderer.setEdgeConfigs([["a", "b", { color: "#abcdef" }]]);
+// @ts-expect-error -- config fields are type-checked in bulk too
+gjs.renderer.setNodeConfigs([["a", { mass: 3 }]]);
 gjs.simulation.setDefaultEdgeConfig({ length: e => 30 + e.data.weight, stiffness: 0.3 });
 gjs.simulation.setEdgeConfig("a", "b", { stiffness: 0.5 });
 const edgeSpring = gjs.simulation.getEdgeSpring("a", "b");

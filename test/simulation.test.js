@@ -1705,3 +1705,114 @@ describe("Simulation: custom constraints", () => {
     assert.equal(node.x, 10);
   });
 });
+
+describe("Simulation: batching", () => {
+  test("sync does nothing inside a batch, and adopts the whole batch once after", () => {
+    const g = chain(3);
+    const sim = new Simulation(g, {});
+    let rebuilds = 0;
+    const orig = sim._syncStructure.bind(sim);
+    sim._syncStructure = () => { rebuilds++; orig(); };
+    g.batch(() => {
+      for (let i = 3; i < 10; i++) {
+        g.addNode({ id: "n" + i });
+        g.addEdge("n" + (i - 1), "n" + i);
+        assert.equal(sim.sync(), false);
+        assert.equal(sim.getPosition("n" + i), null, "reads see the pre-batch state");
+      }
+      sim.tick();
+    });
+    assert.equal(rebuilds, 0);
+    assert.equal(sim.sync(), true);
+    assert.equal(rebuilds, 1);
+    assert.equal(sim.nodeList.length, 10);
+  });
+
+  test("config set inside a batch is resolved after it", () => {
+    const g = chain(2);
+    const sim = new Simulation(g, {});
+    g.batch(() => {
+      sim.setNodeConfig("n0", { mass: 7 });
+      sim.sync();
+      assert.equal(sim.nodes.get("n0").mass, SIM_NODE_DEFAULTS.mass);
+    });
+    sim.sync();
+    assert.equal(sim.nodes.get("n0").mass, 7);
+  });
+});
+
+describe("Simulation: setPosition", () => {
+  test("a synced node moves, stops, and reheats", () => {
+    const sim = new Simulation(chain(2), {});
+    const n = sim.nodes.get("n0");
+    n.vx = 3; n.vy = 4;
+    sim.heat(0);
+    assert.equal(sim.setPosition("n0", 10, 20), true);
+    assert.deepEqual(sim.getPosition("n0"), [10, 20]);
+    assert.equal(n.vx, 0);
+    assert.equal(n.vy, 0);
+    assert.ok(sim.temp > 0);
+    assert.equal(n.fixed, false, "not pinned");
+  });
+
+  test("a node without a slot yet starts where it was placed", () => {
+    const g = chain(2);
+    const sim = new Simulation(g, {});
+    g.batch(() => {
+      g.addNode({ id: "new" });
+      g.addEdge("n1", "new");
+      assert.equal(sim.setPosition("new", 500, -300), true);
+    });
+    sim.sync();
+    assert.deepEqual(sim.getPosition("new"), [500, -300]);
+    assert.equal(sim._pendingPositions.size, 0);
+  });
+
+  test("unknown nodes aren't placed, and a removed node's pending position is dropped", () => {
+    const g = chain(1);
+    const sim = new Simulation(g, {});
+    assert.equal(sim.setPosition("nope", 0, 0), false);
+    g.addNode({ id: "gone" });
+    sim.setPosition("gone", 1, 1);
+    g.removeNode("gone");
+    g.addNode({ id: "other" });
+    sim.sync();
+    assert.equal(sim._pendingPositions.size, 0);
+  });
+
+  test("coordinates must be finite numbers", () => {
+    const sim = new Simulation(chain(1), {});
+    assert.throws(() => sim.setPosition("n0", NaN, 0), { name: "RangeError" });
+    assert.throws(() => sim.setPosition("n0", 0, Infinity), { name: "RangeError" });
+    assert.throws(() => sim.setPosition("n0", "1", 0), { name: "TypeError" });
+  });
+});
+
+describe("Simulation: bulk config setters", () => {
+  test("setNodeConfigs sets each node's overrides", () => {
+    const sim = new Simulation(chain(3), {});
+    const shared = { mass: 4 };
+    sim.setNodeConfigs(new Map([["n0", shared], ["n1", shared], ["n2", { charge: 5 }]]));
+    sim.sync();
+    assert.equal(sim.nodes.get("n0").mass, 4);
+    assert.equal(sim.nodes.get("n1").mass, 4);
+    assert.equal(sim.nodes.get("n2").charge, 5);
+  });
+
+  test("setNodeConfigs changes nothing if any config is invalid", () => {
+    const sim = new Simulation(chain(2), {});
+    assert.throws(() => sim.setNodeConfigs([["n0", { mass: 2 }], ["n1", { mass: -1 }]]), { name: "RangeError" });
+    sim.sync();
+    assert.equal(sim.nodes.get("n0").mass, SIM_NODE_DEFAULTS.mass);
+  });
+
+  test("setEdgeConfigs sets each edge's overrides, or nothing if an edge is missing", () => {
+    const sim = new Simulation(chain(3), {});
+    assert.throws(() => sim.setEdgeConfigs([["n0", "n1", { length: 99 }], ["n0", "n2", { length: 5 }]]),
+      { name: "ReferenceError", message: /n0.*n2/ });
+    assert.equal(sim.getEdgeSpring("n0", "n1").length, SIM_EDGE_DEFAULTS.length);
+    sim.setEdgeConfigs([["n0", "n1", { length: 99 }], ["n2", "n1", { stiffness: 0.5 }]]);
+    assert.equal(sim.getEdgeSpring("n0", "n1").length, 99);
+    assert.equal(sim.getEdgeSpring("n1", "n2").stiffness, 0.5);
+  });
+});

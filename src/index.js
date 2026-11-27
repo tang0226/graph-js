@@ -16,6 +16,7 @@ export { Tween, easings } from "./tween.js";
 /** @typedef {import("./typedefs/graph.js").NodeSelection} NodeSelection */
 /** @typedef {import("./typedefs/graph.js").GraphEdge} GraphEdge */
 /** @typedef {import("./typedefs/graph.js").EdgeDirection} EdgeDirection */
+/** @typedef {import("./typedefs/graph.js").EdgeInput} EdgeInput */
 /** @typedef {import("./typedefs/graph.js").GraphOpts} GraphOpts */
 /** @typedef {import("./typedefs/graph.js").GraphNodeEventData} GraphNodeEventData */
 /** @typedef {import("./typedefs/graph.js").GraphEdgeEventData} GraphEdgeEventData */

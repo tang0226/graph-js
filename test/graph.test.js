@@ -678,3 +678,147 @@ describe("Graph: clear", () => {
     assert.deepEqual([...g.nodes.keys()], ["late"]);
   });
 });
+
+describe("Graph: batching", () => {
+  test("batch passes the graph, returns fn's result, and nests", () => {
+    const g = new Graph();
+    assert.equal(g.batching, false);
+    const result = g.batch(inner => {
+      assert.equal(inner, g);
+      assert.equal(g.batching, true);
+      g.batch(() => assert.equal(g.batching, true));
+      assert.equal(g.batching, true, "still batching after an inner batch ends");
+      return 42;
+    });
+    assert.equal(result, 42);
+    assert.equal(g.batching, false);
+  });
+
+  test("batch ends when fn throws, and rejects a non-function", () => {
+    const g = new Graph();
+    assert.throws(() => g.batch(() => { throw new Error("boom"); }), /boom/);
+    assert.equal(g.batching, false);
+    assert.throws(() => g.batch(null), { name: "TypeError" });
+  });
+
+  test("addNodes adds each node, keeping existing ones, and returns ids in order", () => {
+    const g = new Graph();
+    g.addNode({ id: "a", keep: true });
+    const ids = g.addNodes([{ id: "a" }, { id: "b" }, { label: "generated" }]);
+    assert.equal(ids.length, 3);
+    assert.deepEqual(ids.slice(0, 2), ["a", "b"]);
+    assert.equal(typeof ids[2], "string");
+    assert.equal(g.nodes.size, 3);
+    assert.equal(g.getNode("a").data.keep, true);
+  });
+
+  test("addEdges returns each new edge, or null for an existing one", () => {
+    const g = pair();
+    g.addNode({ id: "c" });
+    g.addEdge("a", "b");
+    const edges = g.addEdges([["a", "b"], ["b", "c", { w: 2 }]]);
+    assert.equal(edges[0], null);
+    assert.equal(edges[1], g.getEdge("b", "c"));
+    assert.equal(edges[1].data.w, 2);
+    assert.deepEqual(g.getEdge("a", "b").data, {});
+  });
+
+  test("addEdges adds nothing if any endpoint is missing", () => {
+    const g = pair();
+    const v = g.version;
+    assert.throws(() => g.addEdges([["a", "b"], ["a", "nope"]]), { name: "ReferenceError", message: /destination.*nope/ });
+    assert.throws(() => g.addEdges([["nope", "a"]]), { name: "ReferenceError", message: /source.*nope/ });
+    assert.equal(g.edges.size, 0);
+    assert.equal(g.version, v);
+  });
+
+  test("removeEdges counts the edges removed, skipping unknown ones", () => {
+    const g = pair();
+    g.addNode({ id: "c" });
+    g.addEdges([["a", "b"], ["b", "c"]]);
+    assert.equal(g.removeEdges([["b", "a"], ["a", "c"], ["x", "y"]]), 1);
+    assert.equal(g.edges.size, 1);
+  });
+
+  /** A small graph with self-loops and, when directed, a reciprocal pair */
+  const sample = directed => {
+    const g = new Graph({ directed });
+    g.addNodes(["a", "b", "c", "d"].map(id => ({ id })));
+    g.addEdges([["a", "b"], ["b", "a"], ["b", "c"], ["c", "c"], ["c", "d"], ["d", "a"]]);
+    return g;
+  };
+  /** The graph's shape as plain data, to compare two graphs */
+  const shape = g => ({
+    nodes: [...g.nodes.keys()].sort(),
+    edges: [...g.edges].map(e => `${e.src.id}>${e.dest.id}`).sort(),
+    adjacency: [...g.adjacency].map(([id, m]) => `${id}:${[...m.keys()].sort()}`).sort(),
+    inAdjacency: g._inAdjacency && [...g._inAdjacency].map(([id, m]) => `${id}:${[...m.keys()].sort()}`).sort(),
+  });
+
+  for (const directed of [false, true]) {
+    test(`removeNodes without listeners matches removeNode one by one (${directed ? "directed" : "undirected"})`, () => {
+      const fast = sample(directed), slow = sample(directed);
+      const v = fast.version;
+      assert.equal(fast.removeNodes(["b", "c", "nope"]), 2);
+      assert.notEqual(fast.version, v);
+      slow.removeNode("b"); slow.removeNode("c");
+      assert.deepEqual(shape(fast), shape(slow));
+      assert.deepEqual(fast.neighbors("a"), slow.neighbors("a"));
+      assert.equal(fast.degree("d"), slow.degree("d"));
+    });
+
+    test(`removeNodes with listeners emits each removal (${directed ? "directed" : "undirected"})`, () => {
+      const g = sample(directed), log = [];
+      g.on("edgeremove", e => log.push(`e:${e.srcId}>${e.destId}`));
+      g.on("noderemove", e => log.push(`n:${e.id}`));
+      assert.equal(g.removeNodes(["c"]), 1);
+      // b-c, c-c and c-d
+      assert.equal(log.filter(s => s.startsWith("e:")).length, 3);
+      assert.equal(log.at(-1), "n:c");
+    });
+  }
+
+  test("removeNodes doesn't bump the version when nothing is removed", () => {
+    const g = pair();
+    const v = g.version;
+    assert.equal(g.removeNodes(["nope"]), 0);
+    assert.equal(g.version, v);
+  });
+
+  for (const directed of [false, true]) {
+    test(`clear empties the graph, with and without listeners (${directed ? "directed" : "undirected"})`, () => {
+      const fast = sample(directed), slow = sample(directed);
+      const removed = [];
+      slow.on("noderemove", e => removed.push(e.id));
+      const v = fast.version;
+      fast.clear();
+      slow.clear();
+      assert.deepEqual(shape(fast), shape(slow));
+      assert.equal(fast.nodes.size + fast.edges.size, 0);
+      assert.notEqual(fast.version, v);
+      assert.deepEqual(removed.sort(), ["a", "b", "c", "d"]);
+      // Still usable afterwards
+      fast.addNodes([{ id: "x" }, { id: "y" }]);
+      fast.addEdge("x", "y");
+      assert.equal(fast.degree("y"), 1);
+      assert.equal(fast.inDegree("y"), 1);
+    });
+  }
+
+  test("clear without listeners empties the same collections", () => {
+    const g = sample(false);
+    const { nodes, edges, adjacency } = g;
+    g.clear();
+    assert.equal(g.nodes, nodes);
+    assert.equal(g.edges, edges);
+    assert.equal(g.adjacency, adjacency);
+    assert.equal(nodes.size, 0);
+  });
+
+  test("clear on an empty graph doesn't bump the version", () => {
+    const g = new Graph();
+    const v = g.version;
+    g.clear();
+    assert.equal(g.version, v);
+  });
+});

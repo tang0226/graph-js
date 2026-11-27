@@ -38,6 +38,12 @@
 */
 
 /**
+ * An edge to add with `addEdges()`: source id, destination id, and optional
+ * custom data
+ * @typedef {[srcId: NodeId, destId: NodeId, data?: any]} EdgeInput
+ */
+
+/**
  * Which of a node's edges to follow, for `neighbors()` and `edgesOf()`:
  * edges leaving it, edges entering it, or both. Only matters in a directed
  * graph.

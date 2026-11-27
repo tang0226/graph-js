@@ -16,6 +16,7 @@ npm install @tang0226/graph-js
   - [Attaching and resizing the canvas](#attaching-and-resizing-the-canvas)
 - [Building the graph](#building-the-graph)
   - [Adding and removing nodes and edges](#adding-and-removing-nodes-and-edges)
+  - [Batching changes](#batching-changes)
   - [Reading graph and simulation state](#reading-graph-and-simulation-state)
 - [Configuring nodes and edges](#configuring-nodes-and-edges)
   - [Individual node and edge settings](#individual-node-and-edge-settings)
@@ -255,9 +256,55 @@ gjs.removeNode(carol);             // also removes any edges it still has
 gjs.graph.clear();                 // removes every node and edge
 ```
 
-`addEdge` throws if either node doesn't exist. Removing a node or edge that doesn't exist returns `false`. `clear()` removes nodes one at a time, so it emits the usual [graph events](#graph-events), and the GraphJS instance, its canvas and its listeners stay ready for a new graph.
+`addEdge` throws if either node doesn't exist. Removing a node or edge that doesn't exist returns `false`. `clear()` removes nodes one at a time, so it emits the usual [graph events](#graph-events), and the GraphJS instance, its canvas and its listeners stay ready for a new graph. When nothing listens for `noderemove` or `edgeremove`, it empties the graph in one step instead.
 
 In an undirected graph, `"a"` to `"b"` and `"b"` to `"a"` are the same edge. In a directed graph they're two edges, drawn as a pair of curved arrows.
+
+### Batching changes
+
+The simulation and renderer catch up with graph changes lazily, on their next tick or frame, so a plain loop of `addNode()` calls is already cheap. Anything that reads their state makes them catch up straight away, though: `getPosition()`, `nodeAt()`, `edgeAt()`, `fitView()`, `focusNode()`, `addHighlight()` and exporting all rebuild the simulation's tables if the graph changed. Reading between changes in a large loop rebuilds them every time.
+
+Wrap a group of changes in `batch()` to have them adopted in one go:
+
+```js
+gjs.batch(() => {
+  for (const person of people) {
+    gjs.addNode({ id: person.id, name: person.name });
+    gjs.renderer.setNodeConfig(person.id, { color: person.color });
+  }
+  for (const [a, b] of friendships) gjs.addEdge(a, b);
+});
+// The simulation and renderer catch up once, on the next frame
+```
+
+While a batch runs, the simulation and renderer don't sync, so reads see the state from before it started: a node added in the batch has no position yet (`getPosition()` returns `null`, `fitView()` leaves it out, `focusNode()` throws), a node removed in it may still be drawn, and a highlight added for a new node is dropped, so highlight after the batch ends. Graph events still fire for each change as it happens. Batches can be nested; syncing resumes when the outermost one ends, even if it throws. The function runs synchronously and its return value is passed back, so in an `async` function only the work before the first `await` is batched. `batch()` is also on `gjs.graph` (and any standalone `Graph`), where the function is passed the graph and `gjs.graph.batching` says whether a batch is running.
+
+The bulk methods each run as a batch:
+
+```js
+gjs.addNodes([{ id: "alice" }, { id: "bob" }, { name: "Carol" }]);  // ids, in order
+gjs.addEdges([["alice", "bob"], ["bob", "alice", { weight: 2 }]]);   // new edges, or null where one existed
+gjs.removeEdges([["alice", "bob"]]);   // how many were removed
+gjs.removeNodes(["alice", "bob"]);     // how many were removed, with their edges
+```
+
+`addEdges()` checks every node exists before adding any, and throws if one doesn't, so nothing is added. `removeNodes()` and `removeEdges()` skip ids that aren't in the graph. When nothing listens for `noderemove` or `edgeremove`, `removeNodes()` skips the bookkeeping that emitting needs. Built-in [interaction](#built-in-interaction) listens for both, so this applies headless or with interaction off.
+
+To set config on many nodes or edges at once, `setNodeConfigs()` and `setEdgeConfigs()` (see [Individual node and edge settings](#individual-node-and-edge-settings)) check every config before changing anything.
+
+#### Placing nodes from a saved layout
+
+`gjs.simulation.setPosition(id, x, y)` moves a node to simulation coordinates and stops it, without pinning it. It also works on a node that hasn't been synced yet, such as one added in a batch: the node starts where it was placed, instead of next to its neighbors. It returns `false` for an id that isn't in the graph.
+
+```js
+gjs.batch(() => {
+  for (const n of saved.nodes) {
+    gjs.addNode(n.data, n.id);
+    gjs.simulation.setPosition(n.id, n.x, n.y);
+  }
+  gjs.addEdges(saved.edges);
+});
+```
 
 ### Reading graph and simulation state
 
@@ -272,7 +319,7 @@ gjs.simulation.nodes;        // Map: id -> { id, x, y, vx, vy, radius, mass, cha
 gjs.simulation.nodeList;     // the same nodes as an array
 ```
 
-These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`; assigning them throws a `TypeError`, as does assigning `fx` and `fy`, the force totals from the last tick.
+These properties can't be reassigned, and their collections shouldn't be changed; use `addNode()`, `setNodeConfig()`, `setNodeData()`, and the other methods instead. The one exception is a simulation node's `x`, `y`, `vx` and `vy`, which can be set directly (followed by `heat()`), or with `gjs.simulation.setPosition()`, which also works before the node is synced (see [Placing nodes from a saved layout](#placing-nodes-from-a-saved-layout)). Its `radius`, `mass`, `charge` and `fixed` are recalculated from config, so set those with `setNodeConfig()`; assigning them throws a `TypeError`, as does assigning `fx` and `fy`, the force totals from the last tick.
 
 Simulation nodes are live views: each field reads the simulation's current state, so a node object never goes stale, and a node keeps the same object for as long as it's in the graph. Once a node is removed and the simulation syncs, its old object reads `undefined` (and `fixed` reads `false`), and setting its fields does nothing.
 
@@ -398,9 +445,14 @@ gjs.renderer.setEdgeConfig("alice", "bob", { color: "red" });
 gjs.simulation.setEdgeConfig("alice", "bob", { length: 120, stiffness: 0.5 });
 
 gjs.renderer.clearNodeConfig("alice");   // reset to defaults
+
+// Many at once: [id, config] pairs (a Map works) or [srcId, destId, config]
+const vip = { color: "gold" };
+gjs.renderer.setNodeConfigs([["alice", vip], ["bob", vip]]);
+gjs.simulation.setEdgeConfigs([["alice", "bob", { length: 80 }], ["bob", "carol", { length: 40 }]]);
 ```
 
-Setting config properties merges them with previously set config. `setEdgeConfig` throws when the edge doesn't exist (in a directed graph, node id order matters).
+Setting config properties merges them with previously set config. `setEdgeConfig` throws when the edge doesn't exist (in a directed graph, node id order matters). `setNodeConfigs()` and `setEdgeConfigs()` set each entry as the single methods do, but check every entry first, so nothing changes if any config is invalid or any edge is missing. A config object shared by consecutive entries is checked once.
 
 In a directed graph, a pair of opposite edges (`"a"` to `"b"` and `"b"` to `"a"`) pulls on its nodes through a single spring. Its stiffness is the average of the two edges' stiffnesses, and its length is the average of their lengths, weighted by stiffness.
 
@@ -1042,10 +1094,11 @@ gjs.graph.on("nodedatachange", e => names.set(e.id, e.node.data.name));
 ```
 
 - **Up to date:** each event is emitted once its change is complete, so the graph is current for listeners: `gjs.graph.nodes`, `degree()`, `hasEdge()` and the rest already reflect it.
-- **The other layers catch up later:** the simulation and renderer read graph changes on their next tick or frame, so in a `nodeadd` listener, `gjs.simulation.nodes.get(e.id)` is still `undefined`. To read them straight away, call `gjs.simulation.sync()` first. It does nothing if nothing has changed, but it rebuilds the simulation's tables when something has, so avoid calling it from every event while building a large graph.
+- **The other layers catch up later:** the simulation and renderer read graph changes on their next tick or frame, so in a `nodeadd` listener, `gjs.simulation.nodes.get(e.id)` is still `undefined`. To read them straight away, call `gjs.simulation.sync()` first. It does nothing if nothing has changed, but it rebuilds the simulation's tables when something has, so avoid calling it from every event while building a large graph. Inside a [batch](#batching-changes) it does nothing at all until the batch ends.
 - **No-ops:** a change that doesn't happen emits nothing, such as adding an id that's already in use, adding an edge that exists, or removing something that doesn't.
 - **Changes in listeners:** a listener can change the graph, and those changes emit their own events straight away, inside the event that's running.
 - **Speed:** an event with no listeners costs almost nothing, so building a large graph isn't slowed down until you listen.
+- **Batches:** events fire for each change inside a [batch](#batching-changes) too. `clear()` and `removeNodes()` skip emitting only when nothing listens for `noderemove` or `edgeremove`.
 
 ### Simulation events
 

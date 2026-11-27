@@ -1,4 +1,4 @@
-/** @import {NodeId, NodeData, GraphNode, GraphEdge, EdgeDirection, GraphEventMap, GraphEventType} from './typedefs/graph.js' */
+/** @import {NodeId, NodeData, GraphNode, GraphEdge, EdgeInput, EdgeDirection, GraphEventMap, GraphEventType} from './typedefs/graph.js' */
 
 import { Emitter } from "./shared/emitter.js";
 import { keysOf, isPlainObject } from "./shared/utils.js";
@@ -113,6 +113,16 @@ export class Graph extends Emitter {
    * Compare for inequality only.
    */
   get dataVersion() { return this._dataVersion; }
+
+
+  /** @private @type {number} */
+  _batchDepth = 0;
+  /**
+   * [read-only]
+   * Whether a `batch()` is running. Higher layers hold off syncing while it
+   * is, so the changes in a batch are adopted in one sync after it ends.
+   */
+  get batching() { return this._batchDepth > 0; }
 
 
   /**
@@ -437,15 +447,164 @@ export class Graph extends Emitter {
 
 
 
+  // BATCHING
+
+  /**
+   * Runs a function as a batch: the simulation and renderer built on this
+   * graph hold off syncing until it returns, then adopt all its changes in
+   * one sync. Without a batch, anything that reads synced state (positions,
+   * hit tests, highlights, view fitting) rebuilds after every change.
+   *
+   * While the batch runs, those reads see the state as of its start: a node
+   * added in the batch has no position yet, and one removed in it may still
+   * be drawn. Graph events still fire for each change as it happens. Batches
+   * can be nested; the outermost one decides when syncing resumes. The
+   * function runs synchronously, so in an `async` function only the work
+   * before the first `await` is batched.
+   * @template R
+   * @param {(graph: this) => R} fn - function making the changes, called
+   *    with this graph
+   * @returns {R} what `fn` returns
+   * @throws {TypeError} thrown if `fn` isn't a function
+   */
+  batch(fn) {
+    if (typeof fn !== "function") throw new TypeError("Graph: batch() takes a function");
+    this._batchDepth++;
+    try { return fn(this); }
+    finally { this._batchDepth--; }
+  }
+
+
+  /**
+   * Adds nodes in a batch, through `addNode()`. Each node's id is its data's
+   * `id`, or a random UUID. Emits `nodeadd` for each node added.
+   * @param {Iterable<NodeData>} dataList - custom data for each node
+   * @returns {NodeId[]} id of each node, in order, including ids already in
+   *    use (whose nodes are left as they were)
+   */
+  addNodes(dataList) {
+    return this.batch(() => Array.from(dataList, data => this.addNode(data)));
+  }
+
+
+  /**
+   * Adds edges in a batch, through `addEdge()`. Every endpoint is checked
+   * first, so nothing is added if any is missing. Emits `edgeadd` for each
+   * edge added.
+   * @param {Iterable<EdgeInput>} list - `[srcId, destId, data?]` for each edge
+   * @returns {(GraphEdge | null)[]} each new edge, in order, or null where
+   *    the edge already existed
+   * @throws {ReferenceError} thrown if any id matches no existing node
+   */
+  addEdges(list) {
+    const items = [...list];
+    for (const [srcId, destId] of items) {
+      if (!this._nodes.has(srcId)) throw new ReferenceError(`Graph: no source node with id "${srcId}"`);
+      if (!this._nodes.has(destId)) throw new ReferenceError(`Graph: no destination node with id "${destId}"`);
+    }
+    return this.batch(() => items.map(([srcId, destId, data]) => this.addEdge(srcId, destId, data)));
+  }
+
+
+  /**
+   * Removes edges in a batch, through `removeEdge()`. Unknown edges are
+   * skipped. Emits `edgeremove` for each edge removed.
+   * @param {Iterable<[NodeId, NodeId]>} pairs - `[srcId, destId]` for each
+   *    edge
+   * @returns {number} how many edges were removed
+   */
+  removeEdges(pairs) {
+    return this.batch(() => {
+      let n = 0;
+      for (const [srcId, destId] of pairs) if (this.removeEdge(srcId, destId)) n++;
+      return n;
+    });
+  }
+
+
+  /**
+   * Removes nodes and their edges in a batch. Unknown ids are skipped. Emits
+   * `edgeremove` and `noderemove` as `removeNode()` does; when nothing
+   * listens for either, it skips the per-edge bookkeeping that emitting
+   * needs.
+   * @param {Iterable<NodeId>} ids - ids of the nodes
+   * @returns {number} how many nodes were removed
+   */
+  removeNodes(ids) {
+    return this.batch(() => {
+      let n = 0;
+      if (this._hasRemoveListeners()) {
+        for (const id of ids) if (this.removeNode(id)) n++;
+        return n;
+      }
+      for (const id of ids) if (this._detachNode(id)) n++;
+      if (n) this._version++;
+      return n;
+    });
+  }
+
+
+  /**
+   * Whether anything listens for `noderemove` or `edgeremove`. The bulk
+   * removals skip emitting, and its bookkeeping, when nothing does.
+   * @private
+   * @returns {boolean} whether there are remove listeners
+   */
+  _hasRemoveListeners() {
+    return this._hasListeners("noderemove") || this._hasListeners("edgeremove");
+  }
+
+
+  /**
+   * Deletes a node and its edges from every map, without emitting events or
+   * bumping the version. For bulk removal when nothing listens.
+   * @private
+   * @param {NodeId} id - id of the node
+   * @returns {boolean} whether the node existed
+   */
+  _detachNode(id) {
+    const out = this._adjacency.get(id);
+    if (!out) return false;
+    const inc = this._inAdjacency?.get(id);
+    for (const [destId, edge] of out) {
+      this._edges.delete(edge);
+      // In an undirected graph the other end lists the edge in _adjacency too
+      (inc ? /** @type {Map<NodeId, Map<NodeId, GraphEdge>>} */ (this._inAdjacency) : this._adjacency)
+        .get(destId)?.delete(id);
+    }
+    if (inc) for (const [srcId, edge] of inc) {
+      this._edges.delete(edge);
+      this._adjacency.get(srcId)?.delete(id);
+    }
+    this._adjacency.delete(id);
+    this._inAdjacency?.delete(id);
+    this._nodes.delete(id);
+    return true;
+  }
+
+
+
   // WHOLE GRAPH
 
   /**
-   * Removes every node and edge, through `removeNode()`, so each removal emits
-   * its usual events. Nodes added by listeners while it runs are kept.
+   * Removes every node and edge in a batch, through `removeNode()`, so each
+   * removal emits its usual events. Nodes added by listeners while it runs
+   * are kept. When nothing listens for `noderemove` or `edgeremove`, it
+   * empties the graph in one step instead.
    * @returns {this} self reference
    */
   clear() {
-    for (const id of [...this._nodes.keys()]) this.removeNode(id);
+    if (!this._hasRemoveListeners()) {
+      if (this._nodes.size === 0) return this;
+      // Emptied in place, so references to `nodes` and the rest stay live
+      this._nodes.clear();
+      this._edges.clear();
+      this._adjacency.clear();
+      this._inAdjacency?.clear();
+      this._version++;
+      return this;
+    }
+    this.batch(() => { for (const id of [...this._nodes.keys()]) this.removeNode(id); });
     return this;
   }
 }

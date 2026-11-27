@@ -3467,3 +3467,56 @@ describe("Renderer: export", () => {
     });
   });
 });
+
+describe("Renderer: batching", () => {
+  test("reads inside a batch don't sync; the batch is adopted in one sync after", () => {
+    const { g, r } = scene(false, [["a", "b"]]);
+    const v = r.version;
+    g.batch(() => {
+      for (let i = 0; i < 5; i++) {
+        g.addNode({ id: "n" + i });
+        g.addEdge("a", "n" + i);
+        r.nodeAt(300, 300);
+        r.getPosition("n" + i);
+        r.edgeAt(400, 300);
+        r.addHighlight({ nodes: ["a"] });
+      }
+      assert.equal(r.version, v);
+    });
+    r.sync();
+    assert.equal(r.version, v + 1);
+    assert.equal(r.nodeStyles.length, 7);
+  });
+
+  test("rendering and hit-testing inside a batch skip removed elements without throwing", () => {
+    const { g, r } = scene(false, [["a", "b"]]);
+    g.batch(() => {
+      g.removeNode("b");
+      assert.equal(r.render(), true);
+      assert.equal(r.nodeAt(500, 300), null);
+      assert.equal(r.edgeAt(400, 300), null);
+      assert.equal(r.nodeAt(300, 300), "a");
+    });
+    r.render();
+    assert.equal(r.nodeStyles.length, 1);
+  });
+
+  test("setNodeConfigs and setEdgeConfigs set many style overrides", () => {
+    const { r } = scene(true, [["a", "b"], ["b", "a"]]);
+    r.setNodeConfigs([["a", { color: "#111111" }], ["b", { color: "#222222" }]]);
+    r.setEdgeConfigs([["a", "b", { color: "#333333" }], ["b", "a", { color: "#444444" }]]);
+    r.sync();
+    assert.equal(r.nodes.get("a").color, "#111111");
+    assert.equal(r.nodes.get("b").color, "#222222");
+    const colors = r.edgeStyles.map(s => s.color).sort();
+    assert.deepEqual(colors, ["#333333", "#444444"]);
+  });
+
+  test("setEdgeConfigs changes nothing if an edge is missing", () => {
+    const { r } = scene(false, [["a", "b"]]);
+    assert.throws(() => r.setEdgeConfigs([["a", "b", { color: "#333333" }], ["a", "nope", {}]]),
+      { name: "ReferenceError", message: /^Renderer: no edge from "a" to "nope"$/ });
+    r.sync();
+    assert.notEqual(r.edgeStyles[0].color, "#333333");
+  });
+});

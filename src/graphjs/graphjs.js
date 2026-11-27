@@ -1,4 +1,4 @@
-/** @import { NodeData, NodeId, GraphNode, GraphEdge } from '../typedefs/graph.js' */
+/** @import { NodeData, NodeId, GraphNode, GraphEdge, EdgeInput } from '../typedefs/graph.js' */
 /** @import { Canvas, View, ViewFittedOpts, ExportOpts, ExportBlobOpts } from '../typedefs/renderer.js' */
 /** @import { GraphJSOpts, GraphJSHookType, GraphJSHook } from '../typedefs/graphjs.js' */
 /** @import { GraphJSEventMap, GraphJSEventType } from '../typedefs/graphjs.js' */
@@ -363,6 +363,62 @@ export class GraphJS extends Emitter {
    * @returns {boolean} success of the removal
    */
   removeEdge(srcId, destId) { return this.graph.removeEdge(srcId, destId); }
+
+
+  /**
+   * Runs a function as a batch, so the simulation and renderer adopt all its
+   * changes in one sync after it returns. While it runs, reads such as
+   * `getPosition()`, `nodeAt()` and `fitView()` see the state as of its
+   * start. Delegates to `Graph.batch()`.
+   * @template R
+   * @param {(gjs: this) => R} fn - function making the changes, called with
+   *    this instance
+   * @returns {R} what `fn` returns
+   * @throws {TypeError} thrown if `fn` isn't a function
+   */
+  batch(fn) {
+    if (typeof fn !== "function") throw new TypeError("GraphJS: batch() takes a function");
+    return this._graph.batch(() => fn(this));
+  }
+
+
+  /**
+   * Adds nodes to the `Graph` in a batch. Delegates to `Graph.addNodes()`.
+   * @param {Iterable<NodeData>} dataList - data for each node; each node's id
+   *    is its data's `id`, or a random UUID
+   * @returns {NodeId[]} id of each node, in order
+   */
+  addNodes(dataList) { return this.graph.addNodes(dataList); }
+
+
+  /**
+   * Adds edges to the `Graph` in a batch. Delegates to `Graph.addEdges()`.
+   * @param {Iterable<EdgeInput>} list - `[srcId, destId, data?]` for each edge
+   * @returns {(GraphEdge | null)[]} each new edge, in order, or null where
+   *    the edge already existed
+   * @throws {ReferenceError} thrown if any id matches no existing node;
+   *    nothing is added then
+   */
+  addEdges(list) { return this.graph.addEdges(list); }
+
+
+  /**
+   * Removes nodes and their edges from the `Graph` in a batch. Delegates to
+   * `Graph.removeNodes()`.
+   * @param {Iterable<NodeId>} ids - node ids
+   * @returns {number} how many nodes were removed
+   */
+  removeNodes(ids) { return this.graph.removeNodes(ids); }
+
+
+  /**
+   * Removes edges from the `Graph` in a batch. Delegates to
+   * `Graph.removeEdges()`.
+   * @param {Iterable<[NodeId, NodeId]>} pairs - `[srcId, destId]` for each
+   *    edge
+   * @returns {number} how many edges were removed
+   */
+  removeEdges(pairs) { return this.graph.removeEdges(pairs); }
 
 
 
@@ -782,7 +838,8 @@ export class GraphJS extends Emitter {
    * @returns {Tween<number>} the move's tween
    * @throws {TypeError | RangeError} throws if an option is invalid or unknown
    * @throws {ReferenceError} throws if there's no node with the id
-   * @throws {Error} throws if no canvas is attached
+   * @throws {Error} throws if no canvas is attached, or the node was added
+   *    in a batch that's still running, so it has no position yet
    */
   focusNode(id, opts = {}) {
     checkKnownKeys("GraphJS", opts, FOCUS_NODE_OPTION_NAMES);
@@ -791,7 +848,9 @@ export class GraphJS extends Emitter {
     if (!this._graph.hasNode(id)) throw new ReferenceError(`GraphJS: no node with id "${id}"`);
     const { zoom = this.view.zoom, zoomOut = 1, ...move } = opts;
     this._simulation.sync();                   // a node added since the last frame
-    let last = /** @type {[number, number]} */ (this._simulation.getPosition(id));
+    const start = this._simulation.getPosition(id);
+    if (!start) throw new Error(`GraphJS: node "${id}" has no position until the batch it was added in ends`);
+    let last = start;
     return this._moveView(() => {
       last = this._simulation.getPosition(id) ?? last;
       return { x: last[0], y: last[1], zoom };

@@ -1781,3 +1781,50 @@ describe("GraphJS: resize", () => {
     assert.throws(() => gjs.toCanvas({ canvas: target }), /needs a `width` and `height`/);
   });
 });
+
+describe("GraphJS: batching", () => {
+  test("batch passes the instance and returns fn's result", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      const v = gjs.renderer.version;
+      const result = gjs.batch(inner => {
+        assert.equal(inner, gjs);
+        assert.equal(gjs.graph.batching, true);
+        const ids = gjs.addNodes([{ id: "c" }, { id: "d" }]);
+        gjs.addEdges([["b", "c"], ["c", "d"]]);
+        gjs.getPosition("a");
+        return ids;
+      });
+      assert.deepEqual(result, ["c", "d"]);
+      assert.equal(gjs.renderer.version, v);
+      gjs.step();
+      assert.equal(gjs.renderer.version, v + 1);
+      assert.equal(gjs.removeEdges([["c", "d"]]), 1);
+      assert.equal(gjs.removeNodes(["c", "d"]), 2);
+      assert.throws(() => gjs.batch(), { name: "TypeError", message: /^GraphJS:/ });
+    } finally { restoreWindow(); }
+  });
+
+  test("focusNode on a node added in a running batch throws", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      gjs.batch(() => {
+        gjs.addNode({ id: "c" });
+        assert.throws(() => gjs.focusNode("c"), { name: "Error", message: /no position until the batch/ });
+      });
+      assert.ok(gjs.focusNode("c"));
+    } finally { restoreWindow(); }
+  });
+
+  test("nodes placed with setPosition in a batch start there", () => {
+    const { gjs, restoreWindow } = build();
+    try {
+      gjs.batch(() => {
+        gjs.addNode({ id: "c" });
+        gjs.simulation.setPosition("c", 123, 456);
+      });
+      gjs.simulation.sync();
+      assert.deepEqual(gjs.simulation.getPosition("c"), [123, 456]);
+    } finally { restoreWindow(); }
+  });
+});

@@ -479,6 +479,14 @@ export class Simulation extends Emitter {
    * @type {number} */
   _syncedGraphDataVersion = -1;
 
+  /**
+   * Positions given to `setPosition()` for nodes without a slot yet, applied
+   * when the next structural sync seeds them
+   * @type {Map<NodeId, [number, number]>}
+   * @private
+   */
+  _pendingPositions = new Map();
+
 
   /**
    * Initializes a `Simulation` instance.
@@ -566,6 +574,22 @@ export class Simulation extends Emitter {
 
 
   /**
+   * Merges new config into the overrides of several nodes, as
+   * `setNodeConfig()` does for each. Nothing changes if any config is
+   * invalid. A config object passed for consecutive nodes is checked once.
+   * @param {Iterable<[NodeId, SimNodeConfig]>} entries - node id and config, for
+   *    each node; a `Map` works
+   * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
+   */
+  setNodeConfigs(entries) {
+    this._nodeConfig.setMany(entries);
+    return this;
+  }
+
+
+  /**
    * Sets the default spring settings for all edges.
    * `sync()` will update all edges with the new defaults, except for
    * specific overrides. Nothing changes if the config is invalid.
@@ -612,6 +636,30 @@ export class Simulation extends Emitter {
   }
 
 
+  /**
+   * Merges new config into the overrides of several edges, as
+   * `setEdgeConfig()` does for each. Nothing changes if any edge is missing
+   * or any config is invalid.
+   * @param {Iterable<[NodeId, NodeId, SimEdgeConfig]>} entries - source id,
+   *    destination id and config, for each edge
+   * @returns {this} self reference
+   * @throws {ReferenceError} throws if an edge doesn't exist
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
+   */
+  setEdgeConfigs(entries) {
+    /** @type {[GraphEdge, SimEdgeConfig][]} */
+    const resolved = [];
+    for (const [srcId, destId, config] of entries) {
+      const gEdge = this._graph.getEdge(srcId, destId);
+      if (!gEdge) throw new ReferenceError(`Simulation: no edge from "${srcId}" to "${destId}"`);
+      resolved.push([gEdge, config]);
+    }
+    this._edgeConfig.setMany(resolved);
+    return this;
+  }
+
+
 
   // SYNC
 
@@ -620,9 +668,11 @@ export class Simulation extends Emitter {
    * Also resolves node and edge configs to apply new overrides or defaults.
    * Gates on config changes, graph data changes, and graph shape changes.
    * Reheats on shape changes, and on config changes that alter resolved values.
+   * Does nothing while the graph is batching (see `Graph.batch()`).
    * @returns {boolean} whether graph shape or node or edge configs were updated
    */
   sync() {
+    if (this._graph.batching) return false;
     if (this._syncedGraphDataVersion !== this._graph.dataVersion) {
       this._nodeConfig.markDirty();
       this._edgeConfig.markDirty();
@@ -658,6 +708,9 @@ export class Simulation extends Emitter {
         this._nodes.delete(id);
         this._nodeConfig.prune(id);
       }
+    }
+    for (const id of this._pendingPositions.keys()) {
+      if (!this._graph.nodes.has(id)) this._pendingPositions.delete(id);
     }
 
     // Add views for new nodes, after the survivors
@@ -757,9 +810,10 @@ export class Simulation extends Emitter {
 
   /**
    * Seeds a new node's slot: config at the global defaults (resolved later by
-   * `_packNodeConfig()`), zero velocity, and a position near the average of
-   * its already-placed graph neighbors. With no placed neighbors, it gets a
-   * random position within +/-75 of the origin.
+   * `_packNodeConfig()`), zero velocity, and the position given to
+   * `setPosition()` before it had a slot. Without one, the position is near
+   * the average of its already-placed graph neighbors, or, with no placed
+   * neighbors, random within +/-75 of the origin.
    * @param {NodeId} id - node id
    * @param {number} i - the node's slot
    * @param {Uint8Array} placed - 1 for each slot that already has a position;
@@ -768,6 +822,30 @@ export class Simulation extends Emitter {
    * @private
    */
   _seedNodeSlot(id, i, placed) {
+    this._seedPosition(id, i, placed);
+    this._nodeMass[i] = SIM_NODE_DEFAULTS.mass;
+    this._nodeRadius[i] = SIM_NODE_DEFAULTS.radius;
+    this._nodeCharge[i] = SIM_NODE_DEFAULTS.charge;
+    this._nodeFixed[i] = SIM_NODE_DEFAULTS.fixed ? 1 : 0;
+    placed[i] = 1;
+  }
+
+
+  /**
+   * Picks a new node's starting position, as `_seedNodeSlot()` describes.
+   * @param {NodeId} id - node id
+   * @param {number} i - the node's slot
+   * @param {Uint8Array} placed - 1 for each slot that already has a position
+   * @returns {void}
+   * @private
+   */
+  _seedPosition(id, i, placed) {
+    const pending = this._pendingPositions.get(id);
+    if (pending) {
+      this._pendingPositions.delete(id);
+      [this._nodeX[i], this._nodeY[i]] = pending;
+      return;
+    }
     const neighbors = this._graph.adjacency.get(id);
     let sx = 0, sy = 0, n = 0;
     if (neighbors) for (const nid of neighbors.keys()) {
@@ -782,11 +860,6 @@ export class Simulation extends Emitter {
       this._nodeX[i] = jitter() * 5;
       this._nodeY[i] = jitter() * 5;
     }
-    this._nodeMass[i] = SIM_NODE_DEFAULTS.mass;
-    this._nodeRadius[i] = SIM_NODE_DEFAULTS.radius;
-    this._nodeCharge[i] = SIM_NODE_DEFAULTS.charge;
-    this._nodeFixed[i] = SIM_NODE_DEFAULTS.fixed ? 1 : 0;
-    placed[i] = 1;
   }
 
 
@@ -1100,6 +1173,39 @@ export class Simulation extends Emitter {
     if (this._nodeX[i] !== x || this._nodeY[i] !== y) this.heat();
     this._nodeX[i] = x;
     this._nodeY[i] = y;
+    return true;
+  }
+
+
+  /**
+   * Moves a node to coordinates in simulation space, stopping it, without
+   * pinning it. Reheats if the node moved.
+   *
+   * Works on a node added since the last sync too, such as one added in a
+   * `Graph.batch()`: the position is kept, and the node starts there when it
+   * is synced, instead of next to its neighbors. Use it to place nodes from a
+   * saved layout.
+   * @param {NodeId} id - node id
+   * @param {number} x - simulation x coordinate
+   * @param {number} y - simulation y coordinate
+   * @returns {boolean} whether the node was found
+   * @throws {TypeError | RangeError} throws if `x` or `y` isn't a finite
+   *    number
+   */
+  setPosition(id, x, y) {
+    checkNumber("Simulation", "x", x);
+    checkNumber("Simulation", "y", y);
+    if (!this._graph.nodes.has(id)) return false;
+    const i = this._nodeIndex.get(id);
+    if (i === undefined) {
+      this._pendingPositions.set(id, [x, y]);
+      return true;
+    }
+    if (this._nodeX[i] !== x || this._nodeY[i] !== y) this.heat();
+    this._nodeX[i] = x;
+    this._nodeY[i] = y;
+    this._nodeVx[i] = 0;
+    this._nodeVy[i] = 0;
     return true;
   }
 

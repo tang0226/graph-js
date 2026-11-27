@@ -153,6 +153,30 @@ export class ConfigCascade {
 
 
   /**
+   * Merges fields into the overrides of several elements, as `set()` does for
+   * each. Every config is checked first, so nothing changes if any is
+   * invalid. A config object shared by consecutive entries is checked once.
+   * @param {Iterable<[K, Partial<C>]>} entries - element key and fields to
+   *    set, for each element
+   * @returns {void}
+   * @throws {TypeError | RangeError} throws as `check()` does
+   */
+  setMany(entries) {
+    const items = [...entries];
+    /** @type {unknown} the last config checked; none yet */
+    let checked = Symbol();
+    for (const [, config] of items) {
+      if (config !== checked) this.check(config);
+      checked = config;
+    }
+    for (const [key, config] of items) {
+      this._overrides.set(key, toAccessors({ ...this._overrides.get(key), ...config }));
+    }
+    if (items.length) this._dirty = true;
+  }
+
+
+  /**
    * Resolves one field for an element: its own override if that gives a
    * value, otherwise the default config's, made usable by the field's rule.
    * @template {keyof A & keyof C} F

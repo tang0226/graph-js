@@ -90,3 +90,35 @@ describe("ConfigCascade", () => {
     assert.equal(c.resolve("color", "b", node), "red");
   });
 });
+
+describe("ConfigCascade: setMany", () => {
+  const make = () => new ConfigCascade({ size: 1, color: "red" }, { size: numberField({ min: 0 }), color: STRING_FIELD }, "Test", "node");
+
+  test("merges into each element's overrides and marks dirty", () => {
+    const c = make();
+    c.set("a", { color: "blue" });
+    c.markClean();
+    const shared = { size: 5 };
+    c.setMany([["a", shared], ["b", shared], ["c", { color: "green" }]]);
+    assert.equal(c.dirty, true);
+    assert.equal(c.resolve("size", "a", {}, null), 5);
+    assert.equal(c.resolve("color", "a", {}, null), "blue");
+    assert.equal(c.resolve("size", "b", {}, null), 5);
+    assert.equal(c.resolve("color", "c", {}, null), "green");
+  });
+
+  test("changes nothing if any config is invalid", () => {
+    const c = make();
+    c.markClean();
+    assert.throws(() => c.setMany([["a", { size: 2 }], ["b", { size: -1 }]]), { name: "RangeError" });
+    assert.equal(c.overrides.size, 0);
+    assert.equal(c.dirty, false);
+  });
+
+  test("an empty list leaves it clean", () => {
+    const c = make();
+    c.markClean();
+    c.setMany([]);
+    assert.equal(c.dirty, false);
+  });
+});

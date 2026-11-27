@@ -748,6 +748,22 @@ export class Renderer extends Emitter {
 
 
   /**
+   * Merges new style config into the overrides of several nodes, as
+   * `setNodeConfig()` does for each. Nothing changes if any config is
+   * invalid. A config object passed for consecutive nodes is checked once.
+   * @param {Iterable<[NodeId, NodeStyleConfig]>} entries - node id and config, for
+   *    each node; a `Map` works
+   * @returns {this} self reference
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
+   */
+  setNodeConfigs(entries) {
+    this._nodeConfig.setMany(entries);
+    return this;
+  }
+
+
+  /**
    * Modifies fields of the `Renderer`'s default edge style config. Nothing
    * changes if a value is invalid.
    * @param {EdgeStyleConfig} [config={}] - config parameters that will modify the default edge config
@@ -792,6 +808,30 @@ export class Renderer extends Emitter {
   }
 
 
+  /**
+   * Merges new style config into the overrides of several edges, as
+   * `setEdgeConfig()` does for each. Nothing changes if any edge is missing
+   * or any config is invalid.
+   * @param {Iterable<[NodeId, NodeId, EdgeStyleConfig]>} entries - source id,
+   *    destination id and config, for each edge
+   * @returns {this} self reference
+   * @throws {ReferenceError} throws if an edge doesn't exist
+   * @throws {TypeError | RangeError} throws if a field is unknown, or a value
+   *    is invalid
+   */
+  setEdgeConfigs(entries) {
+    /** @type {[GraphEdge, EdgeStyleConfig][]} */
+    const resolved = [];
+    for (const [srcId, destId, config] of entries) {
+      const gEdge = this._graph.getEdge(srcId, destId);
+      if (!gEdge) throw new ReferenceError(`Renderer: no edge from "${srcId}" to "${destId}"`);
+      resolved.push([gEdge, config]);
+    }
+    this._edgeConfig.setMany(resolved);
+    return this;
+  }
+
+
 
   // SYNC
 
@@ -799,9 +839,11 @@ export class Renderer extends Emitter {
    * Syncs internal nodes and edges to match the shape of underlying `Graph`.
    * Also resolves node and edge configs to apply overrides or defaults.
    * Gates on config changes, graph data changes, and graph shape changes.
+   * Does nothing while the graph is batching (see `Graph.batch()`).
    * @returns {boolean} whether cached node and edge render configs were modified
    */
   sync() {
+    if (this._graph.batching) return false;
     this._simulation.sync();
 
     if (this._syncedDataVersion !== this._graph.dataVersion) {
@@ -2550,9 +2592,12 @@ export class Renderer extends Emitter {
     // fully faded ones not at all. Nor are fully transparent ones.
     const hl = this._highlighter, layered = hl.has() || hl.isFading();
     const { edgeState, edgeAlpha } = hl;
+    // Inside a batch the edge slots lag the graph: skip removed edges
+    const graphEdges = this._graph.edges;
 
     for (let i = 0; i < n; i++) {
       if ((layered && edgeAlpha[i] === 0) || styles[i].opacity === 0) continue;
+      if (!graphEdges.has(edges[i])) continue;
       const p = this._layoutEdge(ep[2 * i], ep[2 * i + 1], styles[i], this._edgeBow[i]);
       if (!p) continue;
       const gap = edgeDistance(p, cx, cy, p.width / 2 + s) - p.width / 2;
